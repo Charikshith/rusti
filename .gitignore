@@ -1,0 +1,5 @@
+/target
+model.json
+.agents/
+.claude/
+.pi/
