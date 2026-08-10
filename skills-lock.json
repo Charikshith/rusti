@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "harness-creator-v4": {
+      "source": "Charikshith/harness",
+      "sourceType": "github",
+      "skillPath": "version-4/SKILL.md",
+      "computedHash": "ed422dcb25fa9dfc6e3f56db795cefccfe13950ec5a2ce5dffc1c7649e7d20f8"
+    }
+  }
+}
