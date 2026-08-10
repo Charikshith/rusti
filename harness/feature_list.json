@@ -11,56 +11,64 @@
       "name": "Project Setup & Baseline",
       "description": "Confirm cargo build, cargo test, ./init.sh, and --self-test all pass from a clean checkout",
       "dependencies": [],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "cargo build --release (2.6 MB), cargo test passes, --self-test passes"
     },
     {
       "id": "feat-002",
       "name": "Core Agent Loop",
       "description": "System prompt → user task → LLM tool calls → tool execution → feedback loop terminates correctly",
       "dependencies": ["feat-001"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "run_agent in ai_core/mod.rs, verified by --self-test (fake SSE server)"
     },
     {
       "id": "feat-003",
       "name": "LLM Streaming & SSE",
       "description": "Streaming responses via reqwest SSE, JSON fragment accumulation for tool-call arguments",
       "dependencies": ["feat-002"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "chat_stream in ai_core/llm.rs, handles \\n\\n and \\r\\n\\r\\n delimiters, per-index argument accumulation"
     },
     {
       "id": "feat-004",
       "name": "Tool Implementations",
       "description": "read_file, write_file, edit_file, run_command, ask_user tools work correctly and report errors",
       "dependencies": ["feat-002"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "ai_core/tools.rs, 5 tools, edit_file enforces unique match, run_command platform-aware"
     },
     {
       "id": "feat-005",
       "name": "Model Config & CLI",
       "description": "model.json persistence, --list, --use, --add, --url/--key/--model flags, LLM_URL/LLM_KEY/LLM_MODEL env vars",
       "dependencies": ["feat-001"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "config.rs, interactive add when empty, EOF-safe prompts, profiles with default pointer"
     },
     {
       "id": "feat-006",
       "name": "TUI Mode",
       "description": "--tui flag launches crossterm TUI with live streaming transcript and ask_user input box, Esc quits",
       "dependencies": ["feat-002", "feat-003"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "src/tui/ module (mod/app/render/plain), custom ANSI renderer, plain stream fallback for piped stdin"
     },
     {
       "id": "feat-007",
       "name": "Self-Test",
       "description": "--self-test runs offline check with fake server, no network required",
       "dependencies": ["feat-002"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "ai_core/mod.rs self_test(), fake SSE server with 2 requests, sync tool assertions, session tree checks"
+    },
+    {
+      "id": "feat-008",
+      "name": "Session Persistence & Tree Branching",
+      "description": "session.json with tree structure (id/parentId), active leaf, --tree browser, --resume, pi-style branching",
+      "dependencies": ["feat-002"],
+      "status": "done",
+      "evidence": "session.rs (Entry/Session), tree.rs (ANSI TUI + plain list), --tree/--resume in main.rs"
     }
   ]
 }
