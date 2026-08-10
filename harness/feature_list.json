@@ -1,0 +1,66 @@
+{
+  "_meta": {
+    "type": "state",
+    "title": "rustypi Feature Tracker",
+    "description": "Tracks feature status for the rustypi Rust coding agent",
+    "artifact": "harness/feature_list.json"
+  },
+  "features": [
+    {
+      "id": "feat-001",
+      "name": "Project Setup & Baseline",
+      "description": "Confirm cargo build, cargo test, ./init.sh, and --self-test all pass from a clean checkout",
+      "dependencies": [],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-002",
+      "name": "Core Agent Loop",
+      "description": "System prompt → user task → LLM tool calls → tool execution → feedback loop terminates correctly",
+      "dependencies": ["feat-001"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-003",
+      "name": "LLM Streaming & SSE",
+      "description": "Streaming responses via reqwest SSE, JSON fragment accumulation for tool-call arguments",
+      "dependencies": ["feat-002"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-004",
+      "name": "Tool Implementations",
+      "description": "read_file, write_file, edit_file, run_command, ask_user tools work correctly and report errors",
+      "dependencies": ["feat-002"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-005",
+      "name": "Model Config & CLI",
+      "description": "model.json persistence, --list, --use, --add, --url/--key/--model flags, LLM_URL/LLM_KEY/LLM_MODEL env vars",
+      "dependencies": ["feat-001"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-006",
+      "name": "TUI Mode",
+      "description": "--tui flag launches crossterm TUI with live streaming transcript and ask_user input box, Esc quits",
+      "dependencies": ["feat-002", "feat-003"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-007",
+      "name": "Self-Test",
+      "description": "--self-test runs offline check with fake server, no network required",
+      "dependencies": ["feat-002"],
+      "status": "not-started",
+      "evidence": ""
+    }
+  ]
+}
