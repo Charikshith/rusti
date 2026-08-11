@@ -7,6 +7,7 @@ use super::{emit, Event};
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Client {
     pub url: String,
@@ -17,13 +18,18 @@ pub struct Client {
 
 impl Client {
     pub fn new(url: String, key: String, model: String) -> Self {
-        Client { url, key, model, http: reqwest::Client::new() }
+        // ponytail: some LLM proxies close idle connections after ~10s;
+        // a pooled connection reused next turn is dead -> "error sending request".
+        // No pooling = fresh connection per request (localhost handshake is free).
+        let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
+        Client { url, key, model, http }
     }
 
     pub async fn chat_stream(
         &self,
         messages: &[Value],
         tools: Option<&[Value]>,
+        cancel: &AtomicBool,
     ) -> Result<ChatResult, String> {
         let mut body = json!({ "model": self.model, "messages": messages, "stream": true });
         if let Some(t) = tools {
@@ -46,6 +52,9 @@ impl Client {
         let mut calls: Vec<ToolCallAcc> = Vec::new();
         let mut finish = None;
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("interrupted".into());
+            }
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);

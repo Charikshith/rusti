@@ -1,16 +1,29 @@
----
-type: memory
-title: "Session Journal"
-description: "Append-only per-session friction log"
-artifact: "harness/memory/journal.md"
----
+# Journal
 
-# Session Journal
+## 2026-04-10 — Session 1
 
-## 2026-08-11 — feat-001 through feat-008
+### Built
+- Full coding agent in Rust: async core (tokio current-thread), streaming SSE, 5 tools, TUI, config, sessions
+- Pi-style TUI: main screen, synchronized output (CSI 2026), differential rendering, no alternate screen
+- Session tree browser with branching (id/parentId, select, --tree, --resume)
+- Self-test with fake SSE server (offline, no network)
+- Model config with profiles, --use/--add/--list, API key persistence
 
-- looked up: `crossterm::event::read()` on Windows with piped stdin — doesn't work in raw mode, had to add `is-terminal` check and plain stream fallback
-- surprised: ratatui removal saved ~200KB deps but binary only shrunk 200KB (2.8→2.6 MB) — most weight is in reqwest/tokio
-- corrected: `ListState.offset` is private in ratatui 0.30 — had to drop manual scroll tracking, List auto-scrolls to selection
-- differently: would start with ANSI escapes from the beginning instead of adding ratatui then removing it
-- surprised: `prompt()` with EOF loops forever if stdin closes — fixed with `Option` return and exit(1) on None
+### Fixed
+- TUI flickering: root cause was `Clear(All)` every frame + border past terminal height. Fixed with overwrite-in-place + CSI 2026 + height math.
+- Dropped ratatui (~200KB saved): replaced with custom ANSI renderer using crossterm escape sequences
+
+### Tested
+- Live against localhost:20128 with cmc/xiaomi/mimo-v2.5-pro and cx/gpt-5.4-mini
+- All 9 features pass, 0 warnings, 0 errors, 2.6 MB binary
+
+### Deferred
+- Context compaction (summarize when context fills)
+- reasoning_content (for thinking models)
+- Command timeouts, TLS support, unicode-width
+
+### 2026-08-12 — TUI experience session
+- Read pi interactive-mode.js (5.4k lines) directly for the feature comparison; source reading beat guessing — key model, tool components, footer all confirmed from code
+- Architect decision adopted: only annotate non-obvious turn ends; success is the answer itself, failures need ✗ + reason
+- Cancellation via shared AtomicBool + per-chunk checks; plain mode (piped stdin + --tui) never sends a Job::Task — pre-existing hang, left alone (out of scope)
+- Esc→interrupt vs Ctrl+C→clear vs Ctrl+D→exit: pi's exact key model; users habitually hit Ctrl+C to cancel — noted as a follow-up option

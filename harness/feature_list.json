@@ -49,10 +49,10 @@
     {
       "id": "feat-006",
       "name": "TUI Mode",
-      "description": "--tui flag launches crossterm TUI with live streaming transcript and ask_user input box, Esc quits",
+      "description": "--tui flag launches pi-style main-screen TUI with synchronized output (CSI 2026), differential rendering, live streaming transcript, ask_user input box, Esc quits",
       "dependencies": ["feat-002", "feat-003"],
       "status": "done",
-      "evidence": "src/tui/ module (mod/app/render/plain), custom ANSI renderer, plain stream fallback for piped stdin"
+      "evidence": "src/tui/ module (mod/app/render/plain), main-screen (no alternate screen), diff rendering with RenderState, CSI 2026 for atomic frames, plain stream fallback for piped stdin"
     },
     {
       "id": "feat-007",
@@ -65,10 +65,34 @@
     {
       "id": "feat-008",
       "name": "Session Persistence & Tree Branching",
-      "description": "session.json with tree structure (id/parentId), active leaf, --tree browser, --resume, pi-style branching",
+      "description": "session.json with tree structure (id/parentId), active leaf, --tree browser (pi-style main-screen + diff rendering), --resume, pi-style branching",
       "dependencies": ["feat-002"],
       "status": "done",
-      "evidence": "session.rs (Entry/Session), tree.rs (ANSI TUI + plain list), --tree/--resume in main.rs"
+      "evidence": "session.rs (Entry/Session), tree.rs (main-screen diff renderer + plain list), --tree/--resume in main.rs"
+    },
+    {
+      "id": "feat-009",
+      "name": "Live LLM Integration",
+      "description": "Tested against local LLM server (localhost:20128), model profiles with API key, streaming works end-to-end",
+      "dependencies": ["feat-005", "feat-006"],
+      "status": "done",
+      "evidence": "model.json with mimo-v2.5-pro default, key persisted, streaming verified via curl and rustypi CLI"
+    },
+    {
+      "id": "feat-010",
+      "name": "TUI Experience: semantic status + spinner + editing + scrollback + slash commands",
+      "description": "Semantic status symbols/colors (⠋ working, ✓ success, ✗ failure, ⚠ warn, ℹ info, cyan › prompt), animated spinner, cursor editing + history recall, PageUp/PageDown scrollback, /use /resume /tree slash commands, input overflow window, user lines flush-left with dim number + cyan caret",
+      "dependencies": ["feat-006"],
+      "status": "done",
+      "evidence": "tools.rs returns (bool,String); Event::ToolStart/ToolEnd/TaskEnd; Job enum (Task/Model/Resume/Tree); cursor/history/scroll fields in App; SPINNER frames in render.rs; colorize_row semantic colors; self-test green"
+    },
+    {
+      "id": "feat-011",
+      "name": "Interrupt Key Model (pi-style)",
+      "description": "Esc interrupts the running agent (cooperative AtomicBool checked between iterations and per stream chunk), Ctrl+C clears input, Ctrl+D exits when input empty; interrupted turns show '⚠ interrupted'; quit no longer waits for in-flight turn",
+      "dependencies": ["feat-010"],
+      "status": "done",
+      "evidence": "cancel: Arc<AtomicBool> shared TUI<->agent; run_agent/chat_stream take &AtomicBool; self-test asserts pre-set flag returns Err(\"interrupted\") before any network call"
     }
   ]
 }

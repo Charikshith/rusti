@@ -1,4 +1,7 @@
-// ANSI renderer: full-screen redraw with word wrap, borders, streaming text.
+// Main-screen renderer with differential updates (pi-style).
+// First frame: full draw. Subsequent frames: only changed lines.
+// Synchronized output (CSI 2026) for atomic flicker-free updates.
+// No box — plain terminal lines like pi. Input + status pinned at bottom.
 
 use std::io::{self, Write, stdout};
 
@@ -8,89 +11,181 @@ use crossterm::{
 };
 
 use super::app::App;
-use super::{bold, goto, reset, word_wrap};
+use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
 
-pub fn draw(app: &App) -> io::Result<()> {
-    let (w, h) = terminal::size()?;
-    let w = w as usize;
-    let h = h as usize;
-    let inner_w = w.saturating_sub(2);
+/// Braille spinner frames (~20fps at the 50ms poll rate).
+const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-    let mut out = stdout();
-    let _ = execute!(out, Clear(ClearType::All));
+/// State carried between frames for differential rendering.
+pub struct RenderState {
+    prev_lines: Vec<String>,
+    prev_rows: usize,
+}
 
-    // ── top border ──
-    goto(&mut out, 0, 0);
-    bold(&mut out);
-    write!(out, "┌─ rustypi ")?;
-    for _ in 0..w.saturating_sub(13) { write!(out, "─")?; }
-    writeln!(out, "┐")?;
-    reset(&mut out);
+impl RenderState {
+    pub fn new() -> Self {
+        Self { prev_lines: Vec::new(), prev_rows: 0 }
+    }
+}
 
-    // ── transcript area ──
-    let input_h = if app.ask.is_some() { 4 } else { 1 };
-    let transcript_h = h.saturating_sub(2 + input_h);
+/// Render one frame. Diff against previous frame — only changed lines are redrawn.
+pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
+    let (cols, rows) = terminal::size()?;
+    let w = cols as usize;
+    let h = rows as usize;
+    let inner_w = w.saturating_sub(2); // transcript content width (2-space indent)
+
+    // bottom is pinned: blank spacer, input line, status line
+    let bottom_rows = 3;
+    let transcript_h = h.saturating_sub(bottom_rows);
 
     let mut all: Vec<String> = Vec::new();
-    for l in &app.lines { all.extend(word_wrap(l, inner_w)); }
-    if !app.current.is_empty() { all.extend(word_wrap(&app.current, inner_w)); }
+    for l in &app.lines {
+        all.extend(word_wrap(l, inner_w));
+    }
+    if !app.current.is_empty() {
+        all.extend(word_wrap(&app.current, inner_w));
+    }
+    // scroll: 0 = follow bottom; scroll_up = lines pinned above it
+    let view = all.len().saturating_sub(transcript_h + app.scroll_up);
 
-    let scroll = all.len().saturating_sub(transcript_h);
+    // ── compose frame: one string per screen row ──
+    let mut frame: Vec<String> = Vec::with_capacity(h);
+
     for i in 0..transcript_h {
-        let y = 1 + i as u16;
-        goto(&mut out, 0, y);
-        write!(out, "│")?;
-        let li = scroll + i;
-        if li < all.len() {
-            let line = &all[li];
-            let chars: Vec<char> = line.chars().take(inner_w).collect();
-            for c in &chars { write!(out, "{c}")?; }
-            goto(&mut out, (w - 1) as u16, y);
+        let li = view + i;
+        let content = if li < all.len() {
+            colorize_row(&truncate_str(&all[li], inner_w))
         } else {
-            goto(&mut out, (w - 1) as u16, y);
-        }
-        write!(out, "│")?;
+            String::new()
+        };
+        frame.push(content);
     }
 
-    // ── bottom separator ──
-    let sep_y = (1 + transcript_h) as u16;
-    goto(&mut out, 0, sep_y);
-    write!(out, "├")?;
-    for _ in 0..w.saturating_sub(2) { write!(out, "─")?; }
-    writeln!(out, "┤")?;
+    frame.push(String::new()); // blank spacer
 
-    // ── bottom section ──
-    if let Some((q, _)) = &app.ask {
-        let y = sep_y + 1;
-        goto(&mut out, 0, y);
-        let qline: String = q.chars().take(inner_w).collect();
-        write!(out, "│ ? {qline}")?;
-        goto(&mut out, (w - 1) as u16, y);
-        writeln!(out, "│")?;
+    // input line with a block cursor
+    let avail = w.saturating_sub(3);
+    let (pre, suf) = input_window(&app.input, app.cursor, avail);
+    frame.push(format!("\x1b[36m> \x1b[0m{pre}▌{suf}"));
 
-        let y2 = sep_y + 2;
-        goto(&mut out, 0, y2);
-        let inp: String = app.input.chars().take(inner_w.saturating_sub(2)).collect();
-        write!(out, "│ > {inp}▌")?;
-        goto(&mut out, (w - 1) as u16, y2);
-        writeln!(out, "│")?;
-
-        goto(&mut out, 0, sep_y + 3);
-        write!(out, "└")?;
-        for _ in 0..w.saturating_sub(2) { write!(out, "─")?; }
-        writeln!(out, "┘")?;
+    // status line: spinner + hint left, model right
+    let spin = SPINNER[app.spinner % SPINNER.len()];
+    let left_plain = if app.done {
+        "ctrl+d to quit".to_string()
     } else {
-        let hint = if app.done { "esc to quit" } else { "working… esc to quit" };
-        goto(&mut out, 0, sep_y + 1);
-        write!(out, "│ {hint}")?;
-        goto(&mut out, (w - 1) as u16, sep_y + 1);
-        writeln!(out, "│")?;
+        format!("{spin} working…")
+    };
+    let model = truncate_str(&app.model, w.saturating_sub(left_plain.chars().count() + 3));
+    let used = left_plain.chars().count() + 1 + model.chars().count();
+    let mut srow = if app.done {
+        format!("\x1b[2m{left_plain}\x1b[0m")
+    } else {
+        format!("\x1b[33m{spin}\x1b[0m\x1b[2m working…\x1b[0m")
+    };
+    if used < w {
+        srow.extend(std::iter::repeat(' ').take(w - used));
+    }
+    srow.push_str(&format!("\x1b[2m{model}\x1b[0m"));
+    frame.push(srow);
 
-        goto(&mut out, 0, sep_y + 2);
-        write!(out, "└")?;
-        for _ in 0..w.saturating_sub(2) { write!(out, "─")?; }
-        writeln!(out, "┘")?;
+    // ── differential draw ──
+    let mut out = stdout();
+    out.write_all(SYNC_BEGIN.as_bytes())?;
+
+    let resized = h != state.prev_rows;
+
+    // if terminal resized or first frame, clear and redraw everything
+    if resized || state.prev_lines.is_empty() {
+        let _ = execute!(out, Clear(ClearType::All));
+        goto(&mut out, 0, 0);
+        for (i, line) in frame.iter().enumerate() {
+            goto(&mut out, 0, i as u16);
+            draw_line(&mut out, line)?;
+        }
+    } else {
+        // only redraw changed lines
+        let max = frame.len().max(state.prev_lines.len());
+        for i in 0..max {
+            let new = frame.get(i).map(|s| s.as_str()).unwrap_or("");
+            let old = state.prev_lines.get(i).map(|s| s.as_str()).unwrap_or("");
+            if new != old {
+                goto(&mut out, 0, i as u16);
+                draw_line(&mut out, new)?;
+            }
+        }
+        // clear any leftover lines from previous taller frame
+        for i in frame.len()..state.prev_lines.len() {
+            goto(&mut out, 0, i as u16);
+            let _ = execute!(out, Clear(ClearType::UntilNewLine));
+        }
     }
 
-    out.flush()
+    // ── position cursor at input ──
+    let input_y = h.saturating_sub(2) as u16; // input is second from bottom (status last)
+    let input_x = (2 + pre.chars().count()).min(w.saturating_sub(1)) as u16; // after "> "
+    goto(&mut out, input_x, input_y);
+
+    out.write_all(SYNC_END.as_bytes())?;
+    out.flush()?;
+
+    state.prev_lines = frame;
+    state.prev_rows = h;
+    Ok(())
+}
+
+/// Write a line and clear to end of line (wipes stale trailing chars).
+fn draw_line(out: &mut impl Write, line: &str) -> io::Result<()> {
+    write!(out, "{line}")?;
+    let _ = execute!(out, Clear(ClearType::UntilNewLine));
+    Ok(())
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if max == 0 { return String::new(); }
+    s.chars().take(max).collect()
+}
+
+/// One transcript row, colored by kind: status symbol colored, text plain.
+/// User lines ("N› text") are flush-left with a dim number + cyan caret;
+/// everything else gets the 2-space indent.
+fn colorize_row(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && s[i..].starts_with("› ") {
+        let (num, rest) = s.split_at(i);
+        format!("\x1b[2m{num}\x1b[0m\x1b[36m›\x1b[0m{}", &rest[4..])
+    } else if let Some(rest) = s.strip_prefix("  ⠋ ") {
+        format!("  \x1b[33m⠋\x1b[0m {rest}")
+    } else if let Some(rest) = s.strip_prefix("  ✓ ") {
+        format!("  \x1b[32m✓\x1b[0m {rest}")
+    } else if let Some(rest) = s.strip_prefix("  ✗ ") {
+        format!("  \x1b[31m✗\x1b[0m {rest}")
+    } else if let Some(rest) = s.strip_prefix("  ⚠ ") {
+        format!("  \x1b[33m⚠\x1b[0m {rest}")
+    } else if let Some(rest) = s.strip_prefix("  ℹ ") {
+        format!("  \x1b[34mℹ\x1b[0m {rest}")
+    } else {
+        format!("  {s}")
+    }
+}
+
+/// Input window around the cursor for a row that overflows: returns the
+/// visible (before-cursor, after-cursor) slices; the block cursor sits
+/// between them.
+fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
+    if max == 0 { return (String::new(), String::new()); }
+    let chars: Vec<char> = s.chars().collect();
+    let c = c.min(chars.len());
+    if chars.len() <= max {
+        return (chars[..c].iter().collect(), chars[c..].iter().collect());
+    }
+    let start = c.saturating_sub(max * 3 / 4).min(chars.len() - max);
+    let mut pre: String = chars[start..start + max].iter().collect();
+    let suf: String = chars[start + max..].iter().collect();
+    if start > 0 { pre = format!("…{}", &pre[1..]); }
+    (pre, suf)
 }

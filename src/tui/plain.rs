@@ -13,7 +13,8 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
         match rx.recv() {
             Ok(ai_core::Event::TextDelta(t)) => { write!(out, "{t}")?; out.flush()?; }
             Ok(ai_core::Event::Text(t)) => { writeln!(out, "{t}")?; }
-            Ok(ai_core::Event::Tool(t)) => { writeln!(out, "  ↳ {t}")?; }
+            Ok(ai_core::Event::ToolStart(t)) => { writeln!(out, "  ⠋ {t}")?; }
+            Ok(ai_core::Event::ToolEnd { summary, ok }) => { writeln!(out, "  {} {summary}", if ok { "✓" } else { "✗" })?; }
             Ok(ai_core::Event::Ask { question, reply }) => {
                 writeln!(err, "? {question}")?;
                 write!(err, "> ")?;
@@ -24,7 +25,7 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
                 writeln!(out, "> {ans}")?;
                 let _ = reply.send(ans);
             }
-            Ok(ai_core::Event::Done) => break,
+            Ok(ai_core::Event::TaskEnd { .. }) => break,
             Err(_) => break,
         }
     }

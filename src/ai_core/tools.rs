@@ -4,21 +4,21 @@
 
 pub const MAX_RESULT: usize = 20_000; // cap tool output so the conversation stays small
 
-pub fn read_file(path: &str) -> String {
+pub fn read_file(path: &str) -> (bool, String) {
     match std::fs::read_to_string(path) {
-        Ok(s) => truncate(&s, MAX_RESULT),
-        Err(e) => format!("error reading {path}: {e}"),
+        Ok(s) => (true, truncate(&s, MAX_RESULT)),
+        Err(e) => (false, format!("error reading {path}: {e}")),
     }
 }
 
-pub fn write_file(path: &str, content: &str) -> String {
+pub fn write_file(path: &str, content: &str) -> (bool, String) {
     match std::fs::write(path, content) {
-        Ok(()) => format!("wrote {} bytes to {path}", content.len()),
-        Err(e) => format!("error writing {path}: {e}"),
+        Ok(()) => (true, format!("wrote {} bytes to {path}", content.len())),
+        Err(e) => (false, format!("error writing {path}: {e}")),
     }
 }
 
-pub fn run_command(cmd: &str) -> String {
+pub fn run_command(cmd: &str) -> (bool, String) {
     let out = if cfg!(windows) {
         std::process::Command::new("cmd").args(["/C", cmd]).output()
     } else {
@@ -26,35 +26,36 @@ pub fn run_command(cmd: &str) -> String {
     };
     match out {
         Ok(o) => {
-            let mut s = format!("[exit {}]\n", o.status.code().unwrap_or(-1));
+            let code = o.status.code().unwrap_or(-1);
+            let mut s = format!("[exit {code}]\n");
             s.push_str(&String::from_utf8_lossy(&o.stdout));
             s.push_str(&String::from_utf8_lossy(&o.stderr));
-            truncate(&s, MAX_RESULT)
+            (code == 0, truncate(&s, MAX_RESULT))
         }
-        Err(e) => format!("failed to run command: {e}"),
+        Err(e) => (false, format!("failed to run command: {e}")),
     }
 }
 
-pub fn edit_file(path: &str, old_text: &str, new_text: &str) -> String {
+pub fn edit_file(path: &str, old_text: &str, new_text: &str) -> (bool, String) {
     let content = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => return format!("error reading {path}: {e}"),
+        Err(e) => return (false, format!("error reading {path}: {e}")),
     };
     let count = content.matches(old_text).count();
     if count == 0 {
-        return format!("edit failed: old text not found in {path}");
+        return (false, format!("edit failed: old text not found in {path}"));
     }
     if count > 1 {
-        return format!("edit failed: old text appears {count} times in {path}; make it unique");
+        return (false, format!("edit failed: old text appears {count} times in {path}; make it unique"));
     }
     let new = content.replace(old_text, new_text);
     match std::fs::write(path, &new) {
-        Ok(()) => format!("edited {path}: {} chars -> {} chars", old_text.len(), new_text.len()),
-        Err(e) => format!("error writing {path}: {e}"),
+        Ok(()) => (true, format!("edited {path}: {} chars -> {} chars", old_text.len(), new_text.len())),
+        Err(e) => (false, format!("error writing {path}: {e}")),
     }
 }
 
-pub async fn ask_user(question: &str) -> String {
+pub async fn ask_user(question: &str) -> (bool, String) {
     use std::io::Write;
     // Front-end mode: send the question to the TUI and wait for its answer.
     if let Some(tx) = crate::ai_core::SINK.get() {
@@ -63,7 +64,7 @@ pub async fn ask_user(question: &str) -> String {
             .send(crate::ai_core::Event::Ask { question: question.to_string(), reply: reply_tx })
             .is_ok()
         {
-            return reply_rx.await.unwrap_or_else(|_| "no answer given".into());
+            return (true, reply_rx.await.unwrap_or_else(|_| "no answer given".into()));
         }
     }
     eprint!("{question} > ");
@@ -72,9 +73,9 @@ pub async fn ask_user(question: &str) -> String {
     match std::io::stdin().read_line(&mut line) {
         Ok(_) => {
             let a = line.trim().to_string();
-            if a.is_empty() { "no answer given".into() } else { a }
+            if a.is_empty() { (true, "no answer given".into()) } else { (true, a) }
         }
-        Err(e) => format!("error reading input: {e}"),
+        Err(e) => (false, format!("error reading input: {e}")),
     }
 }
 

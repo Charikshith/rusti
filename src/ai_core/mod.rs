@@ -5,15 +5,17 @@ pub mod tools;
 
 use crate::session::{Entry, Session};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 /// Events the agent emits, for a TUI (or any front end) to render.
 pub enum Event {
     TextDelta(String),                         // a chunk of model text (streamed)
     Text(String),                              // a complete line of text
-    Tool(String),                              // one-line tool-call summary
+    ToolStart(String),                         // tool about to run (short summary)
+    ToolEnd { summary: String, ok: bool },     // tool finished
     Ask { question: String, reply: tokio::sync::oneshot::Sender<String> },
-    Done,
+    TaskEnd { ok: bool, error: Option<String> }, // whole task finished
 }
 
 /// Optional front-end sink. When set, the agent sends Events instead of
@@ -36,8 +38,18 @@ fn emit(ev: Event) {
                 let _ = std::io::stdout().flush();
             }
             Event::Text(t) => println!("{t}"),
-            Event::Tool(t) => eprintln!("  ↳ {t}"),
-            Event::Done | Event::Ask { .. } => {}
+            Event::ToolStart(t) => eprintln!("  ⠋ {t}"),
+            Event::ToolEnd { summary, ok } => eprintln!("  {} {summary}", if ok { "✓" } else { "✗" }),
+            Event::TaskEnd { ok, error } => {
+                if !ok {
+                    let line = match error {
+                        Some(e) => format!("  ✗ Task failed: {e}"),
+                        None => "  ✗ Task failed".into(),
+                    };
+                    eprintln!("{line}");
+                }
+            }
+            Event::Ask { .. } => {}
         },
     }
 }
@@ -49,7 +61,12 @@ When the task is done, reply with a concise summary of what you changed.";
 
 const MAX_ITERS: usize = 10;
 
-pub async fn run_agent(client: &llm::Client, session: &mut Session, task: &str) -> Result<String, String> {
+pub async fn run_agent(
+    client: &llm::Client,
+    session: &mut Session,
+    task: &str,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
     if session.entries.is_empty() {
         session.add(Entry::new("system", SYSTEM_PROMPT.into()), None);
     }
@@ -60,7 +77,10 @@ pub async fn run_agent(client: &llm::Client, session: &mut Session, task: &str) 
     let tools = tool_schemas();
 
     for _ in 0..MAX_ITERS {
-        let res = client.chat_stream(&session.path_messages(), Some(&tools)).await?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err("interrupted".into());
+        }
+        let res = client.chat_stream(&session.path_messages(), Some(&tools), cancel).await?;
         if res.finish_reason != "tool_calls" {
             session.add(Entry::new("assistant", res.content.clone()), session.active.clone());
             session.save().map_err(|e| format!("saving session: {e}"))?;
@@ -78,13 +98,10 @@ pub async fn run_agent(client: &llm::Client, session: &mut Session, task: &str) 
         let a_id = session.add(ae, session.active.clone());
 
         for tc in &res.tool_calls {
-            let result = dispatch(&tc.name, &tc.arguments).await;
-            emit(Event::Tool(format!(
-                "{}({}) -> {} chars",
-                tc.name,
-                tc.raw_arguments,
-                result.len()
-            )));
+            let summary = tool_summary(&tc.name, &tc.arguments);
+            emit(Event::ToolStart(summary.clone()));
+            let (ok, result) = dispatch(&tc.name, &tc.arguments).await;
+            emit(Event::ToolEnd { summary, ok });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
             session.add(te, Some(a_id.clone()));
@@ -92,6 +109,16 @@ pub async fn run_agent(client: &llm::Client, session: &mut Session, task: &str) 
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
     Err("hit max iterations without a final answer".into())
+}
+
+/// Short human-ish summary for a tool call (path or command, not raw JSON).
+fn tool_summary(name: &str, args: &Value) -> String {
+    match name {
+        "read_file" | "write_file" | "edit_file" =>
+            args["path"].as_str().unwrap_or("?").to_string(),
+        "run_command" => args["command"].as_str().unwrap_or("?").to_string(),
+        _ => format!("{name}({args})"),
+    }
 }
 
 fn tool_schemas() -> Vec<Value> {
@@ -104,7 +131,7 @@ fn tool_schemas() -> Vec<Value> {
     ]
 }
 
-async fn dispatch(name: &str, args: &Value) -> String {
+async fn dispatch(name: &str, args: &Value) -> (bool, String) {
     match name {
         "read_file" => tools::read_file(args["path"].as_str().unwrap_or("")),
         "write_file" => tools::write_file(args["path"].as_str().unwrap_or(""), args["content"].as_str().unwrap_or("")),
@@ -115,7 +142,7 @@ async fn dispatch(name: &str, args: &Value) -> String {
             args["new_text"].as_str().unwrap_or(""),
         ),
         "ask_user" => tools::ask_user(args["question"].as_str().unwrap_or("")).await,
-        other => format!("unknown tool: {other}"),
+        other => (false, format!("unknown tool: {other}")),
     }
     // ponytail: sync tools block the agent task; spawn_blocking them when a
     // command ever runs long enough to stall streaming
@@ -158,7 +185,7 @@ pub fn self_test() {
         let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
         // text is streamed via emit() -> prints to stdout during the test; fine
         let mut session = crate::session::Session::with_path("fake".into(), "_test_session.json");
-        assert_eq!(run_agent(&client, &mut session, "test task").await.unwrap(), "done");
+        assert_eq!(run_agent(&client, &mut session, "test task", &std::sync::atomic::AtomicBool::new(false)).await.unwrap(), "done");
         // tree: system, user, assistant(tool_calls), tool, assistant(done)
         assert_eq!(session.entries.len(), 5);
         let msgs = session.path_messages();
@@ -175,15 +202,21 @@ pub fn self_test() {
         let s2 = crate::session::Session::load_from("_test_session.json");
         assert_eq!(s2.entries.len(), 5);
         std::fs::remove_file("_test_session.json").ok();
+
+        // interrupt: a pre-set flag cancels before any network call
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let mut s3 = crate::session::Session::with_path("fake".into(), "_test_session2.json");
+        assert_eq!(run_agent(&client, &mut s3, "x", &cancelled).await.unwrap_err(), "interrupted");
+        std::fs::remove_file("_test_session2.json").ok();
     });
 
     // sync tool checks (no runtime needed)
-    assert!(tools::run_command("echo hi").contains("hi"));
-    assert!(tools::write_file("_test_tmp.txt", "x").contains("wrote"));
-    assert!(tools::read_file("_test_tmp.txt").contains("x"));
-    assert!(tools::edit_file("_test_tmp.txt", "x", "y").contains("edited"));
-    assert_eq!(tools::read_file("_test_tmp.txt"), "y");
-    assert!(tools::edit_file("_test_tmp.txt", "zzz", "y").contains("not found"));
+    assert!(tools::run_command("echo hi").1.contains("hi"));
+    assert!(tools::write_file("_test_tmp.txt", "x").1.contains("wrote"));
+    assert!(tools::read_file("_test_tmp.txt").1.contains("x"));
+    assert!(tools::edit_file("_test_tmp.txt", "x", "y").1.contains("edited"));
+    assert_eq!(tools::read_file("_test_tmp.txt").1, "y");
+    assert!(tools::edit_file("_test_tmp.txt", "zzz", "y").1.contains("not found"));
     std::fs::remove_file("_test_tmp.txt").unwrap();
 
     // config roundtrip

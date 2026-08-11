@@ -1,71 +1,45 @@
----
-type: template
-title: "Session Handoff"
-description: "End-of-session handoff"
-artifact: "harness/session-handoff.md"
----
-
 # Session Handoff
 
-## Current Objective
+## What Was Done This Session
+- **Merged model config** into `config.rs` — single `--use NAME`/`--add`/`--list` command, interactive add when model.json is empty, EOF-safe prompts
+- **CLI polish** — added `--self-test` flag, `.gitignore` for model.json, improved error messages with `--use`, fixed ArgMatches borrow
+- **Built self-test** — fake SSE server (2 requests: tool-call then final answer), sync tool assertions, session tree id/parentId/select checks
+- **Implemented session persistence** — `session.rs` with Entry/Session tree, incremental save after each round, `--resume` flag
+- **Built session tree browser** — `tree.rs` with pi-style main-screen diff renderer + plain numbered list fallback, `--tree` flag
+- **Merged into main.rs** — added --tree/--resume flags, reordered so tree browse precedes model resolution
+- **Dropped ratatui** — replaced with custom ANSI TUI (direct escape sequences via crossterm), binary 2.8→2.6 MB
+- **Split TUI module** — `tui/{mod,app,render,plain}.rs`
+- **Fixed TUI flickering** — root cause: `Clear(All)` on every frame + bottom border past terminal height; fixed with CSI 2026 synchronized output, differential rendering, cursor home + overwrite-in-place
+- **Pi-style TUI** — main screen (no alternate screen), transcript stays in scrollback, diff rendering with RenderState, atomic frames
+- **Live tested** against localhost:20128 with mimo-v2.5-pro and cx/gpt-5.4-mini
 
-- Goal: Build minimal coding agent in Rust with LLM client, tools, TUI, model config, session persistence
-- Status: All features complete. 2.6 MB binary, zero warnings, zero external UI deps.
-- Branch/commit: master, e832734
+## Next Steps
+1. Context compaction — summarize older messages when context window fills
+2. `reasoning_content` field support for thinking models (QwQ, DeepSeek R1)
+3. Command timeouts — kill long-running `run_command` after N seconds
+4. TLS support — `https` endpoint support for LLM client
+5. unicode-width for CJK/emoji word wrap
 
-## Completed This Session
+## Key Files
+- `src/main.rs` — CLI flags, config resolution, session/task dispatch
+- `src/config.rs` — model.json load/save/resolve/ask_profile
+- `src/session.rs` — Entry/Session tree, save/load, select
+- `src/tree.rs` — session tree browser (main-screen diff + plain list)
+- `src/tui/mod.rs` — ANSI helpers, word_wrap, entry point
+- `src/tui/app.rs` — App struct, main-screen event loop
+- `src/tui/render.rs` — differential renderer with RenderState, CSI 2026
+- `src/tui/plain.rs` — non-interactive fallback
+- `src/ai_core/mod.rs` — Event enum, SINK, run_agent, tool dispatch, self_test
+- `src/ai_core/llm.rs` — Client, chat_stream (reqwest SSE)
+- `src/ai_core/tools.rs` — 5 tools: read/write/edit file, run command, ask user
 
-- [x] Core agent loop (async tokio, streaming SSE, tool dispatch)
-- [x] 5 tools (read/write/edit file, run command, ask_user)
-- [x] Model config (model.json, profiles, --list/--use/--add)
-- [x] Custom ANSI TUI (no ratatui, plain stream fallback)
-- [x] Session tree branching (pi-style: id/parentId, active leaf, --tree/--resume)
-- [x] Self-test (--self-test, fake SSE server)
-- [x] TUI module split (mod/app/render/plain)
+## Gotchas
+- `config.rs` is two files with same name — `src/config.rs` (the real one) and `config.rs` at root (orphan, can delete)
+- `llm.rs` and `tools.rs` at root are orphans from the module split — safe to delete
+- `model.json` has API key — gitignored, don't commit
+- Session agent role is "ai" (not "assistant") — LLM maps it at send time
+- `SINK` is OnceLock — can only be set once per process; self-test uses it too
 
-## Verification Evidence
-
-| Check | Command | Result | Notes |
-|---|---|---|---|
-| build | `cargo build --release` | 2.6 MB, 0 warnings | custom ANSI, no ratatui |
-| test | `cargo test` | passes | |
-| self-test | `--self-test` | passes | fake SSE server, 2 requests |
-| tree | `--tree` with piped input | works | plain list fallback |
-| tui | `--tui` with piped input | exit 0 | auto-fallback to plain stream |
-
-## Files Changed
-
-- src/main.rs — CLI, flags, config resolution, session dispatch
-- src/config.rs — model.json load/save, interactive add
-- src/session.rs — Entry/Session tree, id/parentId, path, select
-- src/tree.rs — ANSI TUI tree browser + plain numbered list
-- src/tui/ — custom ANSI renderer module (mod/app/render/plain)
-- src/ai_core/mod.rs — run_agent loop, event system, self-test
-- src/ai_core/llm.rs — reqwest SSE streaming client
-- src/ai_core/tools.rs — 5 tools
-
-## Decisions Made
-
-- Dropped ratatui for custom ANSI escapes (saved ~200KB deps, 2.8→2.6 MB)
-- Kept crossterm for terminal detection + raw input (small, ~100KB)
-- Session tree uses id/parentId (same model as pi's session system)
-- Plain stream fallback when stdin is piped (no TUI hang)
-- model.json in cwd (project-local, not home dir)
-- tokio current-thread runtime (no multi-thread pool)
-
-## Blockers / Risks
-
-- None active
-
-## Next Session Startup
-
-1. Read `AGENTS.md`.
-2. Read `harness/feature_list.json` and `harness/progress.md`.
-3. Review this handoff.
-4. Run `cargo build --release && cargo test && ./target/release/rustypi --self-test`.
-
-## Recommended Next Step
-
-- Context compaction (summarize older messages when context window fills up)
-- Command timeouts (kill long-running run_command after N seconds)
-- TLS support (https endpoints)
+## Deferred
+- `add_profile()` merge: `--url`/`--key`/`--model` still resolve the default directly; `add_profile()` exists but is only used by `--add`
+- TLS: reqwest default-tls not enabled — only `http://` endpoints work

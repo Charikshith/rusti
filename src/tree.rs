@@ -1,8 +1,6 @@
-// Session-tree browser: custom ANSI TUI for interactive terminals, plain
-// numbered list for piped/non-interactive stdin. Selection semantics
-// match pi's /tree:
-//   user message  → leaf moves to parent, text returned as prefill
-//   assistant msg → leaf moves to that entry, empty prefill
+// Session-tree browser: pi-style main-screen renderer with diff updates.
+// Synchronized output (CSI 2026) for atomic flicker-free rendering.
+// Plain numbered list fallback for piped stdin.
 
 use std::collections::HashMap;
 use std::io::{Write, stdout};
@@ -22,6 +20,9 @@ fn bold(f: &mut impl Write) { let _ = execute!(f, SetAttribute(Attribute::Bold))
 fn reset(f: &mut impl Write) { let _ = execute!(f, SetAttribute(Attribute::Reset)); }
 fn goto(f: &mut impl Write, x: u16, y: u16) { let _ = execute!(f, cursor::MoveTo(x, y)); }
 
+const SYNC_BEGIN: &str = "\x1b[?2026h";
+const SYNC_END: &str = "\x1b[?2026l";
+
 /// Returns the prefilled prompt text, or None if cancelled.
 pub fn browse(session: &mut Session) -> Option<String> {
     if is_terminal::is_terminal(std::io::stdin()) {
@@ -32,7 +33,7 @@ pub fn browse(session: &mut Session) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Plain numbered list (works with piped stdin, SSH, dumb terminals)
+// Plain numbered list (piped stdin, SSH, dumb terminals)
 // ---------------------------------------------------------------------------
 
 fn browse_plain(session: &mut Session) -> Option<String> {
@@ -54,91 +55,135 @@ fn browse_plain(session: &mut Session) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Custom ANSI TUI (interactive terminals only)
+// Main-screen TUI with differential rendering (pi-style)
 // ---------------------------------------------------------------------------
 
 fn browse_tui(session: &mut Session) -> Option<String> {
     let rows = rows(session);
     let mut idx = rows.iter().rposition(|r| r.1).unwrap_or(0);
     let mut scroll = 0usize;
+    let mut prev_frame: Vec<String> = Vec::new();
+    let mut prev_h: usize = 0;
 
     terminal::enable_raw_mode().ok()?;
     let mut out = stdout();
-    let _ = execute!(out, terminal::EnterAlternateScreen, cursor::Hide);
+    let _ = execute!(out, cursor::Hide);
 
     let picked: Option<usize> = loop {
         let (w, h) = terminal::size().unwrap_or((80, 24));
         let w = w as usize;
         let h = h as usize;
         let inner_w = w.saturating_sub(2);
-        let list_h = h.saturating_sub(3); // minus title border + hint + bottom border
+        let list_h = h.saturating_sub(4); // title + list + hint + bottom border
 
-        // auto-scroll to keep selection visible
         if idx < scroll { scroll = idx; }
         if idx >= scroll + list_h { scroll = idx + 1 - list_h; }
 
-        // draw
-        execute!(out, Clear(ClearType::All)).ok()?;
+        // ── compose frame ──
+        let mut frame: Vec<String> = Vec::with_capacity(h);
 
-        // title
-        goto(&mut out, 0, 0);
-        bold(&mut out);
-        write!(out, "┌─ session tree ").ok();
-        for _ in 0..w.saturating_sub(18) { write!(out, "─").ok(); }
-        writeln!(out, "┐").ok();
-        reset(&mut out);
+        // title border
+        let mut top = String::from("┌─ session tree ");
+        top.extend(std::iter::repeat('─').take(w.saturating_sub(17)));
+        top.push('┐');
+        frame.push(top);
 
         // list rows
         for i in 0..list_h {
-            let y = 1 + i as u16;
-            goto(&mut out, 0, y);
-            write!(out, "│").ok();
             let ri = scroll + i;
+            let mut row = String::from("│");
             if ri < rows.len() {
                 let (ref _id, sel, ref label) = rows[ri];
-                goto(&mut out, 1, y);
                 if ri == idx {
-                    // highlighted row: bold + reverse
-                    let _ = execute!(out,
-                        SetAttribute(Attribute::Bold),
-                        crossterm::style::SetAttribute(Attribute::Reverse),
-                    );
                     let marker = if sel { "▶ " } else { "  " };
                     let text: String = label.chars().take(inner_w.saturating_sub(2)).collect();
-                    write!(out, "{marker}{text}").ok();
-                    // pad to fill
-                    let used = marker.len() + text.chars().count();
-                    if used < inner_w {
-                        for _ in 0..(inner_w - used) { write!(out, " ").ok(); }
-                    }
-                    reset(&mut out);
+                    let content = format!("{marker}{text}");
+                    let padded = format!("{content:<width$}", width = inner_w);
+                    row.push_str(&padded);
                 } else {
-                    let prefix = if sel { "  " } else { "  " };
+                    let prefix = "  ";
                     let text: String = label.chars().take(inner_w.saturating_sub(2)).collect();
-                    write!(out, "{prefix}{text}").ok();
+                    row.push_str(prefix);
+                    row.push_str(&text);
+                    let used = prefix.len() + text.len();
+                    if used < inner_w {
+                        row.extend(std::iter::repeat(' ').take(inner_w - used));
+                    }
                 }
+            } else {
+                row.extend(std::iter::repeat(' ').take(inner_w));
             }
-            goto(&mut out, (w - 1) as u16, y);
-            write!(out, "│").ok();
+            row.push('│');
+            frame.push(row);
         }
 
-        // bottom border + hint
-        let sep_y = 1 + list_h as u16;
-        goto(&mut out, 0, sep_y);
-        write!(out, "├").ok();
-        for _ in 0..w.saturating_sub(2) { write!(out, "─").ok(); }
-        writeln!(out, "┤").ok();
+        // separator
+        let mut sep = String::from("├");
+        sep.extend(std::iter::repeat('─').take(w.saturating_sub(2)));
+        sep.push('┤');
+        frame.push(sep);
 
-        goto(&mut out, 1, sep_y + 1);
-        write!(out, "↑/↓ select · Enter branch · Esc cancel").ok();
-        goto(&mut out, 0, sep_y + 2);
-        write!(out, "└").ok();
-        for _ in 0..w.saturating_sub(2) { write!(out, "─").ok(); }
-        write!(out, "┘").ok();
+        // hint
+        let hint = "↑/↓ select · Enter branch · Esc cancel";
+        let mut hrow = format!("│ {hint}");
+        let used = hrow.len();
+        if used < w - 1 { hrow.extend(std::iter::repeat(' ').take(w - 1 - used)); }
+        hrow.push('│');
+        frame.push(hrow);
 
+        // bottom border
+        let mut bot = String::from("└");
+        bot.extend(std::iter::repeat('─').take(w.saturating_sub(2)));
+        bot.push('┘');
+        frame.push(bot);
+
+        // ── differential draw ──
+        out.write_all(SYNC_BEGIN.as_bytes()).ok();
+
+        let resized = h != prev_h;
+        if resized || prev_frame.is_empty() {
+            let _ = execute!(out, Clear(ClearType::All));
+            for (i, line) in frame.iter().enumerate() {
+                goto(&mut out, 0, i as u16);
+                write!(out, "{line}").ok();
+                let _ = execute!(out, Clear(ClearType::UntilNewLine));
+            }
+        } else {
+            let max = frame.len().max(prev_frame.len());
+            for i in 0..max {
+                let new = frame.get(i).map(|s| s.as_str()).unwrap_or("");
+                let old = prev_frame.get(i).map(|s| s.as_str()).unwrap_or("");
+                if new != old {
+                    goto(&mut out, 0, i as u16);
+                    write!(out, "{new}").ok();
+                    let _ = execute!(out, Clear(ClearType::UntilNewLine));
+                }
+            }
+            for i in frame.len()..prev_frame.len() {
+                goto(&mut out, 0, i as u16);
+                let _ = execute!(out, Clear(ClearType::UntilNewLine));
+            }
+        }
+
+        // bold the selected row inline
+        let sel_y = (1 + idx - scroll) as u16;
+        goto(&mut out, 1, sel_y);
+        bold(&mut out);
+        if idx < rows.len() {
+            let (ref _id, sel, ref label) = rows[idx];
+            let marker = if sel { "▶ " } else { "  " };
+            let text: String = label.chars().take(inner_w.saturating_sub(2)).collect();
+            write!(out, "{marker}{text}").ok();
+        }
+        reset(&mut out);
+
+        out.write_all(SYNC_END.as_bytes()).ok();
         out.flush().ok()?;
 
-        // input
+        prev_frame = frame;
+        prev_h = h;
+
+        // ── input ──
         if event::poll(std::time::Duration::from_millis(100)).ok()? {
             if let CEvent::Key(k) = event::read().ok()? {
                 if k.kind == KeyEventKind::Press {
@@ -162,7 +207,7 @@ fn browse_tui(session: &mut Session) -> Option<String> {
         }
     };
 
-    let _ = execute!(out, cursor::Show, terminal::LeaveAlternateScreen);
+    let _ = execute!(out, cursor::Show);
     let _ = terminal::disable_raw_mode();
 
     picked.map(|i| {

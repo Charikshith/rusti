@@ -82,21 +82,22 @@ fn main() {
         task = task_arg.unwrap_or_else(|| prompt("next instruction", ""));
     } else {
         session = session::Session::new(model.clone());
-        task = task_arg.unwrap_or_else(|| "say hello".into());
+        task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
     }
 
-    let client = ai_core::llm::Client::new(url, key, model);
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let client = ai_core::llm::Client::new(url, key, model.clone());
 
     if tui_mode {
-        if let Err(e) = tui::run(client, task, session) {
+        if let Err(e) = tui::run(tui::TuiConfig { client, session, model }) {
             eprintln!("tui error: {e}");
             std::process::exit(1);
         }
         return;
     }
 
-    match rt.block_on(ai_core::run_agent(&client, &mut session, &task)) {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    match rt.block_on(ai_core::run_agent(&client, &mut session, &task, &cancel)) {
         // reply text was already streamed live; just close the line
         Ok(r) => {
             if !r.is_empty() {
