@@ -70,6 +70,10 @@ word wrap, streaming text, and an input box for ask_user questions.
 for non-interactive environments (piped stdin, SSH, CI), it falls back
 automatically to plain stdout/stderr streaming.
 
+slash commands: `/model` (list saved profiles, or `/model <name>` to switch —
+same as `/use <name>`), `/resume` (reload session.json), `/tree` (dump the
+session path), `/reload` (see below).
+
 ## session tree
 
 sessions are stored as a tree of entries with `id`/`parentId` fields,
@@ -88,3 +92,12 @@ selection semantics (same as pi's `/tree`):
 
 in interactive terminals: ↑/↓ to navigate, Enter to branch, Esc to cancel.
 with piped stdin: plain numbered list, type a number and press Enter.
+
+## /reload
+
+Inside the TUI, `/reload` rebuilds rustypi from its own source and relaunches
+in place — for developing rustypi with rustypi. It preserves the session
+(`--resume`), the active model (even if switched mid-session with `/use`),
+and the visible transcript. Only runs when idle (finish or Esc-interrupt the
+current turn first); a build failure is reported inline and leaves the
+running session untouched.

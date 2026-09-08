@@ -26,6 +26,7 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
                 let _ = reply.send(ans);
             }
             Ok(ai_core::Event::TaskEnd { .. }) => break,
+            Ok(ai_core::Event::Reload { .. }) => {} // /reload is a TUI-only slash command
             Err(_) => break,
         }
     }

@@ -16,6 +16,7 @@ pub enum Event {
     ToolEnd { summary: String, ok: bool },     // tool finished
     Ask { question: String, reply: tokio::sync::oneshot::Sender<String> },
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
+    Reload { exe: String, args: Vec<String> },   // TUI /reload: new binary built, ready to relaunch
 }
 
 /// Optional front-end sink. When set, the agent sends Events instead of
@@ -50,6 +51,7 @@ fn emit(ev: Event) {
                 }
             }
             Event::Ask { .. } => {}
+            Event::Reload { .. } => {} // TUI-only; no-op without a front end
         },
     }
 }
@@ -69,6 +71,13 @@ pub async fn run_agent(
 ) -> Result<String, String> {
     if session.entries.is_empty() {
         session.add(Entry::new("system", SYSTEM_PROMPT.into()), None);
+    } else if let Some(sys) = session.entries.first_mut() {
+        // a resumed session's system entry was frozen at creation time; keep it
+        // live so editing SYSTEM_PROMPT + rebuilding (see tui /reload) takes
+        // effect on the next turn instead of staying pinned to stale text.
+        if sys.role == "system" {
+            sys.content = SYSTEM_PROMPT.into();
+        }
     }
     if !task.is_empty() {
         // branch from the current leaf (or root); resume/--tree set active

@@ -79,7 +79,10 @@ fn main() {
             eprintln!("no session.json to resume (run a task first)");
             std::process::exit(1);
         }
-        task = task_arg.unwrap_or_else(|| prompt("next instruction", ""));
+        // tui mode never uses `task` (TuiConfig doesn't take one) — skip the
+        // blocking stdin prompt so `--tui --resume` (incl. /reload's relaunch)
+        // doesn't stall before the TUI even starts
+        task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| prompt("next instruction", "")) };
     } else {
         session = session::Session::new(model.clone());
         task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
@@ -88,7 +91,7 @@ fn main() {
     let client = ai_core::llm::Client::new(url, key, model.clone());
 
     if tui_mode {
-        if let Err(e) = tui::run(tui::TuiConfig { client, session, model }) {
+        if let Err(e) = tui::run(tui::TuiConfig { client, session, model, cli_args: args.clone() }) {
             eprintln!("tui error: {e}");
             std::process::exit(1);
         }

@@ -93,6 +93,14 @@
       "dependencies": ["feat-010"],
       "status": "done",
       "evidence": "cancel: Arc<AtomicBool> shared TUI<->agent; run_agent/chat_stream take &AtomicBool; self-test asserts pre-set flag returns Err(\"interrupted\") before any network call"
+    },
+    {
+      "id": "feat-012",
+      "name": "/reload: hot rebuild + relaunch",
+      "description": "TUI slash command rebuilds rustypi from its own source (CARGO_MANIFEST_DIR) into target/reload, runs a uniquely-named copy of the binary (never the built file itself, so cargo can always overwrite it despite Windows exe-locking), and relaunches: exec on Unix, wait-as-thin-wrapper on Windows (exiting after spawn would let the shell fight the child for console input). Preserves the session (saved first, then --resume), live model (--url/--key/--model, survives a mid-session /use), and visible transcript (reconstructed from session.json on the new process). Guarded to idle turns only; build failures leave the running session untouched. /model lists saved profiles (active marked) or switches by name.",
+      "dependencies": ["feat-008", "feat-011"],
+      "status": "done",
+      "evidence": "tui/mod.rs: Job::Reload, stage_reload_exe/build_relaunch_args/render_history (latter two unit tested), Event::Reload handoff, cfg(unix) exec vs cfg(not(unix)) status(); app.rs: Exit::Reload return from ui_loop, /reload gated on app.done, /model + shared switch_model/list_models; fixed pre-existing job_tx/join deadlock on quit and a blocking stdin prompt under --tui --resume as prerequisites; ai_core: resumed session's system entry refreshed from SYSTEM_PROMPT each turn; verified: cargo build into target/reload + staged copy runs --self-test"
     }
   ]
 }

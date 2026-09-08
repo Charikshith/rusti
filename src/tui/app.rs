@@ -15,6 +15,12 @@ use crate::ai_core;
 use super::render::{self, RenderState};
 use super::Job;
 
+/// How ui_loop ended: a plain quit, or a /reload handoff to a new process.
+pub enum Exit {
+    Quit,
+    Reload { exe: String, args: Vec<String> },
+}
+
 pub struct App {
     pub lines: Vec<String>,
     pub current: String,
@@ -44,11 +50,13 @@ pub fn ui_loop(
     rx: Receiver<ai_core::Event>,
     model: String,
     cancel: &AtomicBool,
-) -> io::Result<()> {
+    seed_lines: Vec<String>,
+    seed_msg_num: usize,
+) -> io::Result<Exit> {
     let mut app = App {
-        lines: Vec::new(), current: String::new(),
+        lines: seed_lines, current: String::new(),
         ask: None, input: String::new(), cursor: 0, done: true, model,
-        msg_num: 0, spinner: 0, scroll_up: 0,
+        msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
         history: Vec::new(), hist_idx: None, tool_line: None,
     };
     let mut state = RenderState::new();
@@ -82,7 +90,7 @@ pub fn ui_loop(
                                 if !app.done {
                                     cancel.store(true, Ordering::Relaxed); // don't wait for the turn
                                 }
-                                break;
+                                return Ok(Exit::Quit);
                             }
                         }
 
@@ -195,6 +203,7 @@ pub fn ui_loop(
                     app.lines.push(format!("  ℹ {question}"));
                     app.ask = Some((question, reply));
                 }
+                ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
                 ai_core::Event::TaskEnd { ok, error } => {
                     app.flush();
                     // success is self-evident (the answer ends the turn);
@@ -216,11 +225,11 @@ pub fn ui_loop(
             }
         }
     }
-    Ok(())
 }
 
-/// Slash commands: /use <name> switches model, /resume loads session.json,
-/// /tree dumps the current session path.
+/// Slash commands: /use <name> switches model, /model (no arg) lists saved
+/// profiles or (with a name) switches like /use, /resume loads session.json,
+/// /tree dumps the current session path, /reload rebuilds + relaunches.
 fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) {
     let mut parts = raw.splitn(2, ' ');
     let cmd = parts.next().unwrap_or("");
@@ -229,23 +238,59 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) {
         "/use" => {
             if arg.is_empty() {
                 app.lines.push("  ✗ usage: /use <name> (see --list)".into());
-                return;
+            } else {
+                switch_model(app, job_tx, arg);
             }
-            let cfg = crate::config::Config::load();
-            match cfg.models.iter().find(|m| m.name == arg) {
-                Some(p) => {
-                    app.model = p.model.clone();
-                    let _ = job_tx.send(Job::Model {
-                        url: p.url.clone(),
-                        key: p.key.clone(),
-                        model: p.model.clone(),
-                    });
-                }
-                None => app.lines.push(format!("  ✗ no saved model named '{arg}' (see --list)")),
+        }
+        "/model" => {
+            if arg.is_empty() {
+                list_models(app);
+            } else {
+                switch_model(app, job_tx, arg);
             }
         }
         "/resume" => { let _ = job_tx.send(Job::Resume); }
         "/tree" => { let _ = job_tx.send(Job::Tree); }
+        "/reload" => {
+            if !app.done {
+                app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
+            } else {
+                app.done = false; // keeps the spinner/status line showing "working…" during the build
+                let _ = job_tx.send(Job::Reload);
+            }
+        }
         _ => app.lines.push(format!("  ✗ unknown command: {cmd}")),
     }
+}
+
+/// Switch to a saved model.json profile by name (shared by /use and /model).
+fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
+    let cfg = crate::config::Config::load();
+    match cfg.models.iter().find(|m| m.name == name) {
+        Some(p) => {
+            app.model = p.model.clone();
+            let _ = job_tx.send(Job::Model {
+                url: p.url.clone(),
+                key: p.key.clone(),
+                model: p.model.clone(),
+            });
+        }
+        None => app.lines.push(format!("  ✗ no saved model named '{name}' (see --list)")),
+    }
+}
+
+/// List saved model.json profiles, marking the currently active one.
+fn list_models(app: &mut App) {
+    let cfg = crate::config::Config::load();
+    if cfg.models.is_empty() {
+        app.lines.push("  ✗ no saved models (see model.json)".into());
+        return;
+    }
+    let mut out = String::new();
+    for m in &cfg.models {
+        let mark = if m.model == app.model { "* " } else { "  " };
+        out.push_str(&format!("{mark}{}  {}\n", m.name, m.model));
+    }
+    app.lines.push(out.trim_end().to_string());
+    app.lines.push("  ℹ /model <name> to switch".into());
 }
