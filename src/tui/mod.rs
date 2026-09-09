@@ -342,11 +342,19 @@ pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
     if width == 0 { return vec![String::new()]; }
     let mut out = Vec::new();
     for src in s.split('\n') {
+        // Leading spaces are the row's marker indent ("  ✓ ", "  │ ") and
+        // colorize_row matches on them, so they must survive the split: an
+        // empty token would otherwise land in the `line.is_empty()` arm and
+        // be dropped, leaving every status row uncolored.
+        let body = src.trim_start_matches(' ');
+        let indent = &src[..src.len() - body.len()];
+        let w = width.saturating_sub(indent.len()).max(1);
+        let first = out.len();
         let mut line = String::new();
-        for word in src.split(' ') {
+        for word in body.split(' ') {
             if line.is_empty() {
                 line = word.to_string();
-            } else if line.len() + 1 + word.len() > width {
+            } else if line.len() + 1 + word.len() > w {
                 out.push(line);
                 line = word.to_string();
             } else {
@@ -355,6 +363,7 @@ pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
             }
         }
         out.push(line);
+        out[first].insert_str(0, indent);
     }
     out
 }
@@ -363,6 +372,23 @@ pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::session::Entry;
+
+    #[test]
+    fn word_wrap_keeps_the_marker_indent_that_colorize_row_matches_on() {
+        // the indent IS the colour key: drop it and ✓/✗/⠋/│/· all render plain
+        assert_eq!(word_wrap("  ✓ Cargo.toml  0ms", 80), vec!["  ✓ Cargo.toml  0ms"]);
+        assert_eq!(word_wrap("  │ thinking out loud", 80), vec!["  │ thinking out loud"]);
+        assert_eq!(word_wrap("1› hello", 80), vec!["1› hello"]);
+        // wrapping still happens, and the indent is charged against the width
+        // so the first row + its indent still fits (truncate_str would cut it)
+        let rows = word_wrap("  ✓ aaaa bbbb cccc", 10);
+        assert_eq!(rows[0], "  ✓ aaaa");
+        assert!(rows.iter().all(|r| r.len() <= 10), "{rows:?}");
+        assert_eq!(rows.concat().replace(' ', ""), "✓aaaabbbbcccc");
+        // blank and all-space lines survive unchanged
+        assert_eq!(word_wrap("", 80), vec![""]);
+        assert_eq!(word_wrap("  ", 80), vec!["  "]);
+    }
 
     #[test]
     fn render_history_reconstructs_transcript_skipping_system_and_tool_calls() {

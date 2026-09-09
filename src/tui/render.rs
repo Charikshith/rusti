@@ -256,3 +256,27 @@ fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
     if start > 0 { pre = format!("…{}", &pre[1..]); }
     (pre, suf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this pins: word_wrap used to drop the leading indent, so every
+    /// marker row missed its colorize_row branch and rendered plain. Both halves
+    /// must agree, so run a row through the real pipeline, not colorize_row alone.
+    #[test]
+    fn status_markers_keep_their_colour_through_word_wrap() {
+        let colour = |line: &str| {
+            let rows = word_wrap(line, 80);
+            colorize_row(&truncate_str(&rows[0], 80))
+        };
+        assert!(colour("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
+        assert!(colour("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
+        assert!(colour("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
+        assert!(colour("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
+        assert!(colour("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
+        assert!(colour("  │ reasoning").starts_with("\x1b[2m"), "reasoning must be dim");
+        assert!(colour("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
+        assert!(colour("1› hello").contains("\x1b[36m›"), "user caret must be cyan");
+    }
+}

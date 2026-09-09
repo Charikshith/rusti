@@ -4,6 +4,19 @@
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 7 passed, --self-test with and without ripgrep on PATH, ./init.sh)
 
+## Session 2026-09-09: Fix — status markers rendered without colour
+- Reported as "the ✓ isn't green". Root cause was not in `colorize_row` but in `word_wrap`: it splits on
+  `' '`, and a leading indent yields empty tokens that hit the `line.is_empty()` arm and get dropped. Every
+  row therefore reached `colorize_row` with its `"  "` gone, matched no branch, and fell through to the
+  default arm — which re-adds two spaces, so the rows *looked* right and only the colour was missing
+- One bug, seven symptoms: ✓ green, ✗ red, ⠋ and ⚠ yellow, ℹ blue, and the dim `│` reasoning and `·` stats
+  rows were all plain. Only user lines survived, because `N› ` has no leading space
+- Fix: `word_wrap` splits the indent off, wraps the body against `width - indent`, and re-applies the indent
+  to the first row. Charging the indent against the width matters — otherwise `truncate_str` clips the tail
+- Two tests: one on `word_wrap` for the indent, one in `render.rs` running a row through the real
+  `word_wrap` → `colorize_row` pipeline, since the bug was the two halves disagreeing rather than either
+  being wrong alone
+
 ## Session 2026-09-09: Safety + workflow tools (feat-023)
 - Permission gate in `run_agent` before `dispatch`: gated tools ask through the existing `Event::Ask` (so the TUI needed no change) with `y / n / a(lways for this tool)`; `decide()` is the pure decision so it is under test. `--yolo` / `RUSTYPI_YOLO=1` skips. Piped stdin -> "no answer given" -> denied, by design
 - `tools::guard()` refuses writes outside the canonicalized cwd; it canonicalizes the deepest *existing* ancestor and re-appends the rest so not-yet-created files and `../` are judged on the real path. Applied to write/multi_edit/delete/move only; reads stay open (recorded as Read-Side Sandbox in open-work)
