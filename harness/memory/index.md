@@ -35,7 +35,7 @@ This file holds only what was **learned**.
      root, so this is easy to get wrong — the validator accepts both, but sibling links
      keep this file readable on its own. -->
 
-_No lessons recorded yet. The first correction you receive belongs here._
+- [RTK filters command output](rtk-filters-command-output.md) — a filtered grep cannot prove a symbol is absent; use `rtk proxy` first.
 
 ## Retired
 

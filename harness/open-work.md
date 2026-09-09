@@ -7,11 +7,6 @@ When: Long conversations hit token limits
 What: Summarize older messages, keep recent context
 Where: ai_core/mod.rs run_agent loop
 
-### reasoning_content Support
-When: User switches to thinking models (QwQ, DeepSeek R1)
-What: Parse `reasoning_content` field from SSE delta alongside `content`
-Where: ai_core/llm.rs chat_stream
-
 ### Command Timeouts
 When: run_command hangs (infinite loop, blocked I/O)
 What: Kill process after N seconds (default 30s)
@@ -40,9 +35,15 @@ What: Show expandable tool stdout/stderr in tool lines (Ctrl+O expands all); res
 Where: tui/render.rs + tui/app.rs ToolEnd handler
 
 ### Editor Autocomplete
-When: Typing speed matters; slash commands/names not discoverable
-What: Fuzzy autocomplete in input: slash commands, saved model names, file paths
+When: Typing speed matters; model/file names not discoverable (slash commands done)
+What: Fuzzy autocomplete in input for saved model names and file paths
 Where: tui/app.rs input handling (fd/fuzzy lib or lazy prefix match)
+
+### Slash-Menu Follow-ups (prototype parity landed 2026-09-09)
+When: The menu exists (`/` opens it) but only completes command names
+What: Extend the same panel to saved model names and file paths; the queued
+commands it lists (/undo /commit /plan /test /export) are the items below
+Where: tui/app.rs filter_cmds/menu_items, tui/render.rs panel_rows
 
 ### Bash Mode (`!` prefix)
 When: User wants to run own shell command and see output inline
@@ -147,10 +148,12 @@ Where: .gitignore
 
 ## Sessions
 
-### Named / Multiple Sessions
-When: One session.json per cwd — switching tasks clobbers history
-What: `--session NAME` → `.rustypi/sessions/NAME.json`; `/session list|switch`
-Where: session.rs PATH, main.rs, tui/app.rs command
+### /session list|switch
+When: `--session NAME`, `/rename` and the `/resume` picker exist; switching
+still needs a restart or a trip through /resume (menu lists it as `· soon`)
+What: `/session list` (names + ages, same rows as the picker) and
+`/session switch NAME`, reusing session::list() and Job::ResumePath
+Where: tui/app.rs handle_command
 
 ### /undo Last Turn
 When: A bad turn poisons the context
@@ -165,9 +168,11 @@ Where: tui/app.rs command, session.rs path()
 ## Model / API
 
 ### Cost & Token Tracking
-When: No idea how much a session costs or how close to the context limit it is
-What: Parse `usage` from the final SSE chunk (most servers send it), accumulate per session, show in footer (ties into Context/Token Footer)
-Where: ai_core/llm.rs handle_event, session.rs, tui/render.rs
+When: Per-turn stats land (`· tok · tps · s`) but nothing accumulates across a
+session, and there's no cost or context-% figure
+What: Accumulate Event::Usage into the session, add price-per-token to the
+profile, show session totals + context % in the footer
+Where: session.rs, config.rs profile, tui/render.rs (Event::Usage exists)
 
 ### Prompt Caching Headers
 When: Long system prompt + history re-sent every turn on providers that support caching
@@ -192,9 +197,16 @@ Where: ai_core/llm.rs handle_event emit, tui/app.rs ToolStart
 ## TUI Experience Low Priority (defer indefinitely)
 - External editor (Ctrl+G), clipboard copy (Ctrl+X), paste image (Alt+V)
 - Thinking-block expand/collapse (Ctrl+T) — only if models emit reasoning
-- Session tree browser/fork/named sessions — /tree text dump works
+- Session tree browser/fork — /tree text dump works (named sessions landed)
 - Startup help header, changelog, retry/compaction indicators, taskbar progress
 
 ## Cleanup (Low Priority)
 - Delete orphan files at root: `config.rs`, `llm.rs`, `tools.rs` (superseded by src/ modules)
 - Remove unused `add_profile()` in config.rs or wire it into --add flow
+
+### Boxed Full-Screen Pickers
+When: The /resume picker renders as a panel above the input (menu-styled rows),
+not the boxed full-screen overlay the prototype drew
+What: If the panel proves cramped for long session lists, lift tree.rs's box
+renderer into a shared overlay used by /resume and an in-TUI /tree
+Where: tui/render.rs panel_rows, src/tree.rs

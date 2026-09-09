@@ -9,6 +9,92 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const PATH: &str = "session.json";
 
+/// Named sessions live here; the bare session.json at the root stays the
+/// unnamed default, so sessions saved before naming existed still load.
+pub const DIR: &str = ".rustypi/sessions";
+
+pub fn path_for(name: &str) -> String {
+    format!("{DIR}/{name}.json")
+}
+
+/// Display name of a session file: its stem, so
+/// `.rustypi/sessions/main.json` reads "main" and the root file "session".
+pub fn name_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// One saved session, as the /resume picker lists it.
+pub struct Info {
+    pub name: String,
+    pub path: String,
+    pub entries: usize,
+    pub age_s: u64,
+    pub head: String, // latest user message on the active path
+}
+
+/// Saved sessions, most recently touched first: everything under DIR plus the
+/// root session.json. Empty files are skipped — nothing to resume.
+pub fn list() -> Vec<Info> {
+    let mut paths: Vec<String> = std::fs::read_dir(DIR)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .filter(|p| p.ends_with(".json"))
+        .collect();
+    if std::path::Path::new(PATH).exists() {
+        paths.push(PATH.to_string());
+    }
+    let mut out: Vec<Info> = paths.iter().filter_map(|p| info(p)).collect();
+    out.sort_by_key(|i| i.age_s);
+    out
+}
+
+fn info(path: &str) -> Option<Info> {
+    let s = Session::load_from(path);
+    if s.is_empty() {
+        return None;
+    }
+    let age_s = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|t| t.elapsed().map(|d| d.as_secs()).unwrap_or(0))
+        .unwrap_or(u64::MAX);
+    let head = s
+        .path()
+        .iter()
+        .rev()
+        .find(|e| e.role == "user")
+        .map(|e| e.content.replace('\n', " ").chars().take(48).collect())
+        .unwrap_or_default();
+    Some(Info {
+        name: name_of(path),
+        path: path.to_string(),
+        entries: s.entries.len(),
+        age_s,
+        head,
+    })
+}
+
+/// A session name is a file stem under DIR, so it gets the character check
+/// that implies: ASCII letters, digits, `.`, `_`, `-`, at most 40 of them.
+pub fn valid_name(name: &str) -> bool {
+    let n = name.chars().count();
+    n >= 1 && n <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Coarse relative time for the picker: "2m ago", "3h ago", "4d ago".
+pub fn ago(s: u64) -> String {
+    match s {
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{}m ago", s / 60),
+        3600..=86399 => format!("{}h ago", s / 3600),
+        _ => format!("{}d ago", s / 86400),
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
@@ -70,9 +156,6 @@ impl Session {
         s.path = path.into();
         s
     }
-    pub fn load() -> Session {
-        Self::load_from(PATH)
-    }
     pub fn load_from(path: &str) -> Session {
         let mut s = std::fs::read_to_string(path)
             .ok()
@@ -86,6 +169,11 @@ impl Session {
         s
     }
     pub fn save(&self) -> Result<(), String> {
+        if let Some(dir) = std::path::Path::new(&self.path).parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+            }
+        }
         std::fs::write(&self.path, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?)
             .map_err(|e| format!("writing {}: {e}", self.path))
     }
@@ -139,5 +227,37 @@ impl Session {
         let text = e.content.clone();
         self.active = if e.role == "user" { e.parent.clone() } else { Some(e.id.clone()) };
         Some(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn info_reports_entry_count_and_latest_user_message() {
+        let p = std::env::temp_dir().join("rustypi_info_test.json");
+        let path = p.to_string_lossy().into_owned();
+        let mut s = Session::with_path("m".into(), &path);
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        let u = s.add(Entry::new("user", "first
+second".into()), Some(sys));
+        s.add(Entry::new("assistant", "ok".into()), Some(u));
+        s.save().unwrap();
+
+        let i = info(&path).unwrap();
+        assert_eq!(i.entries, 3);
+        assert_eq!(i.head, "first second");
+        assert_eq!(i.name, "rustypi_info_test");
+        std::fs::remove_file(&path).ok();
+
+        assert!(valid_name("tui-colors") && valid_name("a.b_c9"));
+        assert!(!valid_name("") && !valid_name("has space") && !valid_name("../etc"));
+        assert!(!valid_name(&"x".repeat(41)) && valid_name(&"x".repeat(40)));
+
+        assert_eq!(ago(30), "just now");
+        assert_eq!(ago(600), "10m ago");
+        assert_eq!(ago(7200), "2h ago");
+        assert_eq!(ago(200_000), "2d ago");
     }
 }

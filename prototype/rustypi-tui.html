@@ -1,0 +1,648 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rustypi TUI prototype</title>
+<style>
+  /* palette - mirrors the ANSI codes used in src/tui/render.rs */
+  :root {
+    --bg: #0d1117;
+    --fg: #d7d7d7;
+    --dim: #6b7280;      /* ESC[2m */
+    --cyan: #4dd0e1;     /* 36 - prompt caret, "> " */
+    --yellow: #e5c07b;   /* 33 - spinner, warn */
+    --green: #7ec699;    /* 32 - tool ok */
+    --red: #e06c75;      /* 31 - tool fail */
+    --blue: #61afef;     /* 34 - info / ask */
+    --frame: #1b222c;
+    --font: "Cascadia Mono", "JetBrains Mono", Consolas, "DejaVu Sans Mono", monospace;
+    --fs: 13.5px;
+    --lh: 1.4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #06080b; color: var(--fg);
+    font: var(--fs)/var(--lh) var(--font);
+    display: flex; flex-direction: column; align-items: center;
+    gap: 10px; padding: 18px 14px 24px;
+    min-height: 100vh;
+  }
+  .wrap { width: 100%; max-width: 980px; }
+  .bar {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--frame); border: 1px solid #263040; border-bottom: 0;
+    border-radius: 7px 7px 0 0; padding: 7px 10px; color: var(--dim);
+  }
+  .bar i { width: 10px; height: 10px; border-radius: 50%; background: #3a4453; }
+  .bar i:nth-child(1) { background: #e06c75; }
+  .bar i:nth-child(2) { background: #e5c07b; }
+  .bar i:nth-child(3) { background: #7ec699; }
+  .bar span { margin-left: 6px; }
+  #term {
+    background: var(--bg); border: 1px solid #263040; border-radius: 0 0 7px 7px;
+    height: 74vh; min-height: 380px; padding: 8px 10px;
+    display: flex; flex-direction: column; overflow: hidden;
+    cursor: text;
+  }
+  #transcript { flex: 1; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+  #transcript::-webkit-scrollbar { width: 8px; }
+  #transcript::-webkit-scrollbar-thumb { background: #263040; border-radius: 4px; }
+  .row { white-space: pre-wrap; word-break: break-word; min-height: calc(var(--fs) * var(--lh)); }
+  .ind { padding-left: 2ch; }              /* transcript body indent (colorize_row) */
+  .spacer { min-height: calc(var(--fs) * var(--lh)); }
+  #inputline { white-space: pre-wrap; word-break: break-all; }
+  #menu .row { white-space: pre; overflow: hidden; }
+  #menu .sel { background: #182230; }
+  #menu .name { color: var(--fg); }
+  #menu .sel .name { color: var(--cyan); }
+  #status { display: flex; justify-content: space-between; gap: 12px; white-space: pre; }
+  #status .r { overflow: hidden; text-overflow: ellipsis; }
+  .dim { color: var(--dim); } .cyan { color: var(--cyan); } .yellow { color: var(--yellow); }
+  .green { color: var(--green); } .red { color: var(--red); } .blue { color: var(--blue); }
+  .cursor { background: var(--fg); color: var(--bg); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { background: transparent; color: transparent; } }
+  #overlay { flex: 1; overflow: hidden; }
+  #overlay .row { color: var(--dim); }
+  #overlay .row b { color: var(--fg); font-weight: 700; }
+  #legend { width: 100%; max-width: 980px; color: var(--dim); line-height: 1.75; }
+  #legend b { color: #9aa4b2; font-weight: 600; }
+  #legend code { color: var(--cyan); }
+  #probe { position: absolute; visibility: hidden; white-space: pre;
+           font: var(--fs)/var(--lh) var(--font); }
+</style>
+
+<div class="wrap">
+  <div class="bar"><i></i><i></i><i></i><span>rustypi --tui &nbsp;&middot;&nbsp; D:\Code\AI\Agents\rustypi &nbsp;&middot;&nbsp; <span id="sess"></span></span></div>
+  <div id="term">
+    <div id="transcript"></div>
+    <div id="overlay" hidden></div>
+    <div class="spacer"></div>
+    <div id="menu" hidden></div>
+    <div id="inputline"></div>
+    <div id="status"><span class="l"></span><span class="r"></span></div>
+  </div>
+</div>
+
+<div id="legend">
+  <b>prototype</b> &mdash; mock agent, no LLM, no files touched. Click the page once, then just type.<br>
+  <b>tasks</b> &mdash; type anything &middot; every turn opens with a dim <code>│</code> thinking block &middot; include the word <code>ask</code> for an ask_user turn &middot; <code>fail</code> for a failing tool<br>
+  <b>slash</b> &mdash; press <code>/</code> for the command menu (5 rows, up/down for the rest, Tab completes, Enter runs, Esc dismisses)<br>
+  <b>quit</b> &mdash; <code>/quit</code> or Ctrl+C twice to close<br>
+  <b>timing</b> &mdash; each finished tool line carries its own wall time &middot; the turn total is the <code>· tok · tps · s</code> line<br>
+  <b>keys</b> &mdash; Enter submit &middot; Esc interrupt &middot; Ctrl+C clears input, twice quits &middot; Ctrl+D quits when empty &middot; up/down history &middot; PgUp/PgDn scroll<br>
+  <b>sessions</b> &mdash; <code>/resume</code> opens the session picker (arrows, Enter resumes) &middot; <code>/resume 2</code> or <code>/resume tui-colors</code> skips it &middot; <code>/rename &lt;name&gt;</code> renames the active one (shown in the title bar)<br>
+  <b>extra</b> &mdash; type <code>--tree</code> for the session-tree browser screen (the CLI <code>--tree</code> flag)
+</div>
+<span id="probe">MMMMMMMMMMMMMMMMMMMM</span>
+
+<script>
+// ---------------------------------------------------------------------------
+// mirrors src/tui/{app,render}.rs: transcript lines are plain strings and the
+// renderer parses their leading marker for colour. same contract here.
+// ---------------------------------------------------------------------------
+const SPIN = ['\u280b','\u2819','\u2839','\u2838','\u283c','\u2834','\u2826','\u2827','\u2807','\u280f'];
+const MODELS = [
+  { name: 'mimo',        model: 'cmc/xiaomi/mimo-v2.5-pro' },
+  { name: 'gpt54mini',   model: 'cx/gpt-5.4-mini' },
+  { name: 'qwen3-flash', model: 'Qwen/Qwen3-8B-GGUF:Q5_K_M' },
+];
+// slash commands: the five that exist today, then the ones queued in
+// harness/open-work.md (shown dim + "soon" so the menu stays honest)
+const CMDS = [
+  { c: '/model',   d: 'list saved profiles, or /model <name> to switch' },
+  { c: '/use',     d: '/use <name> - switch to a saved profile' },
+  { c: '/resume',  d: 'pick a saved session and continue it' },
+  { c: '/rename',  d: '/rename <new-name> - rename the active session' },
+  { c: '/tree',    d: 'dump the current session path' },
+  { c: '/reload',  d: 'rebuild rustypi from source and relaunch' },
+  { c: '/quit',    d: 'exit rustypi (same as ctrl+c twice)' },
+  { c: '/undo',    d: 'drop the last turn', soon: true },
+  { c: '/commit',  d: 'draft a commit message from this session', soon: true },
+  { c: '/plan',    d: 'plan mode: no writes until approved', soon: true },
+  { c: '/test',    d: '/test <cmd> - loop until it exits 0', soon: true },
+  { c: '/export',  d: '/export [file.md] - write out the transcript', soon: true },
+  { c: '/session', d: '/session list|switch <name>', soon: true },
+];
+const MENU_ROWS = 5;      // visible at once; arrows scroll the rest
+// saved sessions. real source: .rustypi/sessions/<name>.json, one tree per
+// name (open-work.md "Named / Multiple Sessions"); today src has a single
+// session.json, so the picker below is the proposal, not the built behaviour.
+const SESSIONS = [
+  { name: 'main', entries: 5, leaf: 'm5', when: '2m ago', head: 'add a --version flag to src/main.rs',
+    msgs: 2, history: ['hi', 'add a --version flag to src/main.rs'],
+    lines: ['1\u203a hi', 'Hello! What would you like to work on?', '',
+            '2\u203a add a --version flag to src/main.rs',
+            'Added --version to src/main.rs \u2014 prints the crate version and exits.', ''] },
+  { name: 'tui-colors', entries: 18, leaf: 'm18', when: '3h ago', head: 'whole-line colour for tool rows',
+    msgs: 1, history: ['colour the whole tool row, not just the glyph'],
+    lines: ['1\u203a colour the whole tool row, not just the glyph',
+            '  \u2713 edited src/tui/render.rs: colorize_row takes the marker colour for the whole line',
+            'Done \u2014 \u2713 rows read green, \u2717 red, \u280b yellow while the tool runs.', ''] },
+  { name: 'tree-browser', entries: 11, leaf: 'm11', when: 'yesterday', head: 'session tree browser screen',
+    msgs: 1, history: ['add a --tree browser screen'],
+    lines: ['1\u203a add a --tree browser screen', '  \u2713 src/tree.rs',
+            'Added src/tree.rs \u2014 arrows select, Enter branches from the chosen entry.', ''] },
+];
+
+const S = {
+  lines: [], current: '', input: '', cursor: 0, done: true,
+  model: MODELS[2].model, msgNum: 0, spinner: 0,
+  history: [], histIdx: null, toolLine: null, toolT0: 0, ask: null, cancel: false,
+  genChars: 0, genMs: 0, turnT0: 0,   // per-turn token/sec accounting
+  exitArmed: false,                    // first ctrl+c seen, second one quits
+  fresh: true,                         // nothing submitted yet this run
+  session: '',                         // active session name (the file stem)
+};
+
+const T = document.getElementById('transcript');
+const OV = document.getElementById('overlay');
+const IL = document.getElementById('inputline');
+const ST = document.getElementById('status');
+const MENU = document.getElementById('menu');
+const SESS = document.getElementById('sess');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// -- render ----------------------------------------------------------------
+// \u2502 is the reasoning_content block (dim); the rest are status markers
+const MARK = { '\u280b': 'yellow', '\u2713': 'green', '\u2717': 'red', '\u26a0': 'yellow', '\u2139': 'blue', '\u2502': 'dim' };
+
+function rowHTML(s) {
+  if (s.startsWith('  \u00b7 ')) return '<div class="row ind dim">' + esc(s.slice(2)) + '</div>';  // turn stats
+  const u = s.match(/^(\d+)\u203a (.*)$/);                   // user line: dim n + cyan caret
+  if (u) return '<div class="row"><span class="dim">' + u[1] + '</span><span class="cyan">\u203a</span> ' + esc(u[2]) + '</div>';
+  const m = s.match(/^  ([\u280b\u2713\u2717\u26a0\u2139\u2502]) (.*)$/);   // status marker line
+  if (m) return '<div class="row ind ' + MARK[m[1]] + '">' + m[1] + ' ' + esc(m[2]) + '</div>';
+  return '<div class="row ind">' + esc(s) + '</div>';
+}
+
+// -- slash-command menu ----------------------------------------------------
+// open while the input is a lone "/word" (a space means the command is typed
+// and the args have started). 5 rows visible; up/down walks the whole list.
+let menuIdx = 0, menuTop = 0, menuFor = null, menuOff = null;
+
+function menuItems() {
+  if (S.ask || menuOff === S.input) return [];   // Esc dismissed it for this text
+  const m = S.input.match(/^\/(\S*)$/);
+  if (!m) return [];
+  const q = m[1].toLowerCase();
+  return CMDS.filter(x => x.c.slice(1).toLowerCase().startsWith(q));
+}
+
+function drawMenu() {
+  const items = menuItems();
+  MENU.hidden = !items.length;
+  if (!items.length) { menuFor = null; return; }
+  if (menuFor !== S.input) { menuFor = S.input; menuIdx = 0; menuTop = 0; }  // filter changed
+  menuIdx = Math.min(menuIdx, items.length - 1);
+  if (menuIdx < menuTop) menuTop = menuIdx;
+  if (menuIdx >= menuTop + MENU_ROWS) menuTop = menuIdx - MENU_ROWS + 1;
+
+  const width = Math.max(...CMDS.map(x => x.c.length));
+  const rows = items.slice(menuTop, menuTop + MENU_ROWS).map((x, i) => {
+    const sel = menuTop + i === menuIdx;
+    const name = (x.c + ' '.repeat(width - x.c.length));
+    return '<div class="row' + (sel ? ' sel' : '') + '">'
+      + (sel ? '<span class="cyan">▸ </span>' : '  ')
+      + '<span class="name">' + name + '</span>'
+      + '<span class="dim">  ' + esc(x.d) + (x.soon ? '  · soon' : '') + '</span></div>';
+  });
+  if (items.length > MENU_ROWS) {
+    rows.push('<div class="row dim">  ↑/↓ ' + (menuIdx + 1) + '/' + items.length
+      + '  · tab completes · enter runs</div>');
+  }
+  MENU.innerHTML = rows.join('');
+}
+
+function draw() {
+  const all = [];
+  for (const l of S.lines) all.push(...String(l).split('\n'));
+  if (S.current) all.push(...S.current.split('\n'));
+  const atBottom = T.scrollHeight - T.scrollTop - T.clientHeight < 24;
+  T.innerHTML = all.map(rowHTML).join('');
+  if (atBottom) T.scrollTop = T.scrollHeight;
+  drawMenu();
+  drawInput();
+  drawStatus();
+}
+
+function drawInput() {
+  const pre = esc(S.input.slice(0, S.cursor));
+  const suf = esc(S.input.slice(S.cursor));
+  IL.innerHTML = '<span class="cyan">&gt; </span>' + pre + '<span class="cursor">\u258c</span>' + suf;
+}
+
+function drawStatus() {
+  // the quit hint is onboarding, not status: show it on a fresh prompt and
+  // again when the transcript is scrolled off the bottom (you're looking for
+  // the way out), otherwise leave the slot empty.
+  const scrolledUp = T.scrollHeight - T.scrollTop - T.clientHeight > 24;
+  const left = S.exitArmed
+    ? '<span class="yellow">press ctrl+c again to exit</span>'
+    : !S.done
+      ? '<span class="yellow">' + SPIN[S.spinner % SPIN.length] + '</span><span class="dim"> working\u2026</span>'
+      : (S.fresh || scrolledUp) ? '<span class="dim">ctrl+c twice to quit</span>' : '';
+  ST.innerHTML = '<span class="l">' + left + '</span><span class="r dim">' + esc(S.model) + '</span>';
+  SESS.textContent = S.session;
+}
+
+setInterval(() => { S.spinner++; if (!S.done) drawStatus(); }, 80);
+
+// -- transcript helpers (the Event::* arms in app.rs) ----------------------
+const flush = () => { if (S.current) { S.lines.push(S.current); S.current = ''; } };
+const push = l => { flush(); S.lines.push(l); draw(); };
+
+// real source: wall time around the tool dispatch in ai_core/mod.rs run_agent
+const took = ms => (ms < 1000 ? Math.round(ms) + 'ms' : (ms / 1000).toFixed(1) + 's');
+
+function toolEnd(summary, ok) {
+  const line = '  ' + (ok ? '\u2713' : '\u2717') + ' ' + summary + '  ' + took(performance.now() - S.toolT0);
+  const i = S.toolLine; S.toolLine = null;
+  if (i != null && String(S.lines[i]).startsWith('  \u280b ')) S.lines[i] = line;
+  else S.lines.push(line);
+  draw();
+}
+
+function endTurn(ok, error) {
+  flush();
+  // success is self-evident; only failures get a marker (see progress.md)
+  if (!ok) push(error === 'interrupted' ? '  \u26a0 interrupted' : '  \u2717 Task failed: ' + error);
+  // per-turn stats. real source: the `usage` field on the final SSE chunk
+  // (open-work.md "Cost & Token Tracking"); tps is over generation time only,
+  // so tool waits don't dilute it.
+  if (S.genChars) {
+    const tok = Math.max(1, Math.round(S.genChars / 4));
+    const tps = tok / (S.genMs / 1000);
+    const wall = (performance.now() - S.turnT0) / 1000;
+    push('  \u00b7 ' + tok + ' tok \u00b7 ' + tps.toFixed(1) + ' tps \u00b7 ' + wall.toFixed(1) + 's');
+  }
+  S.done = true;
+  if (S.lines.length) S.lines.push('');
+  draw();
+}
+
+// -- mock agent ------------------------------------------------------------
+function scriptFor(task) {
+  const t = task.toLowerCase();
+  if (t.includes('ask')) return [
+    { think: 'Two plausible homes for this flag. Guessing wrong costs a second edit and a second build, so ask first.' },
+    { stream: 'I need one detail before I touch anything.' },
+    { ask: 'Put the flag in src/main.rs or src/config.rs?' },
+    { tool: 'src/main.rs' },
+    { tool: 'cargo build --release', ms: 1400 },
+    { stream: 'Added the flag where you said, build is clean.' },
+  ];
+  if (t.includes('fail')) return [
+    { stream: 'Looking for that text in the file\u2026' },
+    { tool: 'src/tui/render.rs', ms: 600 },
+    { tool: 'src/tui/render.rs', ms: 800, ok: false,
+      summary: 'edit failed: old text not found in src/tui/render.rs' },
+    { fail: 'edit failed: old text not found in src/tui/render.rs' },
+  ];
+  return [
+    { think: 'Start at src/main.rs to find where the TUI is spun up, then src/tui/render.rs for the status line itself. Reading before editing avoids a failed old-text match.' },
+    { stream: 'Reading the entry point and the renderer first.' },
+    { tool: 'src/main.rs', ms: 450 },
+    { tool: 'src/tui/render.rs', ms: 550 },
+    { tool: 'src/tui/render.rs', ms: 700, summary: 'edited src/tui/render.rs: 41 chars -> 63 chars' },
+    { tool: 'cargo build --release', ms: 1600 },
+    { stream: 'Done. The status line now keeps the model name right-aligned and dimmed, and the rebuild is clean \u2014 0 warnings, 2.8 MB binary.' },
+  ];
+}
+
+async function stream(text) {
+  const t0 = performance.now();
+  for (let i = 0; i < text.length; i += 3) {
+    if (S.cancel) break;
+    S.current += text.slice(i, i + 3);
+    S.genChars += 3;
+    draw();
+    await sleep(18);
+  }
+  S.genMs += performance.now() - t0;
+  flush(); draw();
+}
+
+function askUser(question) {
+  push('  \u2139 ' + question);
+  return new Promise(res => { S.ask = res; });
+}
+
+async function runTask(task) {
+  S.done = false; S.cancel = false;
+  S.genChars = 0; S.genMs = 0; S.turnT0 = performance.now();
+  for (const st of scriptFor(task)) {
+    if (S.cancel) break;
+    if (st.think) {
+      S.current = '  \u2502 ';                    // reasoning_content, rendered dim
+      await stream(st.think);
+    } else if (st.stream) {
+      await stream(st.stream);
+    } else if (st.tool) {
+      push('  \u280b ' + st.tool);
+      S.toolLine = S.lines.length - 1;
+      S.toolT0 = performance.now();
+      await sleep(st.ms || 700);
+      if (S.cancel) break;
+      toolEnd(st.summary || st.tool, st.ok !== false);
+    } else if (st.ask) {
+      const a = await askUser(st.ask);
+      if (a === 'interrupted') break;
+    } else if (st.fail) {
+      endTurn(false, st.fail);
+      return;
+    }
+  }
+  endTurn(!S.cancel, S.cancel ? 'interrupted' : null);
+}
+
+// -- slash commands (handle_command in app.rs) ----------------------------
+async function runReload() {
+  S.done = false; S.cancel = false;
+  push('  \u280b cargo build --release --target-dir target/reload');
+  S.toolLine = S.lines.length - 1;
+  S.toolT0 = performance.now();
+  await sleep(2200);
+  toolEnd('cargo build --release --target-dir target/reload', true);
+  push('  \u2139 relaunching with --resume');
+  await sleep(700);
+  // the new process rebuilds the transcript from session.json: tool lines don't survive
+  S.lines = S.lines.filter(l => !/^  [\u280b\u2713\u2717\u26a0\u2139] /.test(String(l)));
+  S.done = true;
+  draw();
+}
+
+function command(raw) {
+  const parts = raw.split(' ');
+  const cmd = parts[0];
+  const arg = parts.slice(1).join(' ').trim();
+  const use = name => {
+    const p = MODELS.find(m => m.name === name);
+    if (!p) return push("  \u2717 no saved model named '" + name + "' (see --list)");
+    S.model = p.model;
+    draw();
+  };
+  switch (cmd) {
+    case '/use':
+      return arg ? use(arg) : push('  \u2717 usage: /use <name> (see --list)');
+    case '/model':
+      if (arg) return use(arg);
+      push(MODELS.map(m => (m.model === S.model ? '* ' : '  ') + m.name + '  ' + m.model).join('\n'));
+      return push('  \u2139 /model <name> to switch');
+    case '/resume': {
+      if (!arg) return openSessions();
+      const s = SESSIONS[Number(arg) - 1] || SESSIONS.find(x => x.name === arg);
+      return s ? resumeSession(s) : push("  \u2717 no session '" + arg + "' (/resume to pick)");
+    }
+    case '/tree':
+      return push(['0. system',
+                   '1. user: hi',
+                   '2. assistant: Hello! What would you like to work on?',
+                   '3. user: add a --version flag to src/main.rs',
+                   '4. assistant: Added --version to src/main.rs.'].join('\n'));
+    case '/rename': {
+      // the name is a file stem (.rustypi/sessions/<name>.json), so it gets
+      // the same char check the real command would need
+      if (!arg) return push('  \u2717 usage: /rename <new-name>');
+      if (!/^[\w.-]{1,40}$/.test(arg)) return push('  \u2717 letters, digits, . _ - only (max 40)');
+      if (SESSIONS.some(x => x.name === arg)) return push("  \u2717 a session named '" + arg + "' already exists");
+      const cur = SESSIONS.find(x => x.name === S.session);
+      push('  \u2139 renamed ' + cur.name + ' \u2192 ' + arg);
+      cur.name = arg; S.session = arg;
+      return draw();
+    }
+    case '/reload':
+      if (!S.done) return push('  \u2717 finish or Esc-interrupt the current task first');
+      return runReload();
+    case '/quit':
+      return quit();
+    default: {
+      const soon = CMDS.find(x => x.c === cmd && x.soon);
+      if (soon) return push('  \u2139 ' + cmd + ' is queued, not built yet \u2014 see harness/open-work.md');
+      return push('  \u2717 unknown command: ' + cmd);
+    }
+  }
+}
+
+// -- session-tree browser screen (--tree, src/tree.rs) --------------------
+const TREE = [
+  { sel: false, label: '  system' },
+  { sel: true,  label: '    user hi' },
+  { sel: true,  label: '      assistant Hello! What would you like to work on?' },
+  { sel: true,  label: '        user add a --version flag to src/main.rs' },
+  { sel: false, label: '          \u21b3 tool src/main.rs' },
+  { sel: true,  label: '            assistant Added --version to src/main.rs. \u25c0' },
+];
+let ov = null; // { rows, title, hint, idx, pick } while a full-screen picker is open
+
+function cols() {
+  const cw = document.getElementById('probe').getBoundingClientRect().width / 20;
+  return Math.max(40, Math.floor((document.getElementById('term').clientWidth - 20) / cw));
+}
+
+function drawOverlay() {
+  const w = cols(), inner = w - 2;
+  const pad = s => (s + ' '.repeat(Math.max(0, inner - s.length))).slice(0, inner);
+  const cap = '\u250c\u2500 ' + ov.title + ' ';
+  const out = [{ t: cap + '\u2500'.repeat(Math.max(0, w - cap.length - 1)) + '\u2510' }];
+  ov.rows.forEach((r, i) => {
+    const marker = (i === ov.idx && r.sel) ? '\u25b6 ' : '  ';
+    out.push({ t: '\u2502' + pad(marker + r.label) + '\u2502', bold: i === ov.idx });
+  });
+  out.push({ t: '\u251c' + '\u2500'.repeat(w - 2) + '\u2524' });
+  out.push({ t: '\u2502 ' + pad(ov.hint).slice(0, inner - 1) + '\u2502' });
+  out.push({ t: '\u2514' + '\u2500'.repeat(w - 2) + '\u2518' });
+  OV.innerHTML = out.map(r => '<div class="row">' + (r.bold ? '<b>' + esc(r.t) + '</b>' : esc(r.t)) + '</div>').join('');
+}
+
+function openOverlay(o) {
+  ov = Object.assign({ idx: o.rows.length - 1 }, o);
+  T.hidden = true; OV.hidden = false;
+  drawOverlay();
+}
+
+function closeOverlay() {
+  ov = null;
+  OV.hidden = true; T.hidden = false;
+  draw();
+}
+
+function openTree() {
+  openOverlay({
+    title: 'session tree', rows: TREE,
+    hint: '\u2191/\u2193 select \u00b7 Enter branch \u00b7 Esc cancel',
+    // pi semantics: a user message prefills its text (edit + resubmit = new branch),
+    // an assistant message continues from there with an empty prompt
+    pick: r => {
+      const m = r.label.trim().match(/^user (.*)$/);
+      closeOverlay();
+      S.input = m ? m[1] : ''; S.cursor = S.input.length;
+      draw();
+    },
+  });
+}
+
+// /resume with no argument: pick a saved session and continue it
+function openSessions() {
+  openOverlay({
+    title: 'sessions', idx: 0,
+    rows: SESSIONS.map(x => ({ sel: true,
+      label: x.name.padEnd(15) + String(x.entries).padStart(3) + ' entries  '
+           + x.when.padEnd(11) + x.head })),
+    hint: '\u2191/\u2193 select \u00b7 Enter resume \u00b7 Esc cancel',
+    pick: (r, i) => { closeOverlay(); resumeSession(SESSIONS[i]); },
+  });
+}
+
+function resumeSession(x) {
+  S.lines = x.lines.slice(); S.current = ''; S.session = x.name;
+  S.msgNum = x.msgs; S.history = x.history.slice(); S.histIdx = null;
+  push('  \u2139 resumed ' + x.name + ' (' + x.entries + ' entries, leaf ' + x.leaf + ')');
+}
+
+// -- keys (ui_loop in app.rs) ---------------------------------------------
+let exitTimer = 0;
+
+function quit() {
+  S.exitArmed = false;
+  S.cancel = true;
+  if (S.ask) { const r = S.ask; S.ask = null; r('interrupted'); }
+  push('  ℹ (prototype) rustypi would exit here');
+}
+
+// page-level so typing works without clicking first (review surfaces may take
+// the click for themselves), but any real input/textarea/contenteditable on the
+// page — an annotation box, review chrome — keeps its own keystrokes.
+document.addEventListener('keydown', e => {
+  const key = e.key;
+  if (e.metaKey || e.altKey) return;
+  if (e.ctrlKey && !'cd'.includes(key.toLowerCase())) return;
+  // a real input inside/over the terminal (incl. shadow-DOM overlays) wins
+  const src = (e.composedPath && e.composedPath()[0]) || e.target;
+  if (src && (src.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(src.tagName || ''))) return;
+
+  if (ov) {                                       // full-screen picker (--tree, /resume)
+    e.preventDefault();
+    if (key === 'ArrowUp') { ov.idx = Math.max(0, ov.idx - 1); drawOverlay(); }
+    if (key === 'ArrowDown') { ov.idx = Math.min(ov.rows.length - 1, ov.idx + 1); drawOverlay(); }
+    if (key === 'Escape') closeOverlay();
+    // system/tool rows aren't selectable
+    if (key === 'Enter' && ov.rows[ov.idx].sel) ov.pick(ov.rows[ov.idx], ov.idx);
+    return;
+  }
+
+  // ctrl+c: first press clears the input (and cancels a running turn), a
+  // second press within 2s exits. any other key disarms it.
+  if (e.ctrlKey && key.toLowerCase() === 'c') {
+    e.preventDefault();
+    if (S.exitArmed) { clearTimeout(exitTimer); return quit(); }
+    S.input = ''; S.cursor = 0;
+    if (!S.done) { S.cancel = true; if (S.ask) { const r = S.ask; S.ask = null; r('interrupted'); } }
+    S.exitArmed = true;
+    exitTimer = setTimeout(() => { S.exitArmed = false; drawStatus(); }, 2000);
+    return draw();
+  }
+  if (S.exitArmed) { S.exitArmed = false; clearTimeout(exitTimer); drawStatus(); }
+  if (e.ctrlKey && key.toLowerCase() === 'd') {   // pi: exit when editor empty
+    e.preventDefault();
+    if (!S.input) quit();
+    return;
+  }
+  const mItems = menuItems();                     // slash menu owns these keys while open
+  if (mItems.length) {
+    if (key === 'ArrowUp') { e.preventDefault(); menuIdx = Math.max(0, menuIdx - 1); return draw(); }
+    if (key === 'ArrowDown') { e.preventDefault(); menuIdx = Math.min(mItems.length - 1, menuIdx + 1); return draw(); }
+    if (key === 'Tab') {
+      e.preventDefault();
+      S.input = mItems[menuIdx].c + ' '; S.cursor = S.input.length;
+      return draw();
+    }
+    if (key === 'Escape') { e.preventDefault(); menuOff = S.input; return draw(); }
+    if (key === 'Enter') {
+      e.preventDefault();
+      const c = mItems[menuIdx].c;
+      S.input = ''; S.cursor = 0; draw();
+      return command(c);
+    }
+  }
+  if (key === 'Escape') {                         // pi: interrupt, never quit
+    e.preventDefault();
+    if (!S.done) {
+      S.cancel = true;
+      if (S.ask) { const r = S.ask; S.ask = null; r('interrupted'); }
+    }
+    return;
+  }
+  if (key === 'Enter') {
+    e.preventDefault();
+    const raw = S.input.trim();
+    if (raw) S.fresh = false;
+    if (S.ask) {                                  // answering ask_user
+      S.msgNum++; S.input = ''; S.cursor = 0;
+      S.lines.push(S.msgNum + '\u203a ' + raw);
+      draw();
+      const r = S.ask; S.ask = null;
+      return r(raw);
+    }
+    if (!raw) return;
+    S.input = ''; S.cursor = 0;
+    if (raw === '--tree') return openTree();      // prototype shortcut to the CLI screen
+    if (raw.startsWith('/')) { draw(); return command(raw); }
+    flush();
+    S.msgNum++;
+    S.lines.push(S.msgNum + '\u203a ' + raw);
+    if (S.history[S.history.length - 1] !== raw) S.history.push(raw);
+    S.histIdx = null;
+    draw();
+    return runTask(raw);
+  }
+  if (key === 'Backspace') {
+    e.preventDefault();
+    if (S.cursor > 0) { S.input = S.input.slice(0, S.cursor - 1) + S.input.slice(S.cursor); S.cursor--; }
+    return draw();
+  }
+  if (key === 'Delete') {
+    e.preventDefault();
+    S.input = S.input.slice(0, S.cursor) + S.input.slice(S.cursor + 1);
+    return draw();
+  }
+  if (key === 'ArrowLeft') { e.preventDefault(); S.cursor = Math.max(0, S.cursor - 1); return draw(); }
+  if (key === 'ArrowRight') { e.preventDefault(); S.cursor = Math.min(S.input.length, S.cursor + 1); return draw(); }
+  if (key === 'Home') { e.preventDefault(); S.cursor = 0; return draw(); }
+  if (key === 'End') { e.preventDefault(); S.cursor = S.input.length; return draw(); }
+  if (key === 'ArrowUp' && !S.ask && S.history.length) {
+    e.preventDefault();
+    S.histIdx = S.histIdx === null ? S.history.length - 1 : Math.max(0, S.histIdx - 1);
+    S.input = S.history[S.histIdx]; S.cursor = S.input.length;
+    return draw();
+  }
+  if (key === 'ArrowDown' && !S.ask && S.histIdx !== null) {
+    e.preventDefault();
+    if (S.histIdx + 1 < S.history.length) { S.histIdx++; S.input = S.history[S.histIdx]; }
+    else { S.histIdx = null; S.input = ''; }
+    S.cursor = S.input.length;
+    return draw();
+  }
+  if (key === 'PageUp') { e.preventDefault(); T.scrollTop -= T.clientHeight * 0.8; return; }
+  if (key === 'PageDown') { e.preventDefault(); T.scrollTop += T.clientHeight * 0.8; return; }
+  if (key.length === 1) {
+    e.preventDefault();
+    S.input = S.input.slice(0, S.cursor) + key + S.input.slice(S.cursor);
+    S.cursor++; S.histIdx = null;
+    return draw();
+  }
+});
+addEventListener('resize', () => { if (ov) drawOverlay(); });
+T.addEventListener('scroll', drawStatus);       // scrolling back re-shows the quit hint
+// a click anywhere in the page hands keyboard focus to this frame (it may be
+// embedded in review chrome), so the next keystroke reaches the terminal
+addEventListener('pointerdown', () => { try { window.focus(); } catch (e) {} });
+
+// -- seeded transcript (what --resume reconstructs from session.json) -----
+S.lines = SESSIONS[0].lines.slice();
+S.msgNum = SESSIONS[0].msgs;
+S.history = SESSIONS[0].history.slice();
+S.session = SESSIONS[0].name;
+// no autofocus on purpose: the page may be embedded in review chrome, and
+// grabbing focus on (re)load would yank the caret out of whatever box the
+// reviewer is typing in.
+draw();
+</script>

@@ -3,3 +3,4 @@ model.json
 .agents/
 .claude/
 .pi/
+.rustypi/

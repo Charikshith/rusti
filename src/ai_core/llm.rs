@@ -8,6 +8,7 @@ use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 pub struct Client {
     pub url: String,
@@ -51,6 +52,10 @@ impl Client {
         let mut content = String::new();
         let mut calls: Vec<ToolCallAcc> = Vec::new();
         let mut finish = None;
+        // generation accounting: clock starts at the first token, so prompt
+        // processing (TTFT) doesn't dilute the tokens/sec figure
+        let mut first: Option<Instant> = None;
+        let mut usage: Option<u64> = None;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err("interrupted".into());
@@ -59,7 +64,7 @@ impl Client {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
                     for ev in take_sse_events(&mut buf) {
-                        handle_event(&ev, &mut content, &mut calls, &mut finish)?;
+                        handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage)?;
                     }
                 }
                 Some(Err(e)) => return Err(format!("stream error: {e}")),
@@ -69,8 +74,17 @@ impl Client {
         if !buf.is_empty() {
             // server closed without a trailing blank line
             let ev = String::from_utf8_lossy(&buf).into_owned();
-            handle_event(&ev, &mut content, &mut calls, &mut finish)?;
+            handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage)?;
         }
+
+        // usage when the server volunteers it (many OpenAI-compatible ones
+        // don't, streaming); otherwise the 4-chars-a-token rule of thumb,
+        // flagged as an estimate in the UI
+        emit(Event::Usage {
+            tokens: usage.unwrap_or((content.chars().count() as u64 + 3) / 4),
+            est: usage.is_none(),
+            gen_ms: first.map(|t| t.elapsed().as_millis()).unwrap_or(0),
+        });
 
         let tool_calls: Vec<ToolCall> = calls
             .into_iter()
@@ -112,6 +126,8 @@ fn handle_event(
     content: &mut String,
     calls: &mut Vec<ToolCallAcc>,
     finish: &mut Option<String>,
+    first: &mut Option<Instant>,
+    usage: &mut Option<u64>,
 ) -> Result<(), String> {
     for line in ev.lines() {
         let data = match line.trim_start().strip_prefix("data:") {
@@ -125,12 +141,28 @@ fn handle_event(
         if let Some(err) = v.get("error") {
             return Err(format!("API error: {err}"));
         }
+        if let Some(t) = v.pointer("/usage/completion_tokens").and_then(|x| x.as_u64()) {
+            *usage = Some(t);
+        }
         let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else { continue };
         if let Some(delta) = choice.get("delta") {
             if let Some(c) = delta.get("content").and_then(|x| x.as_str()) {
                 if !c.is_empty() {
+                    first.get_or_insert_with(Instant::now);
                     content.push_str(c);
                     emit(Event::TextDelta(c.to_string()));
+                }
+            }
+            // thinking models (QwQ, DeepSeek R1, GLM) stream their scratchpad
+            // in reasoning_content; it is shown but never fed back as content
+            if let Some(r) = delta
+                .get("reasoning_content")
+                .or_else(|| delta.get("reasoning"))
+                .and_then(|x| x.as_str())
+            {
+                if !r.is_empty() {
+                    first.get_or_insert_with(Instant::now);
+                    emit(Event::ReasoningDelta(r.to_string()));
                 }
             }
             if let Some(tcs) = delta.get("tool_calls").and_then(|x| x.as_array()) {

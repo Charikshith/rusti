@@ -4,6 +4,7 @@
 // add one when none exists. Flags/env override the saved profile.
 //   cargo run --release -- "add a --version flag to src/main.rs"
 //   cargo run --release -- --list | --use NAME | --add
+//   cargo run --release -- --session NAME "task"   (named session file)
 
 mod ai_core;
 mod config;
@@ -57,14 +58,18 @@ fn main() {
     }
 
     let (url, key, model) = resolve_model(&args);
-    let task_arg = args.iter().find(|a| !a.starts_with('-')).cloned();
+    let task_arg = task_arg(&args);
     let tui_mode = args.iter().any(|a| a == "--tui");
 
     // session + task first (so --tree can be cancelled before any model config)
+    // --session NAME → .rustypi/sessions/NAME.json, else the root session.json
+    let session_path = get(&args, "--session", "RUSTYPI_SESSION")
+        .map(|n| session::path_for(&n))
+        .unwrap_or_else(|| session::PATH.to_string());
     let mut session;
     let task: String;
     if args.iter().any(|a| a == "--tree") {
-        session = session::Session::load();
+        session = session::Session::load_from(&session_path);
         if session.is_empty() {
             eprintln!("no session.json to browse (run a task first)");
             std::process::exit(1);
@@ -74,7 +79,7 @@ fn main() {
             None => return,
         }
     } else if args.iter().any(|a| a == "--resume") {
-        session = session::Session::load();
+        session = session::Session::load_from(&session_path);
         if session.is_empty() {
             eprintln!("no session.json to resume (run a task first)");
             std::process::exit(1);
@@ -84,7 +89,7 @@ fn main() {
         // doesn't stall before the TUI even starts
         task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| prompt("next instruction", "")) };
     } else {
-        session = session::Session::new(model.clone());
+        session = session::Session::with_path(model.clone(), &session_path);
         task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
     }
 
@@ -112,6 +117,22 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Flags that consume the next argument — their values are not the task.
+const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use"];
+
+/// The first bare argument that isn't some flag's value.
+fn task_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if VALUE_FLAGS.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with('-') {
+            return Some(a.clone());
+        }
+    }
+    None
 }
 
 fn get(args: &[String], flag: &str, env: &str) -> Option<String> {
@@ -160,4 +181,15 @@ fn resolve_model(args: &[String]) -> (String, String, String) {
     let key = explicit_key.unwrap_or(prof.key);
     let model = explicit_model.unwrap_or(if prof.model.is_empty() { "gpt-4o-mini".into() } else { prof.model });
     (url, key, model)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn task_arg_skips_flag_values() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(super::task_arg(&a(&["--session", "smoke", "do it"])), Some("do it".into()));
+        assert_eq!(super::task_arg(&a(&["--url", "http://x", "--tui"])), None);
+        assert_eq!(super::task_arg(&a(&["do it"])), Some("do it".into()));
+    }
 }

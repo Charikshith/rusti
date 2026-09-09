@@ -10,7 +10,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 
-use super::app::App;
+use super::app::{self, App, CMDS, MENU_ROWS};
 use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
 
 /// Braille spinner frames (~20fps at the 50ms poll rate).
@@ -35,8 +35,9 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let h = rows as usize;
     let inner_w = w.saturating_sub(2); // transcript content width (2-space indent)
 
-    // bottom is pinned: blank spacer, input line, status line
-    let bottom_rows = 3;
+    // bottom is pinned: blank spacer, panel (picker or slash menu), input, status
+    let panel = panel_rows(app, w);
+    let bottom_rows = 3 + panel.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
     let mut all: Vec<String> = Vec::new();
@@ -64,6 +65,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     frame.push(String::new()); // blank spacer
 
+    frame.extend(panel);
+
     // input line with a block cursor
     let avail = w.saturating_sub(3);
     let (pre, suf) = input_window(&app.input, app.cursor, avail);
@@ -71,12 +74,24 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     // status line: spinner + hint left, model right
     let spin = SPINNER[app.spinner % SPINNER.len()];
-    let left_plain = if app.done {
-        "ctrl+d to quit".to_string()
-    } else {
+    let armed = app.armed();
+    let left_plain = if armed {
+        "press ctrl+c again to exit".to_string()
+    } else if !app.done {
         format!("{spin} working…")
+    } else if app.fresh || app.scroll_up > 0 {
+        // onboarding, not status: shown on a fresh prompt, and again when the
+        // transcript is scrolled off the bottom (you're looking for the way out)
+        "ctrl+c twice to quit".to_string()
+    } else {
+        String::new()
     };
-    let model = truncate_str(&app.model, w.saturating_sub(left_plain.chars().count() + 3));
+    let right = if app.session.is_empty() {
+        app.model.clone()
+    } else {
+        format!("{} · {}", app.session, app.model)
+    };
+    let model = truncate_str(&right, w.saturating_sub(left_plain.chars().count() + 3));
     let used = left_plain.chars().count() + 1 + model.chars().count();
     let mut srow = if app.done {
         format!("\x1b[2m{left_plain}\x1b[0m")
@@ -134,6 +149,54 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     Ok(())
 }
 
+/// The row block between transcript and input: the open session picker, or
+/// the slash-command menu, or nothing. Coloured whole-line — cyan for the
+/// selection, dim for the rest — like the tool rows.
+fn panel_rows(app: &App, w: usize) -> Vec<String> {
+    let sel_row = |s: &str, sel: bool| {
+        let s = truncate_str(s, w);
+        if sel { format!("[36m{s}[0m") } else { format!("[2m{s}[0m") }
+    };
+
+    if let Some(p) = &app.pick {
+        let mut out = vec![sel_row(&format!("  {} ({})", p.title, p.rows.len()), false)];
+        for (i, (label, _)) in p.rows.iter().enumerate() {
+            out.push(sel_row(&format!("{}{label}", if i == p.idx { "▸ " } else { "  " }), i == p.idx));
+        }
+        out.push(sel_row("  ↑/↓ select · enter resume · esc cancel", false));
+        return out;
+    }
+
+    let menu = app::menu_items(app);
+    if menu.is_empty() {
+        return Vec::new();
+    }
+    let pad = CMDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let mut out: Vec<String> = menu
+        .iter()
+        .enumerate()
+        .skip(app.menu_top)
+        .take(MENU_ROWS)
+        .map(|(i, c)| {
+            let row = format!(
+                "{}{:pad$}  {}{}",
+                if i == app.menu_idx { "▸ " } else { "  " },
+                c.name,
+                c.desc,
+                if c.soon { "  · soon" } else { "" },
+            );
+            sel_row(&row, i == app.menu_idx)
+        })
+        .collect();
+    if menu.len() > MENU_ROWS {
+        out.push(sel_row(
+            &format!("  ↑/↓ {}/{}  · tab completes · enter runs", app.menu_idx + 1, menu.len()),
+            false,
+        ));
+    }
+    out
+}
+
 /// Write a line and clear to end of line (wipes stale trailing chars).
 fn draw_line(out: &mut impl Write, line: &str) -> io::Result<()> {
     write!(out, "{line}")?;
@@ -166,6 +229,10 @@ fn colorize_row(s: &str) -> String {
         format!("  \x1b[31m✗\x1b[0m {rest}")
     } else if let Some(rest) = s.strip_prefix("  ⚠ ") {
         format!("  \x1b[33m⚠\x1b[0m {rest}")
+    } else if s.starts_with("  │ ") {
+        format!("[2m{s}[0m")
+    } else if s.starts_with("  · ") {
+        format!("[2m{s}[0m")
     } else if let Some(rest) = s.strip_prefix("  ℹ ") {
         format!("  \x1b[34mℹ\x1b[0m {rest}")
     } else {

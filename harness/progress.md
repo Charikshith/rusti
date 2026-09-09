@@ -18,6 +18,45 @@
 - Built pi-style interrupt key model: Esc interrupts (cooperative AtomicBool), Ctrl+C clears input, Ctrl+D exits when empty
 - Compared against pi interactive mode source; remaining gaps recorded in harness/open-work.md
 
+## Session 2026-09-09: HTML prototype parity (feat-013 … feat-018)
+Implemented the 8 gaps between prototype/rustypi-tui.html and the Rust TUI, one at a time:
+1. Tool wall time — `Event::ToolEnd` carries `ms`, measured around dispatch (and around /reload's cargo build); `ai_core::took` formats 450ms / 1.6s
+2. Ctrl+C twice to exit — first press clears input + cancels the turn, second within 2s quits, yellow `press ctrl+c again to exit` while armed, any other key disarms
+3. `/quit` — `handle_command` returns bool; true means Exit::Quit
+4. Per-turn stats — `· N tok · N tps · N.Ns` from `Event::Usage`; server `usage.completion_tokens` when sent, else a `~`-marked chars/4 estimate; tps clock starts at the first token so tool waits don't dilute it
+5. Thinking block — `reasoning_content`/`reasoning` deltas stream into a dim `│ ` block, closed by the answer or a tool call, never fed back as content
+6. Slash menu — lone `/word` opens it above the input: 5 rows, up/down over the whole list, Tab completes, Enter runs, Esc dismisses for that text, counter row on overflow, queued commands shown `· soon`
+7. Status hint policy — `ctrl+c twice to quit` only on a fresh prompt or when scrolled off the bottom, else blank
+8. Named sessions + `/resume` picker — `--session NAME` → `.rustypi/sessions/NAME.json` (root session.json stays the unnamed default), no-arg `/resume` opens an arrow picker, `/resume 2|NAME` skips it, `Event::Resumed` swaps transcript + history
+
+Also fixed (root cause, found by the smoke run): `task_arg` took any bare argument as the task,
+so `--session smoke "..."` ran "smoke" as the task — flag values are now skipped for
+`--url/--key/--model/--session/--use`. Removed the newly-unused `Session::load()`.
+
+Deliberate simplification: the picker renders as a panel above the input in the slash-menu
+style, not the prototype's boxed full-screen overlay (recorded in harness/open-work.md).
+
+Not implemented from the prototype: nothing. Its `/undo /commit /plan /test /export` rows are
+listed as `· soon` and print a pointer to harness/open-work.md, which is what the prototype does.
+
+Verification: `cargo test` 6 passed (new: stats row, slash filter, session info, task_arg),
+`--self-test` OK (fake stream now includes a reasoning delta), live smoke against
+127.0.0.1:8080 with `--session smoke`.
+
+## Session 2026-09-09b: prototype refresh (feat-019, feat-020)
+The prototype gained three things after the parity pass; all three landed:
+- Active session name in the chrome — the status line's right slot is now `<session> · <model>`, fed by `Event::SessionName` (seeded from the session file stem, updated on resume and rename)
+- `/rename <new-name>` — moves the active session to `.rustypi/sessions/<name>.json`; name check is ASCII alnum + `._-` up to 40, refuses a taken or current name, an unsaved session just repoints its path. Extracted as `rename_session()` so the file move is under test
+- `/session list|switch` added to the menu as `· soon` (still queued in open-work)
+
+Also: `/reload`'s relaunch argv now replaces a stale `--session` pair with the live session name, so a mid-session `/rename` survives the hot rebuild.
+
+Note for future tests: `fs::rename` can't cross volumes, so session-path tests must use cwd-relative
+paths (the temp dir is on another drive here) — production paths always are.
+
+Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live runs with
+`--session smoke` and `--session two` against 127.0.0.1:8080.
+
 ## Completed (11/11 features)
 1. ✅ Project Setup & Baseline — cargo build (2.6 MB release), cargo test, --self-test
 2. ✅ Core Agent Loop — run_agent with tool dispatch, max 10 rounds, session persistence

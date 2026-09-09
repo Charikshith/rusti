@@ -27,3 +27,10 @@
 - Architect decision adopted: only annotate non-obvious turn ends; success is the answer itself, failures need ✗ + reason
 - Cancellation via shared AtomicBool + per-chunk checks; plain mode (piped stdin + --tui) never sends a Job::Task — pre-existing hang, left alone (out of scope)
 - Esc→interrupt vs Ctrl+C→clear vs Ctrl+D→exit: pi's exact key model; users habitually hit Ctrl+C to cancel — noted as a follow-up option
+
+### 2026-09-09 — TUI prototype review loop (Lavish)
+- Ran `prototype/rustypi-tui.html` through five rounds of browser annotation; every request (whole-line tool colour, /quit, /resume picker, dim reasoning block, per-tool ms, quit-hint gating, /rename) already existed in `src` — confirmed only after `rtk proxy grep`
+- Correction received: told the user three features were unbuilt on the strength of a filtered grep that returned nothing. Lesson saved as `harness/memory/rtk-filters-command-output.md`
+- Session-start `git status` listed no `src` changes; `git diff --stat HEAD` later showed 14 files / 1015 insertions. Cause unconfirmed — stale snapshot or a concurrent session in the same worktree. Check `git diff --stat HEAD` before trusting the startup snapshot
+- `cargo build --release` fails with `Access is denied` on `target/release/rustypi.exe` while a rustypi is running (Windows exe lock); debug builds and `cargo test` are unaffected
+- `rtk npx … --agent-reply "multi\nline"` dies with `npx: batch file arguments are invalid`; single-line arguments only

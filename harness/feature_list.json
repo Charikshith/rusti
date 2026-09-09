@@ -18,7 +18,9 @@
       "id": "feat-002",
       "name": "Core Agent Loop",
       "description": "System prompt → user task → LLM tool calls → tool execution → feedback loop terminates correctly",
-      "dependencies": ["feat-001"],
+      "dependencies": [
+        "feat-001"
+      ],
       "status": "done",
       "evidence": "run_agent in ai_core/mod.rs, verified by --self-test (fake SSE server)"
     },
@@ -26,7 +28,9 @@
       "id": "feat-003",
       "name": "LLM Streaming & SSE",
       "description": "Streaming responses via reqwest SSE, JSON fragment accumulation for tool-call arguments",
-      "dependencies": ["feat-002"],
+      "dependencies": [
+        "feat-002"
+      ],
       "status": "done",
       "evidence": "chat_stream in ai_core/llm.rs, handles \\n\\n and \\r\\n\\r\\n delimiters, per-index argument accumulation"
     },
@@ -34,7 +38,9 @@
       "id": "feat-004",
       "name": "Tool Implementations",
       "description": "read_file, write_file, edit_file, run_command, ask_user tools work correctly and report errors",
-      "dependencies": ["feat-002"],
+      "dependencies": [
+        "feat-002"
+      ],
       "status": "done",
       "evidence": "ai_core/tools.rs, 5 tools, edit_file enforces unique match, run_command platform-aware"
     },
@@ -42,7 +48,9 @@
       "id": "feat-005",
       "name": "Model Config & CLI",
       "description": "model.json persistence, --list, --use, --add, --url/--key/--model flags, LLM_URL/LLM_KEY/LLM_MODEL env vars",
-      "dependencies": ["feat-001"],
+      "dependencies": [
+        "feat-001"
+      ],
       "status": "done",
       "evidence": "config.rs, interactive add when empty, EOF-safe prompts, profiles with default pointer"
     },
@@ -50,7 +58,10 @@
       "id": "feat-006",
       "name": "TUI Mode",
       "description": "--tui flag launches pi-style main-screen TUI with synchronized output (CSI 2026), differential rendering, live streaming transcript, ask_user input box, Esc quits",
-      "dependencies": ["feat-002", "feat-003"],
+      "dependencies": [
+        "feat-002",
+        "feat-003"
+      ],
       "status": "done",
       "evidence": "src/tui/ module (mod/app/render/plain), main-screen (no alternate screen), diff rendering with RenderState, CSI 2026 for atomic frames, plain stream fallback for piped stdin"
     },
@@ -58,7 +69,9 @@
       "id": "feat-007",
       "name": "Self-Test",
       "description": "--self-test runs offline check with fake server, no network required",
-      "dependencies": ["feat-002"],
+      "dependencies": [
+        "feat-002"
+      ],
       "status": "done",
       "evidence": "ai_core/mod.rs self_test(), fake SSE server with 2 requests, sync tool assertions, session tree checks"
     },
@@ -66,7 +79,9 @@
       "id": "feat-008",
       "name": "Session Persistence & Tree Branching",
       "description": "session.json with tree structure (id/parentId), active leaf, --tree browser (pi-style main-screen + diff rendering), --resume, pi-style branching",
-      "dependencies": ["feat-002"],
+      "dependencies": [
+        "feat-002"
+      ],
       "status": "done",
       "evidence": "session.rs (Entry/Session), tree.rs (main-screen diff renderer + plain list), --tree/--resume in main.rs"
     },
@@ -74,7 +89,10 @@
       "id": "feat-009",
       "name": "Live LLM Integration",
       "description": "Tested against local LLM server (localhost:20128), model profiles with API key, streaming works end-to-end",
-      "dependencies": ["feat-005", "feat-006"],
+      "dependencies": [
+        "feat-005",
+        "feat-006"
+      ],
       "status": "done",
       "evidence": "model.json with mimo-v2.5-pro default, key persisted, streaming verified via curl and rustypi CLI"
     },
@@ -82,7 +100,9 @@
       "id": "feat-010",
       "name": "TUI Experience: semantic status + spinner + editing + scrollback + slash commands",
       "description": "Semantic status symbols/colors (⠋ working, ✓ success, ✗ failure, ⚠ warn, ℹ info, cyan › prompt), animated spinner, cursor editing + history recall, PageUp/PageDown scrollback, /use /resume /tree slash commands, input overflow window, user lines flush-left with dim number + cyan caret",
-      "dependencies": ["feat-006"],
+      "dependencies": [
+        "feat-006"
+      ],
       "status": "done",
       "evidence": "tools.rs returns (bool,String); Event::ToolStart/ToolEnd/TaskEnd; Job enum (Task/Model/Resume/Tree); cursor/history/scroll fields in App; SPINNER frames in render.rs; colorize_row semantic colors; self-test green"
     },
@@ -90,7 +110,9 @@
       "id": "feat-011",
       "name": "Interrupt Key Model (pi-style)",
       "description": "Esc interrupts the running agent (cooperative AtomicBool checked between iterations and per stream chunk), Ctrl+C clears input, Ctrl+D exits when input empty; interrupted turns show '⚠ interrupted'; quit no longer waits for in-flight turn",
-      "dependencies": ["feat-010"],
+      "dependencies": [
+        "feat-010"
+      ],
       "status": "done",
       "evidence": "cancel: Arc<AtomicBool> shared TUI<->agent; run_agent/chat_stream take &AtomicBool; self-test asserts pre-set flag returns Err(\"interrupted\") before any network call"
     },
@@ -98,9 +120,92 @@
       "id": "feat-012",
       "name": "/reload: hot rebuild + relaunch",
       "description": "TUI slash command rebuilds rustypi from its own source (CARGO_MANIFEST_DIR) into target/reload, runs a uniquely-named copy of the binary (never the built file itself, so cargo can always overwrite it despite Windows exe-locking), and relaunches: exec on Unix, wait-as-thin-wrapper on Windows (exiting after spawn would let the shell fight the child for console input). Preserves the session (saved first, then --resume), live model (--url/--key/--model, survives a mid-session /use), and visible transcript (reconstructed from session.json on the new process). Guarded to idle turns only; build failures leave the running session untouched. /model lists saved profiles (active marked) or switches by name.",
-      "dependencies": ["feat-008", "feat-011"],
+      "dependencies": [
+        "feat-008",
+        "feat-011"
+      ],
       "status": "done",
       "evidence": "tui/mod.rs: Job::Reload, stage_reload_exe/build_relaunch_args/render_history (latter two unit tested), Event::Reload handoff, cfg(unix) exec vs cfg(not(unix)) status(); app.rs: Exit::Reload return from ui_loop, /reload gated on app.done, /model + shared switch_model/list_models; fixed pre-existing job_tx/join deadlock on quit and a blocking stdin prompt under --tui --resume as prerequisites; ai_core: resumed session's system entry refreshed from SYSTEM_PROMPT each turn; verified: cargo build into target/reload + staged copy runs --self-test"
+    },
+    {
+      "id": "feat-013",
+      "name": "Tool wall time",
+      "description": "Every finished tool row carries its own wall time (✓ src/main.rs  450ms); Event::ToolEnd gained an ms field, measured around dispatch in run_agent and around the cargo build in /reload",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "ai_core::took unit-checked in --self-test; visible as '✓ echo hi  15ms' in --self-test output"
+    },
+    {
+      "id": "feat-014",
+      "name": "Ctrl+C twice to exit",
+      "description": "First Ctrl+C clears the input and cancels a running turn, a second within 2s quits; status line shows 'press ctrl+c again to exit' in yellow while armed, any other key disarms. /quit added as the explicit equivalent",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "cargo build clean; App::armed drives the status line; /quit returns Exit::Quit from handle_command"
+    },
+    {
+      "id": "feat-015",
+      "name": "Per-turn token/tps/wall stats",
+      "description": "After each turn: '· 142 tok · 38.4 tps · 6.2s', dim. Tokens come from the server's usage.completion_tokens when sent, else a chars/4 estimate marked with '~'; tps is over generation time only (clock starts at the first token) so tool waits don't dilute it",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::turn_stats_row_reports_tps_over_generation_time_only"
+    },
+    {
+      "id": "feat-016",
+      "name": "reasoning_content thinking block",
+      "description": "Thinking models' reasoning_content (or reasoning) deltas stream into a dim '│ ' block that closes when the answer or a tool call starts; never folded into content or sent back to the model. Plain mode writes it to stderr",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "--self-test fake SSE stream includes a reasoning_content delta; final content stays exactly 'done'"
+    },
+    {
+      "id": "feat-017",
+      "name": "Slash-command menu",
+      "description": "Typing a lone '/word' opens the command menu above the input: 5 rows visible, up/down walks the whole filtered list, Tab completes, Enter runs, Esc dismisses for that text, 'n/total' counter row when it overflows. Queued commands (/undo /commit /plan /test /export) are listed with '· soon' and print a pointer to harness/open-work.md when run",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::slash_menu_filters_on_prefix_and_closes_once_args_start"
+    },
+    {
+      "id": "feat-018",
+      "name": "Named sessions + /resume picker",
+      "description": "--session NAME (or RUSTYPI_SESSION) stores a session at .rustypi/sessions/NAME.json, the root session.json staying the unnamed default. /resume with no argument opens an arrow-driven picker (name, entries, relative age, latest user message); /resume 2 or /resume NAME skips it. Resuming replaces the on-screen transcript and recallable history via Event::Resumed",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "session::tests::info_reports_entry_count_and_latest_user_message; tests::task_arg_skips_flag_values; smoke: rustypi --session smoke \"...\" wrote .rustypi/sessions/smoke.json and answered"
+    },
+    {
+      "id": "feat-019",
+      "name": "Active session name in status line",
+      "description": "The status line's right slot reads '<session> · <model>' (prototype shows the name in its title bar); seeded from the session file's stem, updated by Event::SessionName on resume and rename",
+      "dependencies": [
+        "feat-018"
+      ],
+      "status": "done",
+      "evidence": "cargo build clean; name_of() covered by session::tests; visible as 'two · Qwen/...' when launched with --session two"
+    },
+    {
+      "id": "feat-020",
+      "name": "/rename <new-name>",
+      "description": "Renames the active session's file to .rustypi/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints 'ℹ renamed old → new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as '· soon'",
+      "dependencies": [
+        "feat-018"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::rename_moves_the_session_file_and_refuses_bad_or_taken_names; session::tests covers valid_name; tui::tests::relaunch_args_replace_model_and_dedupe_resume asserts the --session pair is replaced"
     }
   ]
 }

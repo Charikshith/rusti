@@ -11,9 +11,13 @@ use std::sync::{mpsc, OnceLock};
 /// Events the agent emits, for a TUI (or any front end) to render.
 pub enum Event {
     TextDelta(String),                         // a chunk of model text (streamed)
+    ReasoningDelta(String),                    // a chunk of reasoning_content (thinking models)
     Text(String),                              // a complete line of text
     ToolStart(String),                         // tool about to run (short summary)
-    ToolEnd { summary: String, ok: bool },     // tool finished
+    ToolEnd { summary: String, ok: bool, ms: u128 }, // tool finished, with wall time
+    Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
+    SessionName(String),                       // active session's name, for the status line
+    Usage { tokens: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting
     Ask { question: String, reply: tokio::sync::oneshot::Sender<String> },
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
     Reload { exe: String, args: Vec<String> },   // TUI /reload: new binary built, ready to relaunch
@@ -38,9 +42,16 @@ fn emit(ev: Event) {
                 print!("{t}");
                 let _ = std::io::stdout().flush();
             }
+            Event::ReasoningDelta(t) => {
+                use std::io::Write;
+                eprint!("{t}");
+                let _ = std::io::stderr().flush();
+            }
             Event::Text(t) => println!("{t}"),
             Event::ToolStart(t) => eprintln!("  ⠋ {t}"),
-            Event::ToolEnd { summary, ok } => eprintln!("  {} {summary}", if ok { "✓" } else { "✗" }),
+            Event::ToolEnd { summary, ok, ms } => {
+                eprintln!("  {} {summary}  {}", if ok { "✓" } else { "✗" }, took(ms))
+            }
             Event::TaskEnd { ok, error } => {
                 if !ok {
                     let line = match error {
@@ -51,6 +62,9 @@ fn emit(ev: Event) {
                 }
             }
             Event::Ask { .. } => {}
+            Event::Resumed { .. } => {} // TUI-only: replaces the on-screen transcript
+            Event::SessionName(_) => {} // TUI-only: status-line label
+            Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end
         },
     }
@@ -109,8 +123,9 @@ pub async fn run_agent(
         for tc in &res.tool_calls {
             let summary = tool_summary(&tc.name, &tc.arguments);
             emit(Event::ToolStart(summary.clone()));
+            let t0 = std::time::Instant::now();
             let (ok, result) = dispatch(&tc.name, &tc.arguments).await;
-            emit(Event::ToolEnd { summary, ok });
+            emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis() });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
             session.add(te, Some(a_id.clone()));
@@ -118,6 +133,11 @@ pub async fn run_agent(
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
     Err("hit max iterations without a final answer".into())
+}
+
+/// Wall time for a finished tool, terminal-short: "450ms" / "1.6s".
+pub fn took(ms: u128) -> String {
+    if ms < 1000 { format!("{ms}ms") } else { format!("{:.1}s", ms as f64 / 1000.0) }
 }
 
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
@@ -218,6 +238,9 @@ pub fn self_test() {
         assert_eq!(run_agent(&client, &mut s3, "x", &cancelled).await.unwrap_err(), "interrupted");
         std::fs::remove_file("_test_session2.json").ok();
     });
+
+    assert_eq!(took(450), "450ms");
+    assert_eq!(took(1600), "1.6s");
 
     // sync tool checks (no runtime needed)
     assert!(tools::run_command("echo hi").1.contains("hi"));
