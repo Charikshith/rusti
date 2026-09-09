@@ -206,6 +206,16 @@
       ],
       "status": "done",
       "evidence": "tui::tests::rename_moves_the_session_file_and_refuses_bad_or_taken_names; session::tests covers valid_name; tui::tests::relaunch_args_replace_model_and_dedupe_resume asserts the --session pair is replaced"
+    },
+    {
+      "id": "feat-021",
+      "name": "Native Search & Edit Tools",
+      "description": "grep (ripgrep when installed, std substring fallback), glob (rg --files or std walk + own matcher), list_dir (depth, skip list), read_file offset/limit with line numbers, multi_edit all-or-nothing, run_command timeout_secs (default 120, kill at deadline)",
+      "dependencies": [
+        "feat-004"
+      ],
+      "status": "done",
+      "evidence": "--self-test asserts glob_match cases, list_dir/glob/grep on the repo, ranged read, multi_edit atomicity, 1s timeout kills ping/sleep; passes with rg on PATH and with PATH=System32 (fallback path)"
     }
   ]
 }

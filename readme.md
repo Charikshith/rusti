@@ -40,7 +40,7 @@ main.rs      CLI
 ├── tree     interactive session tree browser (ANSI TUI / plain list)
 └── ai_core  agent loop, LLM client, tool dispatch, event system
     ├── llm    reqwest SSE streaming client
-    └── tools  read/write/edit file, run command, ask user
+    └── tools  read/write/edit/multi_edit file, grep/glob/list_dir, run command (timeout), ask user
 
 mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 ```
@@ -56,7 +56,7 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui.rs | ~190 | custom ANSI TUI renderer: scrolling transcript, streaming text, ask_user input |
 | ai_core/mod.rs | ~160 | run_agent loop, event system (SINK), tool dispatch, self-test |
 | ai_core/llm.rs | ~80 | reqwest SSE streaming client, tool-call argument accumulation |
-| ai_core/tools.rs | ~85 | 5 tools: read/write/edit file, run command, ask user |
+| ai_core/tools.rs | ~290 | 9 tools: read(offset/limit)/write/edit/multi_edit, grep/glob/list_dir (ripgrep if installed, std fallback), run command (timeout), ask user |
 
 **Total application code: ~1,015 lines**
 

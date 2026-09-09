@@ -4,6 +4,13 @@
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release, cargo test, --self-test, manual cargo build --target-dir dry run)
 
+## Session 2026-09-09: Native search + edit tools (feat-021)
+- Tools grew from 5 to 9: `grep`, `glob`, `list_dir`, `multi_edit`; `read_file` gained `offset`/`limit` (ranged reads are line-numbered, whole reads stay raw); `run_command` gained `timeout_secs` (default 120, polls `try_wait`, kills at deadline)
+- grep/glob shell out to ripgrep when it is on PATH (regex, .gitignore-aware, parallel) and fall back to a std-only walk with a fixed skip list (`.git`, `target`, `node_modules`, …) and a home-grown `*`/`?`/`**` matcher — no new crates, binary size unchanged. Fallback grep is substring-only and says so in its "no matches" line
+- `edit_file` is now a one-entry `multi_edit`; edits apply in memory and write once, so a bad edit N leaves the file untouched
+- Self-test covers both search paths: run once normally, once with `PATH=/c/Windows/System32` to hide rg
+- Removed the three matching open-work items (Command Timeouts, Native Search Tools, Multi-Edit)
+
 ## Session 2026-09-09: /reload (hot rebuild + relaunch)
 - Added TUI `/reload`: rebuilds rustypi from `CARGO_MANIFEST_DIR` (works even when cwd is some other project being coded on) into `target/reload`, then runs a uniquely-named *copy* of the binary — the built file is never the running one, so cargo can always overwrite it (Windows locks a running exe). Relaunch is a true `exec` on Unix; on Windows the old process waits as a thin wrapper (exiting after `spawn` let the shell take its prompt back and fight the child for console input). A first version ping-ponged two build dirs — that breaks on the 3rd reload once parents wait, hence the copy approach
 - Relaunch preserves: session (saved first, `--resume` only if that save succeeded — a turn that failed before its first save otherwise pointed `--resume` at a missing file), the live model/url/key (explicit flags, survives a mid-session `/use` even if model.json disagrees), and the visible transcript (now reconstructed from `session.json` on TUI startup — previously a resumed session showed a blank screen). `--tree` is stripped from the relaunch argv

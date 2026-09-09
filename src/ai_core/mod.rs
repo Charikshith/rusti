@@ -72,6 +72,7 @@ fn emit(ev: Event) {
 
 const SYSTEM_PROMPT: &str = "You are a coding agent running in a terminal on the user's machine. \
 Use the provided tools to inspect code, modify files, and run commands. Work step by step. \
+Prefer grep, glob and list_dir over shell commands for finding code; use read_file with offset/limit for large files. \
 Never invent file contents or command output — use tools to verify. \
 When the task is done, reply with a concise summary of what you changed.";
 
@@ -143,33 +144,66 @@ pub fn took(ms: u128) -> String {
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
 fn tool_summary(name: &str, args: &Value) -> String {
     match name {
-        "read_file" | "write_file" | "edit_file" =>
+        "read_file" | "write_file" | "edit_file" | "list_dir" =>
             args["path"].as_str().unwrap_or("?").to_string(),
+        "multi_edit" => format!("{} ({} edits)", args["path"].as_str().unwrap_or("?"),
+            args["edits"].as_array().map_or(0, |a| a.len())),
         "run_command" => args["command"].as_str().unwrap_or("?").to_string(),
+        "grep" => format!("\"{}\" in {}", args["pattern"].as_str().unwrap_or("?"),
+            args["path"].as_str().filter(|p| !p.is_empty()).unwrap_or(".")),
+        "glob" => args["pattern"].as_str().unwrap_or("?").to_string(),
         _ => format!("{name}({args})"),
     }
 }
 
 fn tool_schemas() -> Vec<Value> {
     vec![
-        json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"write_file","description":"Write content to a file, overwriting it.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}),
-        json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}}),
+        json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120).","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
         json!({"type":"function","function":{"name":"edit_file","description":"Replace one exact text occurrence in a file. old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}}}),
+        json!({"type":"function","function":{"name":"multi_edit","description":"Apply several exact replacements to one file in order, all-or-nothing. Each old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"]}}},"required":["path","edits"]}}}),
+        json!({"type":"function","function":{"name":"grep","description":"Search file contents for a regex. Returns path:line:text. path defaults to '.'; glob (e.g. '*.rs') filters files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"}},"required":["pattern"]}}}),
+        json!({"type":"function","function":{"name":"glob","description":"List files matching a glob pattern such as '*.rs' or 'src/**/*.rs'. path defaults to '.'.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"]}}}),
+        json!({"type":"function","function":{"name":"list_dir","description":"List a directory (directories end with '/'). depth defaults to 1.","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"ask_user","description":"Ask the user a question (clarification, decision, approval) and return their answer.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}}),
     ]
 }
 
 async fn dispatch(name: &str, args: &Value) -> (bool, String) {
     match name {
-        "read_file" => tools::read_file(args["path"].as_str().unwrap_or("")),
+        "read_file" => tools::read_file(
+            args["path"].as_str().unwrap_or(""),
+            args["offset"].as_u64().unwrap_or(0) as usize,
+            args["limit"].as_u64().unwrap_or(0) as usize,
+        ),
         "write_file" => tools::write_file(args["path"].as_str().unwrap_or(""), args["content"].as_str().unwrap_or("")),
-        "run_command" => tools::run_command(args["command"].as_str().unwrap_or("")),
+        "run_command" => tools::run_command(
+            args["command"].as_str().unwrap_or(""),
+            args["timeout_secs"].as_u64().unwrap_or(0),
+        ),
         "edit_file" => tools::edit_file(
             args["path"].as_str().unwrap_or(""),
             args["old_text"].as_str().unwrap_or(""),
             args["new_text"].as_str().unwrap_or(""),
         ),
+        "multi_edit" => {
+            let edits: Vec<(String, String)> = args["edits"]
+                .as_array()
+                .map(|a| a.iter().map(|e| (
+                    e["old_text"].as_str().unwrap_or("").to_string(),
+                    e["new_text"].as_str().unwrap_or("").to_string(),
+                )).collect())
+                .unwrap_or_default();
+            tools::multi_edit(args["path"].as_str().unwrap_or(""), &edits)
+        }
+        "grep" => tools::grep(
+            args["pattern"].as_str().unwrap_or(""),
+            args["path"].as_str().unwrap_or(""),
+            args["glob"].as_str().unwrap_or(""),
+        ),
+        "glob" => tools::glob(args["pattern"].as_str().unwrap_or(""), args["path"].as_str().unwrap_or("")),
+        "list_dir" => tools::list_dir(args["path"].as_str().unwrap_or(""), args["depth"].as_u64().unwrap_or(0) as usize),
         "ask_user" => tools::ask_user(args["question"].as_str().unwrap_or("")).await,
         other => (false, format!("unknown tool: {other}")),
     }
@@ -243,13 +277,37 @@ pub fn self_test() {
     assert_eq!(took(1600), "1.6s");
 
     // sync tool checks (no runtime needed)
-    assert!(tools::run_command("echo hi").1.contains("hi"));
+    assert!(tools::run_command("echo hi", 0).1.contains("hi"));
+    let slow = if cfg!(windows) { "ping -n 6 127.0.0.1" } else { "sleep 5" };
+    let (ok, msg) = tools::run_command(slow, 1);
+    assert!(!ok && msg.contains("timed out"), "{msg}");
     assert!(tools::write_file("_test_tmp.txt", "x").1.contains("wrote"));
-    assert!(tools::read_file("_test_tmp.txt").1.contains("x"));
+    assert!(tools::read_file("_test_tmp.txt", 0, 0).1.contains("x"));
     assert!(tools::edit_file("_test_tmp.txt", "x", "y").1.contains("edited"));
-    assert_eq!(tools::read_file("_test_tmp.txt").1, "y");
+    assert_eq!(tools::read_file("_test_tmp.txt", 0, 0).1, "y");
     assert!(tools::edit_file("_test_tmp.txt", "zzz", "y").1.contains("not found"));
+    // ranged read + multi_edit (all-or-nothing)
+    tools::write_file("_test_tmp.txt", "a\nb\nc\nd\n");
+    assert_eq!(tools::read_file("_test_tmp.txt", 2, 2).1, "2: b\n3: c\n");
+    let bad = [("a".to_string(), "A".to_string()), ("zzz".to_string(), "Z".to_string())];
+    assert!(!tools::multi_edit("_test_tmp.txt", &bad).0);
+    assert_eq!(tools::read_file("_test_tmp.txt", 0, 0).1, "a\nb\nc\nd\n"); // untouched
+    let good = [("a".to_string(), "A".to_string()), ("c".to_string(), "C".to_string())];
+    assert!(tools::multi_edit("_test_tmp.txt", &good).0);
+    assert_eq!(tools::read_file("_test_tmp.txt", 0, 0).1, "A\nb\nC\nd\n");
     std::fs::remove_file("_test_tmp.txt").unwrap();
+    // search tools (rg or std fallback — same assertions hold for both)
+    assert!(tools::glob_match("*.rs", "src/ai_core/mod.rs"));
+    assert!(tools::glob_match("src/**/*.rs", "src/ai_core/mod.rs"));
+    assert!(tools::glob_match("src/*.rs", "src/main.rs"));
+    assert!(!tools::glob_match("src/*.rs", "src/ai_core/mod.rs"));
+    assert!(!tools::glob_match("*.toml", "src/main.rs"));
+    assert!(tools::glob_match("m?in.rs", "main.rs"));
+    assert!(tools::list_dir(".", 0).1.contains("src/"));
+    assert!(tools::list_dir("src", 2).1.contains("ai_core/tools.rs"));
+    assert!(tools::glob("*.toml", ".").1.contains("Cargo.toml"));
+    assert!(tools::grep("fn run_agent", "src", "*.rs").1.contains("mod.rs"));
+    assert!(tools::grep("no_such_token_xyz", "src", "").1.contains("no matches"));
 
     // config roundtrip
     let mut c = crate::config::Config::load_from("_test_model.json");

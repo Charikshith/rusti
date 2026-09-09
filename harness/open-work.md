@@ -7,11 +7,6 @@ When: Long conversations hit token limits
 What: Summarize older messages, keep recent context
 Where: ai_core/mod.rs run_agent loop
 
-### Command Timeouts
-When: run_command hangs (infinite loop, blocked I/O)
-What: Kill process after N seconds (default 30s)
-Where: ai_core/tools.rs run_command
-
 ### TLS Support
 When: User needs https:// LLM endpoint
 What: Enable reqwest `default-tls` or `rustls-tls` feature
@@ -67,11 +62,6 @@ Where: tui/app.rs Enter handler
 
 ## Agent Capability (from 2026-09-09 review) — ★ = start here
 
-### ★ Native Search Tools: list_dir / grep / glob
-When: Model shells out via run_command to find anything — slow, cmd-vs-sh platform-dependent, error-prone
-What: Add `list_dir(path)`, `grep(pattern, path, glob?)`, `glob(pattern)` tools; walk with std::fs, regex crate only if plain substring proves insufficient; cap results like MAX_RESULT
-Where: ai_core/tools.rs + tool_schemas()/dispatch() in ai_core/mod.rs
-
 ### ★ MAX_ITERS Too Low
 When: A real task (read 3 files, edit 2, run tests, fix, rerun) dies with "hit max iterations without a final answer"
 What: Raise default (50+) and make it a flag/env (`--max-iters`); pair with a cost/turn guard rather than a hard small cap
@@ -91,11 +81,6 @@ Where: ai_core/llm.rs chat_stream, ai_core/mod.rs run_agent
 When: Model emits several independent tool calls in one turn; they run one by one
 What: Execute the batch concurrently (tokio::join_all or spawn_blocking for sync tools); preserve result order by tool_call_id
 Where: ai_core/mod.rs run_agent tool loop
-
-### Multi-Edit / Patch Tool
-When: Several replacements in one file cost several round-trips
-What: `edit_file` accepting a list of {old_text,new_text}, all-or-nothing; or a unified-diff `apply_patch` tool
-Where: ai_core/tools.rs edit_file
 
 ### Sub-Agents / Task Delegation
 When: Main context balloons from a self-contained subtask (e.g. "investigate why tests fail")
