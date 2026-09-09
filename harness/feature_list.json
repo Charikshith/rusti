@@ -42,7 +42,7 @@
         "feat-002"
       ],
       "status": "done",
-      "evidence": "ai_core/tools.rs, 5 tools, edit_file enforces unique match, run_command platform-aware"
+      "evidence": "ai_core/tools.rs, the original 5 tools; edit_file enforces a unique match, run_command is platform-aware. Extended by feat-021 (grep/glob/list_dir/multi_edit, ranged reads, timeout) and feat-023 (delete/move, background jobs, todo, delegate, permission gate, root guard) — 17 tools total"
     },
     {
       "id": "feat-005",

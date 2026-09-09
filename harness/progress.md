@@ -2,7 +2,7 @@
 
 ## Current State
 **Phase**: MVP Complete — Agent Live-Tested
-**Last Verified**: 2026-09-09 (cargo build --release, cargo test, --self-test, manual cargo build --target-dir dry run)
+**Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 7 passed, --self-test with and without ripgrep on PATH, ./init.sh)
 
 ## Session 2026-09-09: Safety + workflow tools (feat-023)
 - Permission gate in `run_agent` before `dispatch`: gated tools ask through the existing `Event::Ask` (so the TUI needed no change) with `y / n / a(lways for this tool)`; `decide()` is the pure decision so it is under test. `--yolo` / `RUSTYPI_YOLO=1` skips. Piped stdin -> "no answer given" -> denied, by design
@@ -75,24 +75,39 @@ paths (the temp dir is on another drive here) — production paths always are.
 Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live runs with
 `--session smoke` and `--session two` against 127.0.0.1:8080.
 
-## Completed (11/11 features)
-1. ✅ Project Setup & Baseline — cargo build (2.6 MB release), cargo test, --self-test
-2. ✅ Core Agent Loop — run_agent with tool dispatch, max 10 rounds, session persistence
+## Completed (23/23 features)
+1. ✅ Project Setup & Baseline — cargo build (release), cargo test, --self-test
+2. ✅ Core Agent Loop — run_agent with tool dispatch, session persistence (round cap now 50, see feat-022)
 3. ✅ LLM Streaming & SSE — reqwest SSE with \n\n/\r\n\r\n delimiters, per-index argument accumulation
-4. ✅ Tool Implementations — 5 tools: read/write/edit file, run command, ask user
+4. ✅ Tool Implementations — the original 5: read/write/edit file, run command, ask user (extended by feat-021/023)
 5. ✅ Model Config & CLI — model.json with profiles, --list/--use/--add, env vars, interactive add
 6. ✅ TUI Mode — pi-style main screen, synchronized output (CSI 2026), differential rendering, plain fallback
 7. ✅ Self-Test — fake SSE server, sync tool assertions, session tree checks
 8. ✅ Session Persistence & Tree — tree structure (id/parentId), pi-style branching, --tree (diff renderer) + --resume
 9. ✅ Live LLM Integration — tested against localhost:20128 with cx/gpt-5.4-mini and mimo-v2.5-pro
-10. ✅ TUI Experience — semantic status (⠋/✓/✗/⚠/ℹ, cyan ›), animated spinner, cursor editing + history, scrollback, /use /resume /tree
+10. ✅ TUI Experience — semantic status (⠻/✓/✗/⚠/ℹ, cyan ›), animated spinner, cursor editing + history, scrollback, /use /resume /tree
 11. ✅ Interrupt Key Model — Esc interrupts, Ctrl+C clears input, Ctrl+D exits; quit no longer waits for in-flight turn
+12. ✅ /reload — hot rebuild from CARGO_MANIFEST_DIR + relaunch preserving session, model and transcript
+13. ✅ Tool wall time — Event::ToolEnd carries ms, rendered 450ms / 1.6s
+14. ✅ Ctrl+C twice to exit — first press clears input and cancels the turn, second within 2s quits
+15. ✅ Per-turn stats — tokens / tps / wall from Event::Usage, server usage when sent else a marked estimate
+16. ✅ Thinking block — reasoning_content deltas stream into a dim block, never fed back as content
+17. ✅ Slash-command menu — filter, Tab complete, Enter run, overflow counter
+18. ✅ Named sessions + /resume picker — --session NAME, arrow picker, Event::Resumed swaps transcript
+19. ✅ Active session name in status line — <session> · <model>
+20. ✅ /rename — moves the active session file, refuses taken or invalid names
+21. ✅ Native Search & Edit Tools — grep/glob/list_dir (ripgrep when installed, std fallback), multi_edit, ranged reads, command timeout
+22. ✅ Iteration Cap & Project Instructions — 50 rounds with --max-iters, AGENTS.md appended to the system prompt every turn
+23. ✅ Agent Safety & Workflow Tools — permission gate (--yolo), project-root write guard, delete/move, background jobs, todo, delegate sub-agent
 
 ## Build Status
 - `cargo build --release` — 0 warnings, 0 errors
-- `cargo test` — passes
-- `--self-test` — passes (now also asserts interrupt cancels before any network call)
-- Binary: ~2.8 MB (release)
+- `cargo test` — 7 passed
+- `--self-test` — passes; also covers the search tools on both paths (ripgrep and the std fallback, run with
+  `PATH=/c/Windows/System32` to hide rg), multi_edit atomicity, the command timeout, permission decisions,
+  the project-root guard, move/delete, background job lifecycle, and todo rendering
+- Binary: ~3.0 MB (release), ~3,300 lines of application code
+- 17 tools; ripgrep is used when on PATH and is never required
 - Dependencies: serde, serde_json, tokio (current-thread), reqwest, futures-util, bytes, crossterm, is-terminal
 
 ## Verified
@@ -102,3 +117,8 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Config profiles persist API key in model.json (gitignored)
 - Plain stream fallback works for piped stdin
 - Self-test runs offline (fake SSE server, no network required)
+
+## Not Yet Verified Live
+- The permission prompt end to end in the TUI (the ask path it reuses is exercised, the gate itself is not)
+- `delegate` against a real model
+- Any long task against the raised 50-round cap — context compaction is the likely first wall

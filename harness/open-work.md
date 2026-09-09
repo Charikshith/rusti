@@ -2,8 +2,10 @@
 
 ## Priority — Add When Needed
 
-### Context Compaction
-When: Long conversations hit token limits
+### ★ Context Compaction
+When: Long conversations hit token limits — now the most likely first failure: feat-022 raised the round cap
+from 10 to 50 and feat-021 added output-heavy search tools, so a real task fills the window long before it
+runs out of rounds
 What: Summarize older messages, keep recent context
 Where: ai_core/mod.rs run_agent loop
 
@@ -164,10 +166,6 @@ Where: ai_core/llm.rs handle_event emit, tui/app.rs ToolStart
 - Thinking-block expand/collapse (Ctrl+T) — only if models emit reasoning
 - Session tree browser/fork — /tree text dump works (named sessions landed)
 - Startup help header, changelog, retry/compaction indicators, taskbar progress
-
-## Cleanup (Low Priority)
-- Delete orphan files at root: `config.rs`, `llm.rs`, `tools.rs` (superseded by src/ modules)
-- Remove unused `add_profile()` in config.rs or wire it into --add flow
 
 ### Boxed Full-Screen Pickers
 When: The /resume picker renders as a panel above the input (menu-styled rows),
