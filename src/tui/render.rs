@@ -40,12 +40,19 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let bottom_rows = 3 + panel.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
-    let mut all: Vec<String> = Vec::new();
+    // (style, row). The style is read from the logical line ONCE and carried to
+    // every row it wraps into — a marker only exists on the first row, so styling
+    // each row on its own left the rest of a wrapped block looking like plain text.
+    let mut all: Vec<(u8, String)> = Vec::new();
+    let push_wrapped = |l: &str, all: &mut Vec<(u8, String)>| {
+        let st = line_style(l);
+        all.extend(word_wrap(l, inner_w).into_iter().map(|r| (st, r)));
+    };
     for l in &app.lines {
-        all.extend(word_wrap(l, inner_w));
+        push_wrapped(l, &mut all);
     }
     if !app.current.is_empty() {
-        all.extend(word_wrap(&app.current, inner_w));
+        push_wrapped(&app.current.clone(), &mut all);
     }
     // scroll: 0 = follow bottom; scroll_up = lines pinned above it
     let view = all.len().saturating_sub(transcript_h + app.scroll_up);
@@ -56,7 +63,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     for i in 0..transcript_h {
         let li = view + i;
         let content = if li < all.len() {
-            colorize_row(&truncate_str(&all[li], inner_w))
+            colorize_row(all[li].0, &truncate_str(&all[li].1, inner_w))
         } else {
             String::new()
         };
@@ -212,7 +219,32 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// One transcript row, colored by kind: status symbol colored, text plain.
 /// User lines ("N› text") are flush-left with a dim number + cyan caret;
 /// everything else gets the 2-space indent.
-fn colorize_row(s: &str) -> String {
+/// Reasoning: italic light grey, the whole block. 256-colour 249 (#b2b2b2) rather
+/// than ESC[2m — Windows Terminal renders dim as barely-darker, which is what made
+/// reasoning and answer text look identical.
+const THINK: &str = "\x1b[3;38;5;249m";
+const RESET: &str = "\x1b[0m";
+
+/// Styles that must cover a whole wrapped block, not just the row holding the
+/// marker. b' ' means "decide per row", which is right for the short marker lines.
+fn line_style(l: &str) -> u8 {
+    if l.starts_with("  │ ") {
+        b't' // reasoning_content
+    } else if l.starts_with("  · ") {
+        b's' // turn stats
+    } else {
+        b' '
+    }
+}
+
+fn colorize_row(style: u8, s: &str) -> String {
+    match style {
+        // the │ is an internal sentinel for line_style, never drawn: italic grey
+        // carries the block on its own, the way the reference terminals do it
+        b't' => return format!("  {THINK}{}{RESET}", s.strip_prefix("  │ ").unwrap_or(s)),
+        b's' => return format!("\x1b[2m{s}\x1b[0m"),
+        _ => {}
+    }
     let b = s.as_bytes();
     let mut i = 0;
     while i < b.len() && b[i].is_ascii_digit() {
@@ -229,10 +261,6 @@ fn colorize_row(s: &str) -> String {
         format!("  \x1b[31m✗\x1b[0m {rest}")
     } else if let Some(rest) = s.strip_prefix("  ⚠ ") {
         format!("  \x1b[33m⚠\x1b[0m {rest}")
-    } else if s.starts_with("  │ ") {
-        format!("[2m{s}[0m")
-    } else if s.starts_with("  · ") {
-        format!("[2m{s}[0m")
     } else if let Some(rest) = s.strip_prefix("  ℹ ") {
         format!("  \x1b[34mℹ\x1b[0m {rest}")
     } else {
@@ -266,17 +294,38 @@ mod tests {
     /// must agree, so run a row through the real pipeline, not colorize_row alone.
     #[test]
     fn status_markers_keep_their_colour_through_word_wrap() {
-        let colour = |line: &str| {
-            let rows = word_wrap(line, 80);
-            colorize_row(&truncate_str(&rows[0], 80))
+        // every row of a logical line, the way draw() feeds them
+        let rows = |line: &str| -> Vec<String> {
+            let st = line_style(line);
+            word_wrap(line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80))).collect()
         };
-        assert!(colour("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
-        assert!(colour("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
-        assert!(colour("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
-        assert!(colour("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
-        assert!(colour("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
-        assert!(colour("  │ reasoning").starts_with("\x1b[2m"), "reasoning must be dim");
-        assert!(colour("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
-        assert!(colour("1› hello").contains("\x1b[36m›"), "user caret must be cyan");
+        let first = |line: &str| rows(line).remove(0);
+        assert!(first("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
+        assert!(first("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
+        assert!(first("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
+        assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
+        assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
+        assert!(first("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
+        assert!(first("1› hello").contains("\x1b[36m›"), "user caret must be cyan");
+    }
+
+    /// The regression behind "I can't see any difference": reasoning wraps over
+    /// many rows and only the first carried the marker, so the rest rendered as
+    /// plain text — indistinguishable from the answer that follows.
+    #[test]
+    fn every_row_of_a_wrapped_reasoning_block_is_styled() {
+        let long = "  │ ".to_string() + &"thinking ".repeat(60);
+        let st = line_style(&long);
+        let rows: Vec<String> =
+            word_wrap(&long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40))).collect();
+        assert!(rows.len() > 3, "expected a wrapped block, got {}", rows.len());
+        assert!(rows.iter().all(|r| r.contains(THINK)), "every row must be italic grey: {rows:?}");
+        assert!(!rows.iter().any(|r| r.contains('│')), "the sentinel bar is never drawn");
+        // the answer is the plain one, so the two can never be confused
+        assert!(!colorize_row(line_style("an answer"), "an answer").contains(THINK));
+        // paragraph breaks inside a block survive and stay styled
+        let two = "  │ first thought\n\nsecond thought";
+        let st = line_style(two);
+        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r).contains(THINK)));
     }
 }

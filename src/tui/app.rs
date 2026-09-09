@@ -369,12 +369,15 @@ pub fn ui_loop(
                         app.thinking = true;
                         app.current.push_str("  │ ");
                     }
-                    app.current.push_str(&t.replace('\n', " "));
+                    // keep the model's own paragraph breaks: a thought per block
+                    // reads far better than one run-on wall (word_wrap splits on \n)
+                    app.current.push_str(&t);
                 }
                 ai_core::Event::TextDelta(t) => {
                     if app.thinking {
                         app.flush(); // close the thinking block before the answer
                         app.thinking = false;
+                        app.lines.push(String::new()); // breathing room before the answer
                     }
                     app.current.push_str(&t);
                 }
