@@ -23,6 +23,7 @@ cargo build --release
 ./target/release/rustypi --resume          # continue from active leaf
 
 # flags/env still override the saved profile
+./target/release/rustypi --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTYPI_MAX_ITERS)
 ./target/release/rustypi --self-test       # offline check, fake server
 ```
 
@@ -59,6 +60,12 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | ai_core/tools.rs | ~290 | 9 tools: read(offset/limit)/write/edit/multi_edit, grep/glob/list_dir (ripgrep if installed, std fallback), run command (timeout), ask user |
 
 **Total application code: ~1,015 lines**
+
+## project instructions
+
+If the working directory has an `AGENTS.md` (fallback `RUSTYPI.md`, then `CLAUDE.md`),
+its contents are appended to the system prompt. The file is re-read every turn, so
+edits take effect on the next message without a restart.
 
 ## TUI
 

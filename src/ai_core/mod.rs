@@ -5,7 +5,7 @@ pub mod tools;
 
 use crate::session::{Entry, Session};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 /// Events the agent emits, for a TUI (or any front end) to render.
@@ -76,7 +76,39 @@ Prefer grep, glob and list_dir over shell commands for finding code; use read_fi
 Never invent file contents or command output — use tools to verify. \
 When the task is done, reply with a concise summary of what you changed.";
 
-const MAX_ITERS: usize = 10;
+/// Tool-call rounds per task. 50 fits a real read/edit/test/fix cycle; --max-iters overrides.
+static MAX_ITERS: AtomicUsize = AtomicUsize::new(50);
+
+pub fn set_max_iters(n: usize) {
+    MAX_ITERS.store(n.max(1), Ordering::Relaxed);
+}
+
+/// Project instructions files, first hit wins. Read every turn so edits are live.
+const INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "RUSTYPI.md", "CLAUDE.md"];
+const MAX_INSTRUCTIONS: usize = 20_000;
+
+fn instructions_from(dir: &std::path::Path) -> Option<(String, String)> {
+    INSTRUCTION_FILES.iter().find_map(|name| {
+        let s = std::fs::read_to_string(dir.join(name)).ok()?;
+        let s = s.trim();
+        if s.is_empty() { return None; }
+        let body = if s.len() > MAX_INSTRUCTIONS {
+            let mut cut = MAX_INSTRUCTIONS;
+            while !s.is_char_boundary(cut) { cut -= 1; }
+            format!("{}\n…[truncated]", &s[..cut])
+        } else {
+            s.to_string()
+        };
+        Some((name.to_string(), body))
+    })
+}
+
+fn system_prompt() -> String {
+    match instructions_from(std::path::Path::new(".")) {
+        Some((name, body)) => format!("{SYSTEM_PROMPT}\n\n# Project instructions (from {name} in the working directory)\n{body}"),
+        None => SYSTEM_PROMPT.to_string(),
+    }
+}
 
 pub async fn run_agent(
     client: &llm::Client,
@@ -84,14 +116,15 @@ pub async fn run_agent(
     task: &str,
     cancel: &AtomicBool,
 ) -> Result<String, String> {
+    let sys_prompt = system_prompt();
     if session.entries.is_empty() {
-        session.add(Entry::new("system", SYSTEM_PROMPT.into()), None);
+        session.add(Entry::new("system", sys_prompt), None);
     } else if let Some(sys) = session.entries.first_mut() {
         // a resumed session's system entry was frozen at creation time; keep it
-        // live so editing SYSTEM_PROMPT + rebuilding (see tui /reload) takes
-        // effect on the next turn instead of staying pinned to stale text.
+        // live so editing SYSTEM_PROMPT / AGENTS.md + rebuilding (see tui /reload)
+        // takes effect on the next turn instead of staying pinned to stale text.
         if sys.role == "system" {
-            sys.content = SYSTEM_PROMPT.into();
+            sys.content = sys_prompt;
         }
     }
     if !task.is_empty() {
@@ -100,7 +133,7 @@ pub async fn run_agent(
     }
     let tools = tool_schemas();
 
-    for _ in 0..MAX_ITERS {
+    for _ in 0..MAX_ITERS.load(Ordering::Relaxed) {
         if cancel.load(Ordering::Relaxed) {
             return Err("interrupted".into());
         }
@@ -275,6 +308,26 @@ pub fn self_test() {
 
     assert_eq!(took(450), "450ms");
     assert_eq!(took(1600), "1.6s");
+
+    // max iters: 1 round with a tool call and no final answer -> iteration error
+    set_max_iters(1);
+    assert_eq!(MAX_ITERS.load(Ordering::Relaxed), 1);
+    set_max_iters(0); // floors at 1
+    assert_eq!(MAX_ITERS.load(Ordering::Relaxed), 1);
+    set_max_iters(50);
+
+    // project instructions: AGENTS.md wins over RUSTYPI.md; empty/missing -> none
+    let d = std::path::Path::new("_test_instr");
+    std::fs::create_dir_all(d).unwrap();
+    assert!(instructions_from(d).is_none());
+    std::fs::write(d.join("RUSTYPI.md"), "use tabs").unwrap();
+    assert_eq!(instructions_from(d).unwrap(), ("RUSTYPI.md".to_string(), "use tabs".to_string()));
+    std::fs::write(d.join("AGENTS.md"), "  \n").unwrap(); // blank file is skipped
+    assert_eq!(instructions_from(d).unwrap().0, "RUSTYPI.md");
+    std::fs::write(d.join("AGENTS.md"), "run cargo test").unwrap();
+    assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
+    std::fs::remove_dir_all(d).unwrap();
+    assert!(system_prompt().starts_with(SYSTEM_PROMPT));
 
     // sync tool checks (no runtime needed)
     assert!(tools::run_command("echo hi", 0).1.contains("hi"));

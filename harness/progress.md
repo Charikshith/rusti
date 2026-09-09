@@ -4,6 +4,10 @@
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release, cargo test, --self-test, manual cargo build --target-dir dry run)
 
+## Session 2026-09-09: Iteration cap + project instructions (feat-022)
+- `MAX_ITERS` is now an `AtomicUsize` defaulting to 50 (was a const 10 that killed any real read/edit/test/fix task); `--max-iters N` or `RUSTYPI_MAX_ITERS` overrides, floor 1. Flag is in `VALUE_FLAGS` so its value is never mistaken for the task
+- `system_prompt()` appends the working directory's `AGENTS.md` (fallback `RUSTYPI.md`, `CLAUDE.md`; blank files skipped, 20k cap). Read every turn — the system entry already refreshed each turn, so instruction edits are live mid-session
+
 ## Session 2026-09-09: Native search + edit tools (feat-021)
 - Tools grew from 5 to 9: `grep`, `glob`, `list_dir`, `multi_edit`; `read_file` gained `offset`/`limit` (ranged reads are line-numbered, whole reads stay raw); `run_command` gained `timeout_secs` (default 120, polls `try_wait`, kills at deadline)
 - grep/glob shell out to ripgrep when it is on PATH (regex, .gitignore-aware, parallel) and fall back to a std-only walk with a fixed skip list (`.git`, `target`, `node_modules`, …) and a home-grown `*`/`?`/`**` matcher — no new crates, binary size unchanged. Fallback grep is substring-only and says so in its "no matches" line

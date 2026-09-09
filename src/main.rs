@@ -57,6 +57,12 @@ fn main() {
         return;
     }
 
+    if let Some(n) = get(&args, "--max-iters", "RUSTYPI_MAX_ITERS") {
+        match n.parse::<usize>() {
+            Ok(n) if n > 0 => ai_core::set_max_iters(n),
+            _ => { eprintln!("--max-iters needs a positive integer, got '{n}'"); std::process::exit(1); }
+        }
+    }
     let (url, key, model) = resolve_model(&args);
     let task_arg = task_arg(&args);
     let tui_mode = args.iter().any(|a| a == "--tui");
@@ -120,7 +126,7 @@ fn main() {
 }
 
 /// Flags that consume the next argument — their values are not the task.
-const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use"];
+const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use", "--max-iters"];
 
 /// The first bare argument that isn't some flag's value.
 fn task_arg(args: &[String]) -> Option<String> {

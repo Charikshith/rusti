@@ -216,6 +216,16 @@
       ],
       "status": "done",
       "evidence": "--self-test asserts glob_match cases, list_dir/glob/grep on the repo, ranged read, multi_edit atomicity, 1s timeout kills ping/sleep; passes with rg on PATH and with PATH=System32 (fallback path)"
+    },
+    {
+      "id": "feat-022",
+      "name": "Iteration Cap & Project Instructions",
+      "description": "MAX_ITERS 10 -> 50, overridable with --max-iters N / RUSTYPI_MAX_ITERS; system prompt appends AGENTS.md (fallback RUSTYPI.md, CLAUDE.md) from cwd, re-read every turn so edits are live, capped at 20k chars",
+      "dependencies": [
+        "feat-002"
+      ],
+      "status": "done",
+      "evidence": "--self-test: set_max_iters floor, instructions_from precedence (AGENTS.md > RUSTYPI.md, blank file skipped), system_prompt starts with SYSTEM_PROMPT"
     }
   ]
 }

@@ -62,16 +62,6 @@ Where: tui/app.rs Enter handler
 
 ## Agent Capability (from 2026-09-09 review) — ★ = start here
 
-### ★ MAX_ITERS Too Low
-When: A real task (read 3 files, edit 2, run tests, fix, rerun) dies with "hit max iterations without a final answer"
-What: Raise default (50+) and make it a flag/env (`--max-iters`); pair with a cost/turn guard rather than a hard small cap
-Where: ai_core/mod.rs MAX_ITERS, main.rs flags
-
-### ★ Project Instructions File
-When: Agent doesn't know the project's conventions (build cmd, style, don't-touch dirs) and has to rediscover them each session
-What: Read `AGENTS.md` (fallback `RUSTYPI.md`/`CLAUDE.md`) from cwd, append to the system prompt; entries[0] already refreshes every turn so edits are live
-Where: ai_core/mod.rs SYSTEM_PROMPT → fn system_prompt()
-
 ### Retry with Backoff
 When: Transient errors (connection reset, 429, 5xx) fail the whole turn
 What: Retry chat_stream up to N times with exponential backoff; surface `⚠ retrying…` in the TUI; never retry after partial content was streamed
