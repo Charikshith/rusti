@@ -7,6 +7,8 @@
     --bg: #0d1117;
     --fg: #d7d7d7;
     --dim: #6b7280;      /* ESC[2m */
+    --ans: #eceff3;      /* assistant answer - the brightest text on screen */
+    --bar: #333e4e;      /* reasoning gutter (a literal │ per row in the terminal) */
     --cyan: #4dd0e1;     /* 36 - prompt caret, "> " */
     --yellow: #e5c07b;   /* 33 - spinner, warn */
     --green: #7ec699;    /* 32 - tool ok */
@@ -47,6 +49,15 @@
   #transcript::-webkit-scrollbar-thumb { background: #263040; border-radius: 4px; }
   .row { white-space: pre-wrap; word-break: break-word; min-height: calc(var(--fs) * var(--lh)); }
   .ind { padding-left: 2ch; }              /* transcript body indent (colorize_row) */
+  /* three voices, so a wrapped line never reads as the wrong one.
+     you = cyan caret + bright · reasoning = dim italic behind a gutter bar
+     · answer = brightest text, marked ⏺. every voice keeps its marker on
+     EVERY wrapped row (in the terminal that means re-emitting the gutter
+     per row; here the border and the hanging indent do the same job). */
+  .usr   { padding-left: 2ch; text-indent: -2ch; }
+  .think { margin-left: 2ch; padding-left: 1.1ch; border-left: 1px solid var(--bar);
+           color: var(--dim); font-style: italic; }
+  .ans   { padding-left: 4ch; text-indent: -2ch; color: var(--ans); }
   .spacer { min-height: calc(var(--fs) * var(--lh)); }
   #inputline { white-space: pre-wrap; word-break: break-all; }
   #menu .row { white-space: pre; overflow: hidden; }
@@ -83,7 +94,8 @@
 
 <div id="legend">
   <b>prototype</b> &mdash; mock agent, no LLM, no files touched. Click the page once, then just type.<br>
-  <b>tasks</b> &mdash; type anything &middot; every turn opens with a dim <code>│</code> thinking block &middot; include the word <code>ask</code> for an ask_user turn &middot; <code>fail</code> for a failing tool<br>
+  <b>three voices</b> &mdash; <b>you</b> are a cyan <code>›</code> after the message number &middot; <b>reasoning</b> is dim italic behind a gutter bar &middot; <b>the answer</b> is the brightest text, marked <code>⏺</code>. every voice keeps its marker down each wrapped row, so no line can be read as the wrong voice.<br>
+  <b>tasks</b> &mdash; type anything &middot; every turn opens with a reasoning block &middot; include the word <code>ask</code> for an ask_user turn &middot; <code>fail</code> for a failing tool<br>
   <b>slash</b> &mdash; press <code>/</code> for the command menu (5 rows, up/down for the rest, Tab completes, Enter runs, Esc dismisses)<br>
   <b>quit</b> &mdash; <code>/quit</code> or Ctrl+C twice to close<br>
   <b>timing</b> &mdash; each finished tool line carries its own wall time &middot; the turn total is the <code>· tok · tps · s</code> line<br>
@@ -128,18 +140,18 @@ const MENU_ROWS = 5;      // visible at once; arrows scroll the rest
 const SESSIONS = [
   { name: 'main', entries: 5, leaf: 'm5', when: '2m ago', head: 'add a --version flag to src/main.rs',
     msgs: 2, history: ['hi', 'add a --version flag to src/main.rs'],
-    lines: ['1\u203a hi', 'Hello! What would you like to work on?', '',
+    lines: ['1\u203a hi', '\u23fa Hello! What would you like to work on?', '',
             '2\u203a add a --version flag to src/main.rs',
-            'Added --version to src/main.rs \u2014 prints the crate version and exits.', ''] },
+            '\u23fa Added --version to src/main.rs \u2014 prints the crate version and exits.', ''] },
   { name: 'tui-colors', entries: 18, leaf: 'm18', when: '3h ago', head: 'whole-line colour for tool rows',
     msgs: 1, history: ['colour the whole tool row, not just the glyph'],
     lines: ['1\u203a colour the whole tool row, not just the glyph',
             '  \u2713 edited src/tui/render.rs: colorize_row takes the marker colour for the whole line',
-            'Done \u2014 \u2713 rows read green, \u2717 red, \u280b yellow while the tool runs.', ''] },
+            '\u23fa Done \u2014 \u2713 rows read green, \u2717 red, \u280b yellow while the tool runs.', ''] },
   { name: 'tree-browser', entries: 11, leaf: 'm11', when: 'yesterday', head: 'session tree browser screen',
     msgs: 1, history: ['add a --tree browser screen'],
     lines: ['1\u203a add a --tree browser screen', '  \u2713 src/tree.rs',
-            'Added src/tree.rs \u2014 arrows select, Enter branches from the chosen entry.', ''] },
+            '\u23fa Added src/tree.rs \u2014 arrows select, Enter branches from the chosen entry.', ''] },
 ];
 
 const S = {
@@ -162,14 +174,16 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // -- render ----------------------------------------------------------------
-// \u2502 is the reasoning_content block (dim); the rest are status markers
-const MARK = { '\u280b': 'yellow', '\u2713': 'green', '\u2717': 'red', '\u26a0': 'yellow', '\u2139': 'blue', '\u2502': 'dim' };
+const MARK = { '\u280b': 'yellow', '\u2713': 'green', '\u2717': 'red', '\u26a0': 'yellow', '\u2139': 'blue' };
 
 function rowHTML(s) {
   if (s.startsWith('  \u00b7 ')) return '<div class="row ind dim">' + esc(s.slice(2)) + '</div>';  // turn stats
+  // reasoning_content: the gutter is styling here, a literal \u2502 per row in the terminal
+  if (s.startsWith('  \u2502 ')) return '<div class="row think">' + esc(s.slice(4)) + '</div>';
+  if (s.startsWith('\u23fa ')) return '<div class="row ans">\u23fa ' + esc(s.slice(2)) + '</div>'; // the answer
   const u = s.match(/^(\d+)\u203a (.*)$/);                   // user line: dim n + cyan caret
-  if (u) return '<div class="row"><span class="dim">' + u[1] + '</span><span class="cyan">\u203a</span> ' + esc(u[2]) + '</div>';
-  const m = s.match(/^  ([\u280b\u2713\u2717\u26a0\u2139\u2502]) (.*)$/);   // status marker line
+  if (u) return '<div class="row usr"><span class="dim">' + u[1] + '</span><span class="cyan">\u203a</span> ' + esc(u[2]) + '</div>';
+  const m = s.match(/^  ([\u280b\u2713\u2717\u26a0\u2139]) (.*)$/);   // status marker line
   if (m) return '<div class="row ind ' + MARK[m[1]] + '">' + m[1] + ' ' + esc(m[2]) + '</div>';
   return '<div class="row ind">' + esc(s) + '</div>';
 }
@@ -247,7 +261,11 @@ function drawStatus() {
 setInterval(() => { S.spinner++; if (!S.done) drawStatus(); }, 80);
 
 // -- transcript helpers (the Event::* arms in app.rs) ----------------------
-const flush = () => { if (S.current) { S.lines.push(S.current); S.current = ''; } };
+// a bare marker means the turn was cut before any text arrived — drop it
+const flush = () => {
+  const c = S.current; S.current = '';
+  if (c && c !== '⏺ ' && c !== '  │ ') S.lines.push(c);
+};
 const push = l => { flush(); S.lines.push(l); draw(); };
 
 // real source: wall time around the tool dispatch in ai_core/mod.rs run_agent
@@ -332,9 +350,11 @@ async function runTask(task) {
   for (const st of scriptFor(task)) {
     if (S.cancel) break;
     if (st.think) {
-      S.current = '  \u2502 ';                    // reasoning_content, rendered dim
+      S.current = '  \u2502 ';                    // reasoning_content, rendered dim italic
       await stream(st.think);
+      push('');                                    // breathing room before the answer
     } else if (st.stream) {
+      S.current = '\u23fa ';                      // the answer: brightest voice, own marker
       await stream(st.stream);
     } else if (st.tool) {
       push('  \u280b ' + st.tool);
@@ -365,7 +385,7 @@ async function runReload() {
   push('  \u2139 relaunching with --resume');
   await sleep(700);
   // the new process rebuilds the transcript from session.json: tool lines don't survive
-  S.lines = S.lines.filter(l => !/^  [\u280b\u2713\u2717\u26a0\u2139] /.test(String(l)));
+  S.lines = S.lines.filter(l => !/^  [\u280b\u2713\u2717\u26a0\u2139\u2502] /.test(String(l)));
   S.done = true;
   draw();
 }
