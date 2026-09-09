@@ -59,7 +59,7 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui.rs | ~190 | custom ANSI TUI renderer: scrolling transcript, streaming text, ask_user input |
 | ai_core/mod.rs | ~160 | run_agent loop, event system (SINK), tool dispatch, self-test |
 | ai_core/llm.rs | ~80 | reqwest SSE streaming client, tool-call argument accumulation |
-| ai_core/tools.rs | ~470 | 17 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user; project-root guard |
+| ai_core/tools.rs | ~470 | 16 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user; project-root guard |
 
 **Total application code: ~1,015 lines**
 

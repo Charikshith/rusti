@@ -120,7 +120,7 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
   `PATH=/c/Windows/System32` to hide rg), multi_edit atomicity, the command timeout, permission decisions,
   the project-root guard, move/delete, background job lifecycle, and todo rendering
 - Binary: ~3.0 MB (release), ~3,300 lines of application code
-- 17 tools; ripgrep is used when on PATH and is never required
+- 16 tools; ripgrep is used when on PATH and is never required
 - Dependencies: serde, serde_json, tokio (current-thread), reqwest, futures-util, bytes, crossterm, is-terminal
 
 ## Verified
