@@ -9,6 +9,7 @@
     --dim: #6b7280;      /* ESC[2m */
     --ans: #eceff3;      /* assistant answer - the brightest text on screen */
     --bar: #333e4e;      /* reasoning gutter (a literal │ per row in the terminal) */
+    --think: #b3b3b3;    /* reasoning text - light grey, italic, still under the answer */
     --cyan: #4dd0e1;     /* 36 - prompt caret, "> " */
     --yellow: #e5c07b;   /* 33 - spinner, warn */
     --green: #7ec699;    /* 32 - tool ok */
@@ -56,7 +57,7 @@
      per row; here the border and the hanging indent do the same job). */
   .usr   { padding-left: 2ch; text-indent: -2ch; }
   .think { margin-left: 2ch; padding-left: 1.1ch; border-left: 1px solid var(--bar);
-           color: var(--dim); font-style: italic; }
+           color: var(--think); font-style: italic; }
   .ans   { padding-left: 4ch; text-indent: -2ch; color: var(--ans); }
   .spacer { min-height: calc(var(--fs) * var(--lh)); }
   #inputline { white-space: pre-wrap; word-break: break-all; }
