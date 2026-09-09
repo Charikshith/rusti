@@ -226,6 +226,16 @@
       ],
       "status": "done",
       "evidence": "--self-test: set_max_iters floor, instructions_from precedence (AGENTS.md > RUSTYPI.md, blank file skipped), system_prompt starts with SYSTEM_PROMPT"
+    },
+    {
+      "id": "feat-023",
+      "name": "Agent Safety & Workflow Tools",
+      "description": "Permission gate on write/edit/multi_edit/run_command/run_background/delete/move via Event::Ask (y / n / a=always for that tool), --yolo or RUSTYPI_YOLO=1 skips; project-root guard on all write paths (canonicalized deepest-existing ancestor, refuses ../ and absolute-outside); delete_file, move_file; run_background + job_output + job_stop (taskkill /T on Windows); todo list tool rendered to the transcript; delegate(task) runs a one-level sub-agent in its own .rustypi/sessions/sub-*.json and returns only its report",
+      "dependencies": [
+        "feat-021"
+      ],
+      "status": "done",
+      "evidence": "--self-test: decide() y/yes/a/always/deny, guard() inside vs ../ vs temp dir, write refused outside root, move/delete roundtrip, background job running->stopped and echo job exited 0 with output, todo render; 0 warnings; cargo test 7 passed"
     }
   ]
 }

@@ -57,6 +57,9 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTYPI_YOLO").map_or(false, |v| v == "1") {
+        ai_core::tools::YOLO.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Some(n) = get(&args, "--max-iters", "RUSTYPI_MAX_ITERS") {
         match n.parse::<usize>() {
             Ok(n) if n > 0 => ai_core::set_max_iters(n),

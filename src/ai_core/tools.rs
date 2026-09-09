@@ -2,7 +2,8 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const MAX_RESULT: usize = 20_000; // cap tool output so the conversation stays small
@@ -34,6 +35,9 @@ pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
 }
 
 pub fn write_file(path: &str, content: &str) -> (bool, String) {
+    if let Err(e) = guard(path) {
+        return (false, e);
+    }
     match std::fs::write(path, content) {
         Ok(()) => (true, format!("wrote {} bytes to {path}", content.len())),
         Err(e) => (false, format!("error writing {path}: {e}")),
@@ -43,16 +47,7 @@ pub fn write_file(path: &str, content: &str) -> (bool, String) {
 /// timeout_secs = 0 -> CMD_TIMEOUT_SECS. The process is killed at the deadline.
 pub fn run_command(cmd: &str, timeout_secs: u64) -> (bool, String) {
     use std::io::Read;
-    let mut c = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", cmd]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", cmd]);
-        c
-    };
-    let mut child = match c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match shell(cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return (false, format!("failed to run command: {e}")),
     };
@@ -92,6 +87,9 @@ pub fn edit_file(path: &str, old_text: &str, new_text: &str) -> (bool, String) {
 pub fn multi_edit(path: &str, edits: &[(String, String)]) -> (bool, String) {
     if edits.is_empty() {
         return (false, "edit failed: no edits given".into());
+    }
+    if let Err(e) = guard(path) {
+        return (false, e);
     }
     let mut content = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -261,6 +259,183 @@ fn seg_match(pat: &str, s: &str) -> bool {
     m(&p, &s)
 }
 
+/// --yolo: no permission prompts and no project-root guard.
+pub static YOLO: AtomicBool = AtomicBool::new(false);
+
+/// Refuse writes outside the working directory (the project root). Resolves the
+/// deepest existing ancestor so new files and `..` tricks are judged on the real path.
+pub fn guard(path: &str) -> Result<(), String> {
+    if YOLO.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    static ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        std::env::current_dir().and_then(|d| d.canonicalize()).unwrap_or_default()
+    });
+    let mut existing = std::path::PathBuf::from(if path.is_empty() { "." } else { path });
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        match (existing.file_name().map(|n| n.to_owned()), existing.parent().map(|p| p.to_path_buf())) {
+            (Some(n), Some(p)) => {
+                rest.push(n);
+                existing = if p.as_os_str().is_empty() { ".".into() } else { p };
+            }
+            _ => break,
+        }
+    }
+    let mut full = existing.canonicalize().map_err(|e| format!("cannot resolve {path}: {e}"))?;
+    for r in rest.iter().rev() {
+        full.push(r);
+    }
+    if full.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!("refused: {path} is outside the project root {} (run with --yolo to allow)", root.display()))
+    }
+}
+
+pub fn delete_file(path: &str) -> (bool, String) {
+    if let Err(e) = guard(path) {
+        return (false, e);
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => (true, format!("deleted {path}")),
+        Err(e) => (false, format!("error deleting {path}: {e}")),
+    }
+}
+
+pub fn move_file(from: &str, to: &str) -> (bool, String) {
+    if let Err(e) = guard(from).and_then(|_| guard(to)) {
+        return (false, e);
+    }
+    if Path::new(to).exists() {
+        return (false, format!("move failed: {to} already exists"));
+    }
+    match std::fs::rename(from, to) {
+        Ok(()) => (true, format!("moved {from} -> {to}")),
+        Err(e) => (false, format!("error moving {from} -> {to}: {e}")),
+    }
+}
+
+// ---- background jobs -------------------------------------------------------
+// ponytail: jobs outlive the agent process if not stopped; the system prompt tells
+// the model to job_stop what it started. A Windows job object would auto-kill them.
+
+struct Job {
+    cmd: String,
+    child: std::process::Child,
+    out: Arc<Mutex<Vec<u8>>>,
+}
+
+static JOBS: Mutex<Vec<(u32, Job)>> = Mutex::new(Vec::new());
+static NEXT_JOB: AtomicUsize = AtomicUsize::new(1);
+const JOB_BUF: usize = 1 << 20; // keep the last 1 MB of output
+
+fn shell(cmd: &str) -> Command {
+    if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", cmd]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", cmd]);
+        c
+    }
+}
+
+fn pump(mut r: impl std::io::Read + Send + 'static, buf: Arc<Mutex<Vec<u8>>>) {
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = r.read(&mut chunk) {
+            if n == 0 { break; }
+            let mut b = buf.lock().unwrap();
+            b.extend_from_slice(&chunk[..n]);
+            if b.len() > JOB_BUF {
+                let cut = b.len() - JOB_BUF;
+                b.drain(..cut);
+            }
+        }
+    });
+}
+
+/// Start a long-running command (server, watcher); returns a job id for job_output/job_stop.
+pub fn run_background(cmd: &str) -> (bool, String) {
+    let mut child = match shell(cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+        Ok(c) => c,
+        Err(e) => return (false, format!("failed to start: {e}")),
+    };
+    let out = Arc::new(Mutex::new(Vec::new()));
+    pump(child.stdout.take().unwrap(), out.clone());
+    pump(child.stderr.take().unwrap(), out.clone());
+    let id = NEXT_JOB.fetch_add(1, Ordering::Relaxed) as u32;
+    JOBS.lock().unwrap().push((id, Job { cmd: cmd.to_string(), child, out }));
+    (true, format!("job {id} started: {cmd}"))
+}
+
+/// Output so far plus status. id 0 lists all jobs.
+pub fn job_output(id: u32) -> (bool, String) {
+    let mut jobs = JOBS.lock().unwrap();
+    if id == 0 {
+        if jobs.is_empty() {
+            return (true, "no background jobs".into());
+        }
+        let s: String = jobs.iter_mut().map(|(i, j)| format!("job {i} [{}]: {}\n", status(&mut j.child), j.cmd)).collect();
+        return (true, s);
+    }
+    match jobs.iter_mut().find(|(i, _)| *i == id) {
+        Some((_, j)) => {
+            let st = status(&mut j.child);
+            let out = String::from_utf8_lossy(&j.out.lock().unwrap()).into_owned();
+            let tail = if out.len() > MAX_RESULT { format!("…\n{}", &out[out.len() - MAX_RESULT..]) } else { out };
+            (true, format!("[job {id} {st}]\n{tail}"))
+        }
+        None => (false, format!("no such job: {id}")),
+    }
+}
+
+pub fn job_stop(id: u32) -> (bool, String) {
+    let mut jobs = JOBS.lock().unwrap();
+    let Some(pos) = jobs.iter().position(|(i, _)| *i == id) else {
+        return (false, format!("no such job: {id}"));
+    };
+    let (_, mut j) = jobs.remove(pos);
+    let was = status(&mut j.child);
+    if cfg!(windows) {
+        // cmd /C wraps the real process; taskkill /T takes the whole tree down
+        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &j.child.id().to_string()])
+            .stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    let _ = j.child.kill();
+    let _ = j.child.wait();
+    (true, format!("job {id} stopped (was {was})"))
+}
+
+fn status(child: &mut std::process::Child) -> String {
+    match child.try_wait() {
+        Ok(Some(st)) => format!("exited {}", st.code().unwrap_or(-1)),
+        Ok(None) => "running".into(),
+        Err(e) => format!("unknown: {e}"),
+    }
+}
+
+// ---- todo list ----------------------------------------------------------------
+
+static TODOS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// Replace the whole list; returns it rendered. status: pending | in_progress | done.
+pub fn todo(items: Vec<(String, String)>) -> (bool, String) {
+    let mut t = TODOS.lock().unwrap();
+    *t = items;
+    if t.is_empty() {
+        return (true, "todo list cleared".into());
+    }
+    let s: String = t.iter().map(|(text, st)| {
+        let mark = match st.as_str() { "done" => "☑", "in_progress" => "◐", _ => "☐" };
+        format!("{mark} {text}\n")
+    }).collect();
+    (true, s)
+}
+
 pub async fn ask_user(question: &str) -> (bool, String) {
     use std::io::Write;
     // Front-end mode: send the question to the TUI and wait for its answer.
@@ -285,7 +460,7 @@ pub async fn ask_user(question: &str) -> (bool, String) {
     }
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         s.to_string()
     } else {

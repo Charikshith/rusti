@@ -73,6 +73,9 @@ fn emit(ev: Event) {
 const SYSTEM_PROMPT: &str = "You are a coding agent running in a terminal on the user's machine. \
 Use the provided tools to inspect code, modify files, and run commands. Work step by step. \
 Prefer grep, glob and list_dir over shell commands for finding code; use read_file with offset/limit for large files. \
+Use todo to plan and track multi-step tasks. Writes and commands may need the user's approval; a denial is final \
+for that call: explain or ask_user, do not retry it. Use run_background for servers and watchers, and job_stop \
+what you started before finishing. Use delegate for a self-contained subtask whose details you do not need. \
 Never invent file contents or command output — use tools to verify. \
 When the task is done, reply with a concise summary of what you changed.";
 
@@ -107,6 +110,49 @@ fn system_prompt() -> String {
     match instructions_from(std::path::Path::new(".")) {
         Some((name, body)) => format!("{SYSTEM_PROMPT}\n\n# Project instructions (from {name} in the working directory)\n{body}"),
         None => SYSTEM_PROMPT.to_string(),
+    }
+}
+
+/// Tools that change state or run code; each call asks the user unless --yolo or "always" was given.
+const GATED: &[&str] = &["write_file", "edit_file", "multi_edit", "run_command", "run_background", "delete_file", "move_file"];
+static ALLOWED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+async fn permitted(name: &str, summary: &str) -> Result<(), String> {
+    if tools::YOLO.load(Ordering::Relaxed) || !GATED.contains(&name) || ALLOWED.lock().unwrap().iter().any(|a| a == name) {
+        return Ok(());
+    }
+    let (_, ans) = tools::ask_user(&format!("allow {name} {summary}? [y]es / [n]o / [a]lways for {name}")).await;
+    if decide(name, &ans) { Ok(()) } else { Err(format!("user denied {name}: {}", ans.trim())) }
+}
+
+/// y/yes -> once, a/always -> this tool for the rest of the process, anything else -> deny.
+fn decide(name: &str, answer: &str) -> bool {
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "a" | "always" => { ALLOWED.lock().unwrap().push(name.to_string()); true }
+        "y" | "yes" => true,
+        _ => false,
+    }
+}
+
+/// One level of delegation: a fresh session under .rustypi/sessions/, same tools, same cap.
+static DEPTH: AtomicUsize = AtomicUsize::new(0);
+
+async fn delegate(client: &llm::Client, task: &str, cancel: &AtomicBool) -> (bool, String) {
+    if DEPTH.fetch_add(1, Ordering::Relaxed) > 0 {
+        DEPTH.fetch_sub(1, Ordering::Relaxed);
+        return (false, "nested delegation is not allowed; do this part directly".into());
+    }
+    let path = format!("{}/sub-{}-{}.json", crate::session::DIR, std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
+    let mut sub = Session::with_path(client.model.clone(), &path);
+    let prompt = format!("You are a sub-agent given one scoped task by the main agent. Complete it, then reply with a \
+concise report: what you found or changed, exact file paths, and anything the main agent must know.\n\nTask: {task}");
+    // ponytail: the sub-agent streams into the same transcript as its parent; a nested block would need TUI work
+    let r = Box::pin(run_agent(client, &mut sub, &prompt, cancel)).await;
+    DEPTH.fetch_sub(1, Ordering::Relaxed);
+    match r {
+        Ok(t) => (true, tools::truncate(&format!("[sub-agent session: {path}]\n{t}"), tools::MAX_RESULT)),
+        Err(e) => (false, format!("sub-agent failed: {e}")),
     }
 }
 
@@ -158,7 +204,10 @@ pub async fn run_agent(
             let summary = tool_summary(&tc.name, &tc.arguments);
             emit(Event::ToolStart(summary.clone()));
             let t0 = std::time::Instant::now();
-            let (ok, result) = dispatch(&tc.name, &tc.arguments).await;
+            let (ok, result) = match permitted(&tc.name, &summary).await {
+                Ok(()) => dispatch(client, &tc.name, &tc.arguments, cancel).await,
+                Err(e) => (false, e),
+            };
             emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis() });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
@@ -185,6 +234,12 @@ fn tool_summary(name: &str, args: &Value) -> String {
         "grep" => format!("\"{}\" in {}", args["pattern"].as_str().unwrap_or("?"),
             args["path"].as_str().filter(|p| !p.is_empty()).unwrap_or(".")),
         "glob" => args["pattern"].as_str().unwrap_or("?").to_string(),
+        "run_background" => format!("(background) {}", args["command"].as_str().unwrap_or("?")),
+        "job_output" | "job_stop" => format!("job {}", args["id"].as_u64().unwrap_or(0)),
+        "delete_file" => args["path"].as_str().unwrap_or("?").to_string(),
+        "move_file" => format!("{} -> {}", args["from"].as_str().unwrap_or("?"), args["to"].as_str().unwrap_or("?")),
+        "todo" => format!("todo ({} items)", args["items"].as_array().map_or(0, |a| a.len())),
+        "delegate" => format!("delegate: {}", args["task"].as_str().unwrap_or("?").chars().take(80).collect::<String>()),
         _ => format!("{name}({args})"),
     }
 }
@@ -198,12 +253,19 @@ fn tool_schemas() -> Vec<Value> {
         json!({"type":"function","function":{"name":"multi_edit","description":"Apply several exact replacements to one file in order, all-or-nothing. Each old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"]}}},"required":["path","edits"]}}}),
         json!({"type":"function","function":{"name":"grep","description":"Search file contents for a regex. Returns path:line:text. path defaults to '.'; glob (e.g. '*.rs') filters files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"}},"required":["pattern"]}}}),
         json!({"type":"function","function":{"name":"glob","description":"List files matching a glob pattern such as '*.rs' or 'src/**/*.rs'. path defaults to '.'.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"]}}}),
+        json!({"type":"function","function":{"name":"delete_file","description":"Delete a file inside the project.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"move_file","description":"Move or rename a file inside the project. Fails if the destination exists.","parameters":{"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]}}}),
+        json!({"type":"function","function":{"name":"run_background","description":"Start a long-running command (dev server, watcher) without waiting. Returns a job id; read it with job_output, kill it with job_stop.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}}),
+        json!({"type":"function","function":{"name":"job_output","description":"Output so far and status of a background job. id 0 lists all jobs.","parameters":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}}}),
+        json!({"type":"function","function":{"name":"job_stop","description":"Kill a background job.","parameters":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}}}),
+        json!({"type":"function","function":{"name":"todo","description":"Replace your task list; shown to the user. Call again with updated statuses as you progress. Empty list clears it.","parameters":{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","done"]}},"required":["text","status"]}}},"required":["items"]}}}),
+        json!({"type":"function","function":{"name":"delegate","description":"Hand a self-contained subtask to a fresh sub-agent with the same tools; returns only its final report, keeping its work out of your context. Not nestable.","parameters":{"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}}}),
         json!({"type":"function","function":{"name":"list_dir","description":"List a directory (directories end with '/'). depth defaults to 1.","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"ask_user","description":"Ask the user a question (clarification, decision, approval) and return their answer.","parameters":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"]}}}),
     ]
 }
 
-async fn dispatch(name: &str, args: &Value) -> (bool, String) {
+async fn dispatch(client: &llm::Client, name: &str, args: &Value, cancel: &AtomicBool) -> (bool, String) {
     match name {
         "read_file" => tools::read_file(
             args["path"].as_str().unwrap_or(""),
@@ -236,6 +298,25 @@ async fn dispatch(name: &str, args: &Value) -> (bool, String) {
             args["glob"].as_str().unwrap_or(""),
         ),
         "glob" => tools::glob(args["pattern"].as_str().unwrap_or(""), args["path"].as_str().unwrap_or("")),
+        "delete_file" => tools::delete_file(args["path"].as_str().unwrap_or("")),
+        "move_file" => tools::move_file(args["from"].as_str().unwrap_or(""), args["to"].as_str().unwrap_or("")),
+        "run_background" => tools::run_background(args["command"].as_str().unwrap_or("")),
+        "job_output" => tools::job_output(args["id"].as_u64().unwrap_or(0) as u32),
+        "job_stop" => tools::job_stop(args["id"].as_u64().unwrap_or(0) as u32),
+        "todo" => {
+            let items: Vec<(String, String)> = args["items"].as_array()
+                .map(|a| a.iter().map(|e| (
+                    e["text"].as_str().unwrap_or("").to_string(),
+                    e["status"].as_str().unwrap_or("pending").to_string(),
+                )).collect())
+                .unwrap_or_default();
+            let r = tools::todo(items);
+            for line in r.1.lines() {
+                emit(Event::Text(format!("  {line}")));
+            }
+            r
+        }
+        "delegate" => delegate(client, args["task"].as_str().unwrap_or(""), cancel).await,
         "list_dir" => tools::list_dir(args["path"].as_str().unwrap_or(""), args["depth"].as_u64().unwrap_or(0) as usize),
         "ask_user" => tools::ask_user(args["question"].as_str().unwrap_or("")).await,
         other => (false, format!("unknown tool: {other}")),
@@ -276,6 +357,7 @@ pub fn self_test() {
         }
     });
 
+    tools::YOLO.store(true, Ordering::Relaxed); // the fake stream calls run_command; no stdin to answer a prompt
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     rt.block_on(async {
         let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
@@ -328,6 +410,54 @@ pub fn self_test() {
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();
     assert!(system_prompt().starts_with(SYSTEM_PROMPT));
+
+    // permission decisions
+    assert!(decide("write_file", "y") && decide("write_file", " Yes "));
+    assert!(!decide("write_file", "n") && !decide("write_file", "") && !decide("write_file", "no answer given"));
+    assert!(decide("run_command", "a"));
+    assert!(ALLOWED.lock().unwrap().iter().any(|a| a == "run_command"));
+
+    // project-root guard (yolo off for this block)
+    tools::YOLO.store(false, Ordering::Relaxed);
+    assert!(tools::guard("src/main.rs").is_ok());
+    assert!(tools::guard("_new_dir/_new_file.txt").is_ok()); // not yet existing, still inside
+    assert!(tools::guard("../_outside.txt").is_err());
+    assert!(tools::write_file("../_outside.txt", "x").1.contains("refused"));
+    assert!(tools::guard(&std::env::temp_dir().join("x").to_string_lossy()).is_err());
+    tools::YOLO.store(true, Ordering::Relaxed);
+
+    // delete / move
+    tools::write_file("_test_mv.txt", "m");
+    assert!(tools::move_file("_test_mv.txt", "_test_mv2.txt").0);
+    assert!(!tools::move_file("_test_mv2.txt", "Cargo.toml").0); // destination exists
+    assert_eq!(tools::read_file("_test_mv2.txt", 0, 0).1, "m");
+    assert!(tools::delete_file("_test_mv2.txt").0);
+    assert!(!tools::delete_file("_test_mv2.txt").0);
+
+    // background jobs
+    let slow = if cfg!(windows) { "ping -n 6 127.0.0.1" } else { "sleep 5" };
+    let (ok, msg) = tools::run_background(slow);
+    assert!(ok, "{msg}");
+    let id: u32 = msg.split_whitespace().nth(1).unwrap().parse().unwrap();
+    assert!(tools::job_output(id).1.contains("running"));
+    assert!(tools::job_output(0).1.contains(&format!("job {id}")));
+    assert!(tools::job_stop(id).1.contains("stopped"));
+    assert!(!tools::job_output(id).0);
+    let (_, msg) = tools::run_background("echo bg-hi");
+    let id: u32 = msg.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let mut out = String::new();
+    for _ in 0..100 {
+        out = tools::job_output(id).1;
+        if out.contains("exited") { break; }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(out.contains("exited 0") && out.contains("bg-hi"), "{out}");
+    tools::job_stop(id);
+
+    // todo render
+    let items = vec![("read".to_string(), "done".to_string()), ("edit".to_string(), "in_progress".to_string()), ("test".to_string(), "pending".to_string())];
+    assert_eq!(tools::todo(items).1, "\u{2611} read\n\u{25d0} edit\n\u{2610} test\n");
+    assert_eq!(tools::todo(vec![]).1, "todo list cleared");
 
     // sync tool checks (no runtime needed)
     assert!(tools::run_command("echo hi", 0).1.contains("hi"));

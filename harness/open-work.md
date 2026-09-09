@@ -72,27 +72,17 @@ When: Model emits several independent tool calls in one turn; they run one by on
 What: Execute the batch concurrently (tokio::join_all or spawn_blocking for sync tools); preserve result order by tool_call_id
 Where: ai_core/mod.rs run_agent tool loop
 
-### Sub-Agents / Task Delegation
-When: Main context balloons from a self-contained subtask (e.g. "investigate why tests fail")
-What: `delegate(task)` tool that runs a fresh run_agent with its own Session, returns only the final summary
-Where: ai_core/mod.rs (new tool + dispatch)
+## Safety
 
-## Safety (currently none)
-
-### ★ Permission Prompt for run_command / write_file
-When: Model can run any command or overwrite any file with zero confirmation
-What: allow / deny / always-allow-this-session prompt routed through Event::Ask; `--yolo` flag skips; deny returns a tool error the model can react to
-Where: ai_core/mod.rs dispatch(), tui/app.rs Ask handler, main.rs flag
+### Read-Side Sandbox
+When: Model reads/lists/greps paths outside the project (../, absolute, ~) — writes are already guarded
+What: Extend `tools::guard` to read_file/list_dir/grep/glob behind an `--allow-outside` flag; today reads are deliberately open so the model can look at dependency sources
+Where: ai_core/tools.rs guard()
 
 ### Diff Before Edit + Undo
 When: An edit lands wrong and there's no way to see or revert it
 What: Show the unified diff of edit_file/write_file in the tool line (ties into Tool Output Visibility); keep the previous content to support `/undo` of the last file change
 Where: ai_core/tools.rs (capture before-image), tui/render.rs, tui/app.rs command
-
-### Working-Directory Sandbox
-When: Model reads/writes paths outside the project (../, absolute, ~)
-What: Canonicalize paths and refuse anything outside cwd unless `--allow-outside`; applies to read/write/edit/list/grep
-Where: ai_core/tools.rs (shared path guard)
 
 ## Developer Workflow
 

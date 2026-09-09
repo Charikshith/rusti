@@ -24,6 +24,7 @@ cargo build --release
 
 # flags/env still override the saved profile
 ./target/release/rustypi --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTYPI_MAX_ITERS)
+./target/release/rustypi --yolo "task"            # no permission prompts, no project-root guard (env RUSTYPI_YOLO=1)
 ./target/release/rustypi --self-test       # offline check, fake server
 ```
 
@@ -41,7 +42,8 @@ main.rs      CLI
 ├── tree     interactive session tree browser (ANSI TUI / plain list)
 └── ai_core  agent loop, LLM client, tool dispatch, event system
     ├── llm    reqwest SSE streaming client
-    └── tools  read/write/edit/multi_edit file, grep/glob/list_dir, run command (timeout), ask user
+    └── tools  read/write/edit/multi_edit/delete/move file, grep/glob/list_dir, run command (timeout),
+    │          background jobs, todo, delegate (sub-agent), ask user; permission gate + project-root guard
 
 mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 ```
@@ -57,9 +59,36 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui.rs | ~190 | custom ANSI TUI renderer: scrolling transcript, streaming text, ask_user input |
 | ai_core/mod.rs | ~160 | run_agent loop, event system (SINK), tool dispatch, self-test |
 | ai_core/llm.rs | ~80 | reqwest SSE streaming client, tool-call argument accumulation |
-| ai_core/tools.rs | ~290 | 9 tools: read(offset/limit)/write/edit/multi_edit, grep/glob/list_dir (ripgrep if installed, std fallback), run command (timeout), ask user |
+| ai_core/tools.rs | ~470 | 17 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user; project-root guard |
 
 **Total application code: ~1,015 lines**
+
+## safety
+
+Every tool that changes state (`write_file`, `edit_file`, `multi_edit`, `delete_file`,
+`move_file`, `run_command`, `run_background`) asks before running:
+
+```
+ℹ allow run_command cargo test? [y]es / [n]o / [a]lways for run_command
+```
+
+`a` allows that tool for the rest of the process. A denial is returned to the model
+as a tool error so it can explain or ask instead of retrying. With piped stdin there
+is nobody to answer, so everything is denied — pass `--yolo` for scripted runs.
+
+Writes are also refused outside the working directory (`../x`, absolute paths
+elsewhere), even for files that do not exist yet. Reads are deliberately open so the
+model can inspect dependency sources. `--yolo` lifts both the prompts and the guard.
+
+## sub-agents and background jobs
+
+`delegate(task)` runs a fresh agent with the same tools in its own session file
+(`.rustypi/sessions/sub-<pid>-<ts>.json`) and returns only its final report, keeping
+the subtask's reads and edits out of the main context. One level deep; the sub-agent
+streams into the same transcript. `run_background` starts a server or watcher and
+returns a job id; `job_output` reads what it has printed so far, `job_stop` kills the
+whole process tree. Jobs outlive the agent if not stopped. `todo` lets the model keep
+a visible checklist for multi-step work.
 
 ## project instructions
 

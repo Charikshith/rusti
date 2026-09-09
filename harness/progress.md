@@ -4,6 +4,13 @@
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release, cargo test, --self-test, manual cargo build --target-dir dry run)
 
+## Session 2026-09-09: Safety + workflow tools (feat-023)
+- Permission gate in `run_agent` before `dispatch`: gated tools ask through the existing `Event::Ask` (so the TUI needed no change) with `y / n / a(lways for this tool)`; `decide()` is the pure decision so it is under test. `--yolo` / `RUSTYPI_YOLO=1` skips. Piped stdin -> "no answer given" -> denied, by design
+- `tools::guard()` refuses writes outside the canonicalized cwd; it canonicalizes the deepest *existing* ancestor and re-appends the rest so not-yet-created files and `../` are judged on the real path. Applied to write/multi_edit/delete/move only; reads stay open (recorded as Read-Side Sandbox in open-work)
+- New tools: `delete_file`, `move_file` (refuses to clobber), `run_background` / `job_output` / `job_stop` (shared 1 MB ring buffer fed by pump threads; `job_output(0)` lists; stop uses `taskkill /T /F` on Windows because `cmd /C` wraps the real process), `todo` (whole-list replace, rendered `☑ ◐ ☐` and emitted as `Event::Text` lines), `delegate` (one level, `Box::pin(run_agent)` on a fresh `Session` under `.rustypi/sessions/sub-*.json`, `DEPTH` guard refuses nesting)
+- `dispatch` now takes `client` and `cancel` for delegate; `edit_file`/`run_command` share `shell()`; `truncate` is `pub`
+- Self-test flips `YOLO` on for the fake-server run (a prompt with no stdin would deny the scripted `run_command`) and off again around the guard checks
+
 ## Session 2026-09-09: Iteration cap + project instructions (feat-022)
 - `MAX_ITERS` is now an `AtomicUsize` defaulting to 50 (was a const 10 that killed any real read/edit/test/fix task); `--max-iters N` or `RUSTYPI_MAX_ITERS` overrides, floor 1. Flag is in `VALUE_FLAGS` so its value is never mistaken for the task
 - `system_prompt()` appends the working directory's `AGENTS.md` (fallback `RUSTYPI.md`, `CLAUDE.md`; blank files skipped, 20k cap). Read every turn — the system entry already refreshed each turn, so instruction edits are live mid-session
