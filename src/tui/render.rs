@@ -251,8 +251,9 @@ fn colorize_row(style: u8, s: &str) -> String {
         i += 1;
     }
     if i > 0 && s[i..].starts_with("› ") {
-        let (num, rest) = s.split_at(i);
-        format!("\x1b[2m{num}\x1b[0m\x1b[36m›\x1b[0m{}", &rest[4..])
+        // the user's own query: plain white, flush left, no accent colours.
+        // (the old form also ate the space after ›, printing "1›hello")
+        s.to_string()
     } else if let Some(rest) = s.strip_prefix("  ⠋ ") {
         format!("  \x1b[33m⠋\x1b[0m {rest}")
     } else if let Some(rest) = s.strip_prefix("  ✓ ") {
@@ -306,7 +307,10 @@ mod tests {
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
         assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
         assert!(first("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
-        assert!(first("1› hello").contains("\x1b[36m›"), "user caret must be cyan");
+        // the user's query stays plain white — no escapes at all — and keeps
+        // the space after the caret that the old branch swallowed
+        assert_eq!(first("1› hello"), "1› hello");
+        assert_eq!(first("12› hi there"), "12› hi there");
     }
 
     /// The regression behind "I can't see any difference": reasoning wraps over
