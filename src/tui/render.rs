@@ -46,7 +46,27 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let mut all: Vec<(u8, String)> = Vec::new();
     let push_wrapped = |l: &str, all: &mut Vec<(u8, String)>| {
         let st = line_style(l);
-        all.extend(word_wrap(l, inner_w).into_iter().map(|r| (st, r)));
+        if st != b'm' {
+            all.extend(word_wrap(l, inner_w).into_iter().map(|r| (st, r)));
+            return;
+        }
+        // model prose: markdown, one source line at a time so ``` fences keep
+        // their state and code never gets reflowed
+        let mut fence = false;
+        for src in l.split('\n') {
+            if src.trim_start().starts_with("```") {
+                fence = !fence;
+                continue; // the fence itself is not drawn; the body is coloured
+            }
+            if fence {
+                all.push((b'm', format!("  {FENCED}{}{RESET}", truncate_str(src, inner_w))));
+                continue;
+            }
+            let (cs, runs) = md_line(src);
+            for (x, y) in wrap_ranges(&cs, inner_w) {
+                all.push((b'm', md_row(&cs, &runs, x, y)));
+            }
+        }
     };
     for l in &app.lines {
         push_wrapped(l, &mut all);
@@ -63,7 +83,10 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     for i in 0..transcript_h {
         let li = view + i;
         let content = if li < all.len() {
-            colorize_row(all[li].0, &truncate_str(&all[li].1, inner_w))
+            let (st, row) = &all[li];
+            // markdown rows are already wrapped and styled; truncating would cut
+            // an escape sequence in half
+            if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w)) }
         } else {
             String::new()
         };
@@ -225,15 +248,27 @@ fn truncate_str(s: &str, max: usize) -> String {
 const THINK: &str = "\x1b[3;38;5;249m";
 const RESET: &str = "\x1b[0m";
 
+/// Rows that carry a status marker; these keep the per-row glyph colouring.
+const MARKERS: &[&str] = &["  ⠋ ", "  ✓ ", "  ✗ ", "  ⚠ ", "  ℹ "];
+
+/// A user query: leading digits then the caret.
+fn is_user_line(l: &str) -> bool {
+    let n = l.bytes().take_while(u8::is_ascii_digit).count();
+    n > 0 && l[n..].starts_with("› ")
+}
+
 /// Styles that must cover a whole wrapped block, not just the row holding the
-/// marker. b' ' means "decide per row", which is right for the short marker lines.
+/// marker. b'k' keeps the old per-row glyph colouring; b'm' is prose from the
+/// model, which gets the markdown pass.
 fn line_style(l: &str) -> u8 {
     if l.starts_with("  │ ") {
         b't' // reasoning_content
     } else if l.starts_with("  · ") {
         b's' // turn stats
+    } else if MARKERS.iter().any(|p| l.starts_with(p)) || is_user_line(l) {
+        b'k'
     } else {
-        b' '
+        b'm'
     }
 }
 
@@ -267,6 +302,115 @@ fn colorize_row(style: u8, s: &str) -> String {
     } else {
         format!("  {s}")
     }
+}
+
+// ── markdown for model prose ────────────────────────────────────────────────
+// Deliberately small: headings, **bold**, `code`, - bullets, ``` fences. No
+// parser crate. Markers become style runs over the *visible* text, so wrapping
+// measures real columns instead of counting asterisks it is about to delete.
+
+const BOLD: &str = "\x1b[1m";
+const CODE: &str = "\x1b[36m"; // inline `code`
+const FENCED: &str = "\x1b[38;5;180m"; // fenced code block body
+
+/// One source line as visible chars plus the style runs over them (char ranges).
+fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
+    let mut runs: Vec<(usize, usize, &'static str)> = Vec::new();
+    let trimmed = src.trim_start();
+    let lead = &src[..src.len() - trimmed.len()];
+    let mut out: Vec<char> = lead.chars().collect();
+
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    let heading = (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ');
+    let body: &str = if heading {
+        &trimmed[hashes + 1..]
+    } else if let Some(r) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+        out.extend(['•', ' ']);
+        r
+    } else {
+        trimmed
+    };
+    let body_start = out.len();
+
+    let cs: Vec<char> = body.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        // **bold**
+        if cs[i] == '*' && cs.get(i + 1) == Some(&'*') {
+            if let Some(end) =
+                (i + 2..cs.len().saturating_sub(1)).find(|&j| cs[j] == '*' && cs[j + 1] == '*')
+            {
+                let s = out.len();
+                out.extend_from_slice(&cs[i + 2..end]);
+                runs.push((s, out.len(), BOLD));
+                i = end + 2;
+                continue;
+            }
+        }
+        // `code`
+        if cs[i] == '`' {
+            if let Some(end) = (i + 1..cs.len()).find(|&j| cs[j] == '`') {
+                let s = out.len();
+                out.extend_from_slice(&cs[i + 1..end]);
+                runs.push((s, out.len(), CODE));
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(cs[i]);
+        i += 1;
+    }
+    if heading {
+        runs.push((body_start, out.len(), BOLD));
+    }
+    (out, runs)
+}
+
+/// Greedy word wrap over chars, returning each row's range. Ranges (not strings)
+/// keep the style runs addressable after wrapping.
+fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize)> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let mut start = 0;
+    while start < cs.len() {
+        if cs.len() - start <= width {
+            rows.push((start, cs.len()));
+            break;
+        }
+        let hard = start + width;
+        let brk = (start..hard).rev().find(|&j| cs[j] == ' ').unwrap_or(start);
+        let end = if brk == start { hard } else { brk };
+        rows.push((start, end));
+        start = end;
+        while start < cs.len() && cs[start] == ' ' {
+            start += 1;
+        }
+    }
+    if rows.is_empty() {
+        rows.push((0, 0)); // a blank source line is still a blank row
+    }
+    rows
+}
+
+/// Render chars [a,b) with whatever runs cover them. Styles are recomputed per
+/// char so a `code` span nested inside a bold heading restores the bold after it.
+fn md_row(cs: &[char], runs: &[(usize, usize, &'static str)], a: usize, b: usize) -> String {
+    let mut s = String::from("  ");
+    let mut cur = String::new();
+    for i in a..b {
+        let want: String =
+            runs.iter().filter(|(x, y, _)| i >= *x && i < *y).map(|(_, _, c)| *c).collect();
+        if want != cur {
+            s.push_str(RESET);
+            s.push_str(&want);
+            cur = want;
+        }
+        s.push(cs[i]);
+    }
+    if !cur.is_empty() {
+        s.push_str(RESET);
+    }
+    s
 }
 
 /// Input window around the cursor for a row that overflows: returns the
@@ -311,6 +455,47 @@ mod tests {
         // the space after the caret that the old branch swallowed
         assert_eq!(first("1› hello"), "1› hello");
         assert_eq!(first("12› hi there"), "12› hi there");
+    }
+
+    /// Markdown markers must be gone from the visible text, replaced by styling.
+    #[test]
+    fn markdown_markers_become_styling_not_literal_characters() {
+        let plain = |src: &str| md_line(src).0.iter().collect::<String>();
+        assert_eq!(plain("### **File & Text Manipulation**"), "File & Text Manipulation");
+        assert_eq!(plain("- `read_file`: Read a file's contents."), "• read_file: Read a file's contents.");
+        assert_eq!(plain("* bullet"), "• bullet");
+        assert_eq!(plain("plain sentence"), "plain sentence");
+        // an unmatched marker is literal text, not a swallowed rest-of-line
+        assert_eq!(plain("2 * 3 and a lone ` tick"), "2 * 3 and a lone ` tick");
+        assert_eq!(plain("#nothashheading"), "#nothashheading");
+
+        // the runs actually land on the right characters
+        let (cs, runs) = md_line("- `grep`: Search **fast**.");
+        let at = |i: usize| runs.iter().find(|(x, y, _)| i >= *x && i < *y).map(|(_, _, c)| *c);
+        let s: String = cs.iter().collect();
+        assert_eq!(at(s.find("grep").unwrap()), Some(CODE));
+        assert_eq!(at(s.find("fast").unwrap()), Some(BOLD));
+        assert_eq!(at(s.find("Search").unwrap()), None);
+
+        // a heading keeps bold across an inline code span nested inside it
+        let (cs, runs) = md_line("## use `grep` now");
+        let row = md_row(&cs, &runs, 0, cs.len());
+        assert!(row.contains(CODE) && row.matches(BOLD).count() >= 2, "{row:?}");
+    }
+
+    #[test]
+    fn markdown_wrapping_measures_visible_text_not_markers() {
+        // width is charged against the text the user sees, not the markers
+        let (cs, _) = md_line("**aaaa** bbbb cccc dddd");
+        let rows = wrap_ranges(&cs, 10);
+        assert!(rows.iter().all(|(x, y)| y - x <= 10), "{rows:?}");
+        assert_eq!(rows.iter().map(|(x, y)| cs[*x..*y].iter().collect::<String>()).collect::<Vec<_>>(),
+                   vec!["aaaa bbbb", "cccc dddd"]);
+        // a word longer than the width is hard-cut rather than dropped
+        let long: Vec<char> = "supercalifragilistic".chars().collect();
+        assert_eq!(wrap_ranges(&long, 5).len(), 4);
+        // blank source line still produces one row
+        assert_eq!(wrap_ranges(&[], 10), vec![(0, 0)]);
     }
 
     /// The regression behind "I can't see any difference": reasoning wraps over

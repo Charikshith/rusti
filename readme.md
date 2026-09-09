@@ -96,6 +96,14 @@ If the working directory has an `AGENTS.md` (fallback `RUSTYPI.md`, then `CLAUDE
 its contents are appended to the system prompt. The file is re-read every turn, so
 edits take effect on the next message without a restart.
 
+## markdown
+
+Model prose is rendered, not printed raw: ATX headings and `**bold**` come out bold,
+```inline code``` in cyan, `-`/`*` bullets as bullet glyphs, and fenced blocks in their own
+colour with the fence lines hidden. No parser crate — markers become style runs over
+the visible text, so wrapping still measures real columns. Fenced bodies are truncated
+rather than reflowed.
+
 ## TUI
 
 rustypi uses its own custom terminal renderer built with direct ANSI

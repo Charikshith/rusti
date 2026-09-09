@@ -21,11 +21,6 @@ Where: tui/mod.rs word_wrap()
 
 ## TUI Experience Gaps (from pi comparison, 2026-04-10 session)
 
-### Markdown Rendering in Assistant Messages
-When: Code answers become walls of unformatted text (pi renders bold/code/lists)
-What: Render markdown in assistant text: code blocks, bold, lists, inline images
-Where: tui/render.rs colorize_row / new renderer pass
-
 ### Tool Output Visibility
 When: User sees `✓ cargo test` but not WHY it failed
 What: Show expandable tool stdout/stderr in tool lines (Ctrl+O expands all); result already stored in session entries, this is a rendering change only

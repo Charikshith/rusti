@@ -4,6 +4,24 @@
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 7 passed, --self-test with and without ripgrep on PATH, ./init.sh)
 
+## Session 2026-09-09: Markdown rendering in model prose (feat-024)
+- Reported as "why is the text not getting rendered correctly" — it was: the model answers in markdown and
+  the TUI printed it verbatim, so `###`, `**` and backticks all showed as literal characters
+- `line_style` grew two more kinds: `b'k'` for rows that keep the per-row glyph colouring (tool markers and
+  user queries) and `b'm'` for model prose, which takes the markdown pass. Reasoning and stats unchanged
+- The ordering problem: stripping markers changes a line's length, so styling before wrapping makes the wrap
+  count asterisks it is about to delete, and styling after wrapping breaks spans at row boundaries. Solution
+  is `md_line` returning *visible chars + style runs as char ranges*, `wrap_ranges` wrapping those chars into
+  ranges, and `md_row` emitting a range with the runs that cover it. Wrapping therefore measures real columns
+- `md_row` recomputes the active style per char, so `code` nested inside a bold heading restores the bold
+  rather than resetting to plain
+- Fenced blocks: the ``` lines are not drawn, the body is coloured and truncated rather than reflowed —
+  reflowing code is worse than clipping it. Markdown rows skip `truncate_str` in `draw`, since they are
+  already wrapped and cutting them would slice an escape sequence in half
+- Also fixed here: the user-query branch built "1›hello", skipping the caret *and* the space after it, and
+  it now renders plain white with no accent colours
+- Corrected my own docs: 16 tools, not 17 (counted the schemas)
+
 ## Session 2026-09-09: Fix — status markers rendered without colour
 - Reported as "the ✓ isn't green". Root cause was not in `colorize_row` but in `word_wrap`: it splits on
   `' '`, and a leading indent yields empty tokens that hit the `line.is_empty()` arm and get dropped. Every

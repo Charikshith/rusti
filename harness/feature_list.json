@@ -236,6 +236,16 @@
       ],
       "status": "done",
       "evidence": "--self-test: decide() y/yes/a/always/deny, guard() inside vs ../ vs temp dir, write refused outside root, move/delete roundtrip, background job running->stopped and echo job exited 0 with output, todo render; 0 warnings; cargo test 7 passed"
+    },
+    {
+      "id": "feat-024",
+      "name": "TUI Markdown Rendering",
+      "description": "Model prose renders markdown in the TUI: ATX headings, **bold**, `inline code`, - / * bullets as bullet glyphs, and fenced code blocks. No parser crate; markers are stripped and turned into style runs over the visible text so wrapping measures real columns. Fenced bodies are truncated, never reflowed. Tool rows, user queries, reasoning and stats keep their own styling",
+      "dependencies": [
+        "feat-010"
+      ],
+      "status": "done",
+      "evidence": "render.rs tests markdown_markers_become_styling_not_literal_characters and markdown_wrapping_measures_visible_text_not_markers; cargo test 12 passed"
     }
   ]
 }
