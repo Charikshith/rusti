@@ -266,6 +266,16 @@
       ],
       "status": "done",
       "evidence": "ai_core/mod.rs run_agent chains tool results (parent = previous tool entry) instead of fanning them under the assistant entry, so path_messages() keeps all of them on the active path. --self-test emits two tool calls and asserts 6 messages with msgs[3] and msgs[4] both role=tool. cargo test 13 passed; --self-test OK. Reported as: [CommandCode error: Tool result is missing for tool call call_00_7dueXDf20YUXmQlI48NA3107]"
+    },
+    {
+      "id": "feat-027",
+      "name": "No Redundant Model-Switch Transcript Note",
+      "description": "Switching models (/use, /model) must not print a note into the transcript; the bottom status line already shows <session> . <model>.",
+      "dependencies": [
+        "feat-019"
+      ],
+      "status": "done",
+      "evidence": "Removed the Event::Text(\"  model switched to {model}\") from the Job::Model arm in tui/mod.rs; the status line updates immediately via app.model (set synchronously in switch_model). cargo check clean, cargo test 13 passed."
     }
   ]
 }

@@ -57,3 +57,6 @@
 - Had to look up: session.add with the same parent creates a fan-out, and path() follows one chain - the tree looked whole but the request was not.
 - Surprise: the error repeated on every later turn because the broken prefix stayed on the active path; no retry could clear it.
 - Would do differently: when a provider rejects on message shape, dump the actual request (path_messages output) before blaming the provider.
+## 2026-09-10 (4) - drop the redundant model-switch note
+- User asked why `✓ model switched to ...` lingers in the transcript when the status line already shows the model. It was a one-line Event::Text in the Job::Model arm - deleted.
+- Reminder: the status line source is app.model (set synchronously in switch_model), not the session; the async Job::Model only swaps the client/session model.

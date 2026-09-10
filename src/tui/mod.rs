@@ -202,7 +202,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                 Ok(Job::Model { url, key, model }) => {
                     client = llm::Client::new(url, key, model.clone());
                     session.model = model.clone();
-                    let _ = event_tx.send(ai_core::Event::Text(format!("  ✓ model switched to {model}")));
+                    // no transcript note: the bottom status line already shows the model
                 }
                 Ok(Job::ResumePath(path)) => {
                     let loaded = Session::load_from(&path);

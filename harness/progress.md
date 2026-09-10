@@ -179,3 +179,8 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Fix: chain tool results (parent = previous tool entry) so the active path carries all of them; --self-test now emits two tool calls per turn and asserts 6 messages (msgs[3] and msgs[4] both role=tool).
 - Verification: cargo test 13 passed, --self-test OK. The old broken session.json is not recoverable - start a fresh session.
 - Recorded as feat-026; lesson: harness/memory/session-tree-path-drops-siblings.md.
+## Session 2026-09-10 (3): model-switch note removed from transcript
+
+- `/use` / `/model` used to append the line `  ✓ model switched to <model>` to the transcript, but the bottom status line already shows `<session> · <model>` (tui/render.rs), so the note was redundant.
+- Dropped the `Event::Text` in the `Job::Model` arm (tui/mod.rs); the status line updates immediately because `switch_model` sets `app.model` synchronously.
+- Verification: `cargo check` clean, `cargo test` 13 passed. Release build was blocked by the Windows exe lock (a rustypi TUI running) — unrelated to the change.
