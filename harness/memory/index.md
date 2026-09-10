@@ -36,6 +36,7 @@ This file holds only what was **learned**.
      keep this file readable on its own. -->
 
 - [RTK filters command output](rtk-filters-command-output.md) — a filtered grep cannot prove a symbol is absent; use `rtk proxy` first.
+- [Alternate screen beats escape hacks](alternate-screen-vs-escape-hacks.md) — a bottom-pinned main-screen TUI always leaves a gap; switch the buffer model, don't tune the sequences.
 
 ## Retired
 

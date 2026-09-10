@@ -41,13 +41,13 @@
 - Reused the existing Pick struct rather than a new picker type; added a kind enum (Session|Model) to route Enter, and a top window index so long lists scroll instead of walking off-screen
 - Lesson: when two slash commands do the same shape of thing, check whether one already has the UI the other is missing before writing new key handling
 
-## 2026-07-14 — /model picker + quit farewell
+## 2026-09-10 — /model picker + quit farewell
 - User saw the OLD plain-text /model list twice because they ran target/release/rustypi.exe while the picker was only in the uncommitted working tree — committed code ≠ running binary is the trap here.
 - Windows exe lock: running TUI blocks cargo from overwriting rustypi.exe; the in-TUI /reload (target/reload + staged copy) is the designed path, but closing the TUI + plain rebuild is simpler when possible.
 - Leftover transcript on relaunch: main-screen TUI (no alternate buffer, by design) + no clear-on-quit. Fixed with terminal::Clear(All) + farewell line on Exit::Quit.
 - No user corrections this session; the "why do I see the old screen" confusion was binary staleness, not render state.
 
-## 2026-07-14 (2) — quit-screen saga: main-screen design was the root cause
+## 2026-09-10 (2) — quit-screen saga: main-screen design was the root cause
 - Three attempts at the quit artifact: ESC[2J alone (gap remained, farewell floated at bottom), +ESC[3J (gap gone but ate the shell history), 2J+home (gap remained between launch line and panel — the panel pins to the terminal bottom by design).
 - Root cause was never the clear sequence: a main-screen TUI with a bottom-pinned panel always leaves a hole between the shell's last line and the input field. Alternate screen is the only fix that preserves the primary buffer exactly.
 - Switched to EnterAlternateScreen/LeaveAlternateScreen; quit now needs no clearing at all, farewell prints right under the launch line.
