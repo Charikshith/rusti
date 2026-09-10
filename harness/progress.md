@@ -155,6 +155,7 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Dependencies: serde, serde_json, tokio (current-thread), reqwest, futures-util, bytes, crossterm, is-terminal
 
 ## Verified
+- `/model` picker + quit-clear live-verified by user run (9c8948e): no-arg /model opens the arrow picker over model.json (active row marked ▸, starts selected, scrolls past 8 rows); quit (ctrl+c twice) clears the screen and prints "Come back again, boss" so a relaunch starts on a clean terminal
 - Agent works against real LLM (localhost:20128, model cmc/xiaomi/mimo-v2.5-pro)
 - TUI renders without flicker, differential updates, main-screen (scrollback preserved)
 - Session tree branching works (id/parentId, select, save/load)
@@ -163,7 +164,6 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Self-test runs offline (fake SSE server, no network required)
 
 ## Not Yet Verified Live
-- `/model` interactive picker (in working tree, uncommitted): no-arg /model opens an arrow picker over model.json (active row marked ▸, starts selected, scrolls past 8 rows); /model <name> and /use <name> still switch directly. Needs /reload in a live TUI to exercise — exe is locked by the running process
 - The permission prompt end to end in the TUI (the ask path it reuses is exercised, the gate itself is not)
 - `delegate` against a real model
 - Any long task against the raised 50-round cap — context compaction is the likely first wall

@@ -40,3 +40,9 @@
 - Root cause was a missing feature surface, not a broken key handler: the up/down match arms only fired while a picker or menu was open
 - Reused the existing Pick struct rather than a new picker type; added a kind enum (Session|Model) to route Enter, and a top window index so long lists scroll instead of walking off-screen
 - Lesson: when two slash commands do the same shape of thing, check whether one already has the UI the other is missing before writing new key handling
+
+## 2026-07-14 — /model picker + quit farewell
+- User saw the OLD plain-text /model list twice because they ran target/release/rustypi.exe while the picker was only in the uncommitted working tree — committed code ≠ running binary is the trap here.
+- Windows exe lock: running TUI blocks cargo from overwriting rustypi.exe; the in-TUI /reload (target/reload + staged copy) is the designed path, but closing the TUI + plain rebuild is simpler when possible.
+- Leftover transcript on relaunch: main-screen TUI (no alternate buffer, by design) + no clear-on-quit. Fixed with terminal::Clear(All) + farewell line on Exit::Quit.
+- No user corrections this session; the "why do I see the old screen" confusion was binary staleness, not render state.
