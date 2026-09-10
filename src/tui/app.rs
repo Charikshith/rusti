@@ -1,5 +1,6 @@
-// App state + main-screen event loop (pi-style).
-// No alternate screen — transcript stays in terminal scrollback.
+// App state + event loop (pi-style), rendered on the alternate screen.
+// Transcript scrolls inside the app (PageUp/PageDown); the shell's primary
+// buffer is untouched while the TUI runs.
 // Always-visible input field; model name in bottom status line.
 // Keyboard: Esc interrupts, Ctrl+C clears (twice quits), Ctrl+D quits when the
 // input is empty, Enter submits, arrows edit input, Up/Down recall history,

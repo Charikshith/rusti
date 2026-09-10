@@ -1,4 +1,4 @@
-// TUI module: pi-style main-screen renderer with synchronized output.
+// TUI module: pi-style renderer on the alternate screen with synchronized output.
 // Differential rendering — only changed lines get redrawn.
 // Always-visible input field, model name in status line.
 // Falls back to plain stream for piped stdin.
@@ -296,9 +296,13 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
 
     if is_terminal::is_terminal(std::io::stdin()) {
         terminal::enable_raw_mode()?;
-        execute!(stdout(), cursor::Hide)?;
+        // Alternate screen: the TUI gets a fresh canvas every run (no stale
+        // transcript from the previous one), and leaving restores the shell's
+        // primary buffer exactly — history intact, no gap, no leftovers.
+        // Transcripts persist via session.json + /resume, not the scrollback.
+        execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
         let res = app::ui_loop(&job_tx, event_rx, model, seed_name, &cancel, seed_lines, seed_history, seed_msg_num);
-        let _ = execute!(stdout(), cursor::Show);
+        let _ = execute!(stdout(), cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
         // job_tx must drop before the join — the agent thread blocks in
         // job_rx.recv() until every Sender is gone, otherwise join() hangs.
@@ -306,11 +310,8 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         agent.0.take().map(|h| h.join());
         match res? {
             app::Exit::Quit => {
-                // clear the visible screen and home the cursor so the farewell
-                // lands at the top — no gap, no farewell floating at the bottom.
-                // No 3J: that would also erase the shell scrollback (history).
-                let _ = write!(stdout(), "\x1b[2J\x1b[H");
-                let _ = stdout().flush();
+                // primary buffer is restored; the farewell lands right under
+                // the launch line — no clear sequences, no gap, history intact
                 println!("Come back again, boss");
                 Ok(())
             }

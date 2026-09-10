@@ -1,4 +1,4 @@
-// Main-screen renderer with differential updates (pi-style).
+// Alternate-screen renderer with differential updates (pi-style).
 // First frame: full draw. Subsequent frames: only changed lines.
 // Synchronized output (CSI 2026) for atomic flicker-free updates.
 // No box — plain terminal lines like pi. Input + status pinned at bottom.
