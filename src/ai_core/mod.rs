@@ -200,6 +200,11 @@ pub async fn run_agent(
         ae.tool_calls = Some(tcs);
         let a_id = session.add(ae, session.active.clone());
 
+        // Chain tool results under each other, not as siblings of the assistant
+        // entry. path_messages() walks the active leaf's parent chain, so sibling
+        // results leave earlier ones off the path -> the next request has a
+        // dangling tool call -> "Tool result is missing for tool call ...".
+        let mut parent = a_id.clone();
         for tc in &res.tool_calls {
             let summary = tool_summary(&tc.name, &tc.arguments);
             emit(Event::ToolStart(summary.clone()));
@@ -211,7 +216,7 @@ pub async fn run_agent(
             emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis() });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
-            session.add(te, Some(a_id.clone()));
+            parent = session.add(te, Some(parent));
         }
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
@@ -326,19 +331,21 @@ async fn dispatch(client: &llm::Client, name: &str, args: &Value, cancel: &Atomi
 }
 
 pub fn self_test() {
-    // Fake SSE server: first request -> a streamed run_command tool call
-    // (arguments split across chunks), second -> a final answer.
+    // Fake SSE server: first request -> two streamed tool calls (run_command +
+    // list_dir), second -> a final answer. Two calls in one turn exercises the
+    // sibling-tool-result chaining that caused dangling tool calls.
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        let tool_args_1 = r#"{"command":"echo hi"}"#;
+        let tool_args_1 = r#"{"command":"echo hi"}"#.replace('"', "\\\"");
+        let tool_args_2 = r#"{"path":".","depth":1}"#.replace('"', "\\\"");
         let sse_tool = format!(
-            "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"tool_calls\":[{{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{{\"name\":\"run_command\",\"arguments\":\"\"}}}}]}},\"finish_reason\":null}}]}}\r\n\r\n\
-             data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":\"{}\"}}}}]}},\"finish_reason\":null}}]}}\r\n\r\n\
+            "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"tool_calls\":[{{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{{\"name\":\"run_command\",\"arguments\":\"\"}}}},{{\"index\":1,\"id\":\"c2\",\"type\":\"function\",\"function\":{{\"name\":\"list_dir\",\"arguments\":\"\"}}}}]}},\"finish_reason\":null}}]}}\r\n\r\n\
+             data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":\"{tool_args_1}\"}}}}]}},\"finish_reason\":null}}]}}\r\n\r\n\
+             data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":1,\"function\":{{\"arguments\":\"{tool_args_2}\"}}}}]}},\"finish_reason\":null}}]}}\r\n\r\n\
              data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\r\n\r\n\
-             data: [DONE]\r\n\r\n",
-            tool_args_1.replace('"', "\\\"")
+             data: [DONE]\r\n\r\n"
         );
         let sse_done = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\r\n\r\n",
@@ -364,15 +371,17 @@ pub fn self_test() {
         // text is streamed via emit() -> prints to stdout during the test; fine
         let mut session = crate::session::Session::with_path("fake".into(), "_test_session.json");
         assert_eq!(run_agent(&client, &mut session, "test task", &std::sync::atomic::AtomicBool::new(false)).await.unwrap(), "done");
-        // tree: system, user, assistant(tool_calls), tool, assistant(done)
-        assert_eq!(session.entries.len(), 5);
+        // tree: system, user, assistant(tool_calls), tool, tool, assistant(done)
+        // both tool results must be on the active path (multi-tool-call fix)
+        assert_eq!(session.entries.len(), 6);
         let msgs = session.path_messages();
-        assert_eq!(msgs.len(), 5);
+        assert_eq!(msgs.len(), 6);
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[1]["role"], "user");
         assert_eq!(msgs[2]["tool_calls"].is_array(), true);
         assert_eq!(msgs[3]["role"], "tool");
-        assert_eq!(msgs[4]["content"], "done");
+        assert_eq!(msgs[4]["role"], "tool");
+        assert_eq!(msgs[5]["content"], "done");
         // branch from the user message: leaf moves to its parent (system)
         assert!(session.select("m2").is_some());
         assert_eq!(session.path().len(), 1);

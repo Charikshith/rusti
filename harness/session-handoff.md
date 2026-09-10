@@ -1,19 +1,28 @@
 # Session Handoff
 
-## What Was Done This Session (2026-09-10)
-- **Shipped the /model interactive picker** (was built in the working tree but never in the running binary — user saw the old text list twice): no-arg `/model` opens the arrow-key picker over model.json (active row `▸`, starts selected, 8-row window scrolls), `/model <name>` and `/use <name>` still switch directly
-- **Quit farewell + screen cleanup saga** → root-caused to the screen-buffer model: a bottom-pinned main-screen TUI always leaves a gap between the launch line and the panel. Fixed properly with **feat-025 Alternate Screen TUI**: `EnterAlternateScreen` on start, `LeaveAlternateScreen` on exit; quit prints `Come back again, boss` right under the launch line, shell scrollback untouched, no stale transcript
-- **Removed the escape-hack cleanup** (ESC[2J/3J on quit) — 3J was eating the user's shell history
-- Harness: feat-025 added to feature_list.json (25/25), roster line for feat-024, journal blocks, new lesson in memory index
+## What Was Done This Session (2026-09-10, part 2)
+- **Fixed feat-026 — multi-tool-call message integrity.** A session failed on *every* turn with
+  `[CommandCode error: {"type":"server_error","message":"Tool result is missing for tool call call_00_7dueXDf20YUXmQlI48NA3107."}]`,
+  while the same model worked through pi.
+- **Root cause (rustypi, not the provider):** `run_agent` added each tool result as a **sibling**
+  under the assistant entry. `path_messages()` walks a single parent chain from the active leaf, so a
+  turn that emitted two tool calls (`run_command` + `list_dir`) sent only the *last* result — the
+  first tool call was left dangling and the API rejected the request. The broken prefix stayed on the
+  active path, so every later turn failed identically.
+- **Fix:** chain tool results (`parent = previous tool entry`) so all of them lie on the active path
+  in order. Regression guard: `--self-test` now emits **two** tool calls in one turn and asserts
+  6 messages with `msgs[3]` and `msgs[4]` both `role: "tool"`.
+- Old `session.json` from the failing session is **not recoverable** (its tree genuinely lacks the
+  missing entry) — start a fresh session.
 
 ## Verification (all green)
 - `cargo test` — 13 passed
-- `cargo build --release` — clean
-- `--self-test` — passes
-- Live: user ran the TUI in PowerShell and confirmed clean quit behavior
+- `--self-test` — passes (now exercises the two-tool-call turn)
 
-## Commits
-`9c8948e` picker + farewell · `18d5167` 3J clear (superseded) · `bfbcb48` 2J only (superseded) · `5a72a74` alternate screen · `df2ce9b`/`854702e` harness records
+## Artifacts
+- `harness/feature_list.json` — feat-026 added (26/26 done)
+- `harness/memory/session-tree-path-drops-siblings.md` + index line
+- `harness/progress.md`, `harness/memory/journal.md` — session records
 
 ## Next Steps (unchanged, see harness/open-work.md)
 1. Context compaction — the likely first wall on long tasks

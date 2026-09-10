@@ -256,6 +256,16 @@
       ],
       "status": "done",
       "evidence": "src/tui/mod.rs run(): EnterAlternateScreen/cursor::Hide on start, cursor::Show/LeaveAlternateScreen before the Exit match; live-verified in PowerShell (no gap at launch, farewell under the prompt, scrollback intact); cargo test 13 passed; release build + --self-test OK"
+    },
+    {
+      "id": "feat-026",
+      "name": "Multi-Tool-Call Message Integrity",
+      "description": "A single assistant turn that emits several tool calls must send every tool result back; the message list must never contain a dangling tool call (\"Tool result is missing for tool call ...\" from the provider).",
+      "dependencies": [
+        "feat-002"
+      ],
+      "status": "done",
+      "evidence": "ai_core/mod.rs run_agent chains tool results (parent = previous tool entry) instead of fanning them under the assistant entry, so path_messages() keeps all of them on the active path. --self-test emits two tool calls and asserts 6 messages with msgs[3] and msgs[4] both role=tool. cargo test 13 passed; --self-test OK. Reported as: [CommandCode error: Tool result is missing for tool call call_00_7dueXDf20YUXmQlI48NA3107]"
     }
   ]
 }

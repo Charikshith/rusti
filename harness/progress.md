@@ -172,3 +172,10 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 
 ## Session 2026-09-10: /model picker shipped + alternate screen (feat-025)
 - TUI now runs on the alternate screen (EnterAlternateScreen/LeaveAlternateScreen): no gap between the shell prompt and the bottom-pinned panel at launch, and quit restores the primary buffer exactly — `Come back again, boss` prints right under the launch line, shell history untouched. Transcripts persist via session.json + /resume.
+## Session 2026-09-10 (2): feat-026 - multi-tool-call message integrity
+
+- Bug report: [CommandCode error: "Tool result is missing for tool call call_00_7dueXDf20YUXmQlI48NA3107."] on every turn in one session, while the same model works through pi.
+- Root cause: run_agent added each tool result as a sibling under the assistant entry; path_messages() walks a single parent chain, so on a turn with two tool calls only the last result reached the wire and the other call was left dangling.
+- Fix: chain tool results (parent = previous tool entry) so the active path carries all of them; --self-test now emits two tool calls per turn and asserts 6 messages (msgs[3] and msgs[4] both role=tool).
+- Verification: cargo test 13 passed, --self-test OK. The old broken session.json is not recoverable - start a fresh session.
+- Recorded as feat-026; lesson: harness/memory/session-tree-path-drops-siblings.md.

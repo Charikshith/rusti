@@ -52,3 +52,8 @@
 - Root cause was never the clear sequence: a main-screen TUI with a bottom-pinned panel always leaves a hole between the shell's last line and the input field. Alternate screen is the only fix that preserves the primary buffer exactly.
 - Switched to EnterAlternateScreen/LeaveAlternateScreen; quit now needs no clearing at all, farewell prints right under the launch line.
 - Lesson: when a cosmetic terminal fix needs escalating escape-sequence hacks, question the screen-buffer model instead of tuning the sequences.
+## 2026-09-10 (3) - CommandCode "Tool result is missing"
+- Reported as a provider problem; it was a rustypi bug. Traced by walking the active parent chain in session.json: m3 (2 tool calls) -> m5 only, m4 orphaned.
+- Had to look up: session.add with the same parent creates a fan-out, and path() follows one chain - the tree looked whole but the request was not.
+- Surprise: the error repeated on every later turn because the broken prefix stayed on the active path; no retry could clear it.
+- Would do differently: when a provider rejects on message shape, dump the actual request (path_messages output) before blaming the provider.
