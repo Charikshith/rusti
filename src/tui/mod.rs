@@ -306,10 +306,10 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         agent.0.take().map(|h| h.join());
         match res? {
             app::Exit::Quit => {
-                // wipe the visible screen AND the scrollback, home the cursor,
-                // so the next prompt starts fresh — no gap, no old transcript.
-                // 3J is ignored by terminals that don't support it (safe).
-                let _ = write!(stdout(), "\x1b[2J\x1b[3J\x1b[H");
+                // clear the visible screen and home the cursor so the farewell
+                // lands at the top — no gap, no farewell floating at the bottom.
+                // No 3J: that would also erase the shell scrollback (history).
+                let _ = write!(stdout(), "\x1b[2J\x1b[H");
                 let _ = stdout().flush();
                 println!("Come back again, boss");
                 Ok(())
