@@ -305,7 +305,12 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         drop(job_tx);
         agent.0.take().map(|h| h.join());
         match res? {
-            app::Exit::Quit => Ok(()),
+            app::Exit::Quit => {
+                // leave a clean screen, not this session's transcript
+                let _ = execute!(stdout(), terminal::Clear(terminal::ClearType::All));
+                println!("Come back again, boss");
+                Ok(())
+            }
             app::Exit::Reload { exe, args } => {
                 let mut cmd = std::process::Command::new(exe);
                 cmd.args(args);
@@ -442,6 +447,23 @@ mod tests {
         assert_eq!(app::stats_row(120, false, 3000, 8.0).unwrap(), "  · 120 tok · 40.0 tps · 8.0s");
         assert_eq!(app::stats_row(9, true, 0, 1.0).unwrap(), "  · ~9 tok · 0.0 tps · 1.0s");
         assert!(app::stats_row(0, false, 100, 1.0).is_none());
+    }
+
+    #[test]
+    fn picker_nav_walks_and_scrolls_the_visible_window() {
+        // a 12-row list with 8 visible: window scrolls only when the cursor
+        // passes its bottom edge, and never shows a hole at the top
+        let (i, t) = app::picker_nav(0, 0, 12, 1);
+        assert_eq!((i, t), (1, 0));
+        let (i, t) = app::picker_nav(7, 0, 12, 1);
+        assert_eq!((i, t), (8, 1)); // 8 == top + PICK_ROWS, so scroll
+        let (i, t) = app::picker_nav(8, 1, 12, -1);
+        assert_eq!((i, t), (7, 1)); // walk up within the window
+        let (i, t) = app::picker_nav(0, 0, 12, -1);
+        assert_eq!((i, t), (0, 0)); // clamped at the top
+        // a short list never scrolls and clamps at the bottom
+        let (i, t) = app::picker_nav(2, 0, 3, 1);
+        assert_eq!((i, t), (2, 0));
     }
 
     #[test]

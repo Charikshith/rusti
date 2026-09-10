@@ -2,7 +2,20 @@
 
 ## Current State
 **Phase**: MVP Complete — Agent Live-Tested
-**Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 7 passed, --self-test with and without ripgrep on PATH, ./init.sh)
+**Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 13 passed, --self-test with and without ripgrep on PATH, ./init.sh)
+
+## Session 2026-09-09: Fix — /model list had no up/down navigation
+- Reported as "/model isn't navigable with up/down". Root cause: `/model` with no argument called
+  `list_models`, which dumped every profile into the transcript as plain text — there was no
+  selection to move. The `/resume` command had a real arrow picker (`app.pick`), but `/model` never got one
+- Fix: `/model` (no arg) now opens the same picker as `/resume`. `Pick` gained a `kind` field
+  (`Session` | `Model`) and a `top` window index; `pick_model` builds the rows from model.json and
+  marks the active profile with `*`; Enter routes by kind to `Job::ResumePath` or `switch_model`
+- `picker_nav` is the shared arrow logic, and it now keeps the cursor inside a visible window
+  (`PICK_ROWS = 8`) instead of letting Up/Down walk off-screen; long lists scroll, short ones don't
+- Renderer: `panel_rows` slices the picker rows by `p.top`, and the footer hint reads "switch" for
+  models vs "resume" for sessions, plus a `n/total` counter when the list overflows the window
+- Verification: `cargo test` 13 passed (new: picker_nav_walks_and_scrolls_the_visible_window)
 
 ## Session 2026-09-09: Markdown rendering in model prose (feat-024)
 - Reported as "why is the text not getting rendered correctly" — it was: the model answers in markdown and
@@ -132,8 +145,8 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 23. ✅ Agent Safety & Workflow Tools — permission gate (--yolo), project-root write guard, delete/move, background jobs, todo, delegate sub-agent
 
 ## Build Status
-- `cargo build --release` — 0 warnings, 0 errors
-- `cargo test` — 7 passed
+- `cargo build --release` — 0 warnings, 0 errors (release rebuild blocked while the TUI runs: exe lock — use /reload in-TUI instead)
+- `cargo test` — 13 passed
 - `--self-test` — passes; also covers the search tools on both paths (ripgrep and the std fallback, run with
   `PATH=/c/Windows/System32` to hide rg), multi_edit atomicity, the command timeout, permission decisions,
   the project-root guard, move/delete, background job lifecycle, and todo rendering
@@ -150,6 +163,7 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Self-test runs offline (fake SSE server, no network required)
 
 ## Not Yet Verified Live
+- `/model` interactive picker (in working tree, uncommitted): no-arg /model opens an arrow picker over model.json (active row marked ▸, starts selected, scrolls past 8 rows); /model <name> and /use <name> still switch directly. Needs /reload in a live TUI to exercise — exe is locked by the running process
 - The permission prompt end to end in the TUI (the ask path it reuses is exercised, the gate itself is not)
 - `delegate` against a real model
 - Any long task against the raised 50-round cap — context compaction is the likely first wall

@@ -26,7 +26,7 @@ pub struct Cmd {
 }
 
 pub const CMDS: &[Cmd] = &[
-    Cmd { name: "/model", desc: "list saved profiles, or /model <name> to switch", soon: false },
+    Cmd { name: "/model", desc: "pick from saved profiles, or /model <name> to switch", soon: false },
     Cmd { name: "/use", desc: "/use <name> - switch to a saved profile", soon: false },
     Cmd { name: "/resume", desc: "pick a saved session and continue it", soon: false },
     Cmd { name: "/rename", desc: "/rename <new-name> - rename the active session", soon: false },
@@ -43,6 +43,9 @@ pub const CMDS: &[Cmd] = &[
 
 /// Menu rows visible at once; up/down walks the whole filtered list.
 pub const MENU_ROWS: usize = 5;
+
+/// Picker rows visible at once; up/down scrolls the window for long lists.
+pub const PICK_ROWS: usize = 8;
 
 /// Commands matching the input, while it is a lone "/word" — a space means the
 /// command is typed and its arguments have started, so the menu closes.
@@ -64,12 +67,20 @@ pub fn filter_cmds(input: &str) -> Vec<&'static Cmd> {
     CMDS.iter().filter(|c| c.name[1..].to_lowercase().starts_with(&q)).collect()
 }
 
-/// An open list picker (today: /resume with no argument). Rows are labels
-/// paired with the session file Enter resumes.
+/// What an open list picker selects (Enter's action).
+pub enum PickKind {
+    Session, // resume the chosen session file
+    Model,   // switch to the chosen model profile
+}
+
+/// An open list picker (/resume with no argument, /model with no argument).
+/// Rows are (label, value): a session path or a model profile name.
 pub struct Pick {
+    pub kind: PickKind,
     pub title: String,
-    pub rows: Vec<(String, String)>, // (label, session path)
+    pub rows: Vec<(String, String)>,
     pub idx: usize,
+    pub top: usize, // first visible row (window for long lists)
 }
 
 /// How ui_loop ended: a plain quit, or a /reload handoff to a new process.
@@ -460,7 +471,7 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         }
         "/model" => {
             if arg.is_empty() {
-                list_models(app);
+                pick_model(app);
             } else {
                 switch_model(app, job_tx, arg);
             }
@@ -491,21 +502,46 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
     false
 }
 
-/// Keys while the picker is open: arrows move, Enter resumes, Esc cancels,
+/// Move a picker selection by delta and keep it inside the visible window.
+pub fn picker_nav(idx: usize, top: usize, n: usize, delta: isize) -> (usize, usize) {
+    if n == 0 {
+        return (0, 0);
+    }
+    let idx = if delta < 0 { idx.saturating_sub(1) } else { (idx + 1).min(n - 1) };
+    let top = if idx < top {
+        idx
+    } else if idx >= top + PICK_ROWS {
+        idx - PICK_ROWS + 1
+    } else {
+        top
+    };
+    (idx, top)
+}
+
+/// Keys while the picker is open: arrows move, Enter selects, Esc cancels,
 /// everything else is swallowed.
 fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
-    let Some(p) = app.pick.as_mut() else { return };
     match code {
-        KeyCode::Up => p.idx = p.idx.saturating_sub(1),
-        KeyCode::Down => p.idx = (p.idx + 1).min(p.rows.len().saturating_sub(1)),
-        KeyCode::Esc => app.pick = None,
-        KeyCode::Enter => {
-            let path = p.rows[p.idx].1.clone();
+        KeyCode::Esc => {
             app.pick = None;
-            let _ = job_tx.send(Job::ResumePath(path));
+            return;
         }
-        _ => {}
+        KeyCode::Enter => {
+            let Some(p) = app.pick.take() else { return };
+            match p.kind {
+                PickKind::Session => { let _ = job_tx.send(Job::ResumePath(p.rows[p.idx].1.clone())); }
+                PickKind::Model => switch_model(app, job_tx, &p.rows[p.idx].1),
+            }
+            return;
+        }
+        KeyCode::Up | KeyCode::Down => {}
+        _ => return,
     }
+    let Some(p) = app.pick.as_mut() else { return };
+    let delta: isize = if code == KeyCode::Up { -1 } else { 1 };
+    let (idx, top) = picker_nav(p.idx, p.top, p.rows.len(), delta);
+    p.idx = idx;
+    p.top = top;
 }
 
 /// /resume: no argument opens the picker, an index or name resumes directly.
@@ -529,6 +565,7 @@ fn resume(app: &mut App, job_tx: &Sender<Job>, arg: &str) {
         return;
     }
     app.pick = Some(Pick {
+        kind: PickKind::Session,
         title: "sessions".into(),
         rows: saved
             .iter()
@@ -546,6 +583,7 @@ fn resume(app: &mut App, job_tx: &Sender<Job>, arg: &str) {
             })
             .collect(),
         idx: 0,
+        top: 0,
     });
 }
 
@@ -565,18 +603,31 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
     }
 }
 
-/// List saved model.json profiles, marking the currently active one.
-fn list_models(app: &mut App) {
+/// /model (no argument): open an interactive picker over the saved profiles,
+/// marking the active one. Up/down navigate, Enter switches, Esc cancels.
+fn pick_model(app: &mut App) {
     let cfg = crate::config::Config::load();
     if cfg.models.is_empty() {
         app.lines.push("  ✗ no saved models (see model.json)".into());
         return;
     }
-    let mut out = String::new();
-    for m in &cfg.models {
-        let mark = if m.model == app.model { "* " } else { "  " };
-        out.push_str(&format!("{mark}{}  {}\n", m.name, m.model));
-    }
-    app.lines.push(out.trim_end().to_string());
-    app.lines.push("  ℹ /model <name> to switch".into());
+    let active = app.model.clone();
+    let rows: Vec<(String, String)> = cfg
+        .models
+        .iter()
+        .map(|m| {
+            let mark = if m.model == active { "▸" } else { " " };
+            (format!("{mark} {:<26} {}", m.name, m.model), m.name.clone())
+        })
+        .collect();
+    // start on the active row, not the top — it's the one you're looking for
+    let idx = cfg.models.iter().position(|m| m.model == active).unwrap_or(0);
+    let top = idx.saturating_sub(PICK_ROWS / 2);
+    app.pick = Some(Pick {
+        kind: PickKind::Model,
+        title: "models".into(),
+        rows,
+        idx,
+        top,
+    });
 }

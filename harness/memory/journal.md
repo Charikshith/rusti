@@ -34,3 +34,9 @@
 - Session-start `git status` listed no `src` changes; `git diff --stat HEAD` later showed 14 files / 1015 insertions. Cause unconfirmed — stale snapshot or a concurrent session in the same worktree. Check `git diff --stat HEAD` before trusting the startup snapshot
 - `cargo build --release` fails with `Access is denied` on `target/release/rustypi.exe` while a rustypi is running (Windows exe lock); debug builds and `cargo test` are unaffected
 - `rtk npx … --agent-reply "multi\nline"` dies with `npx: batch file arguments are invalid`; single-line arguments only
+
+### 2026-09-09 — /model navigation bug
+- `/model` with no arg printed the profile list into the transcript, so there was nothing to navigate — a sibling command (/resume) had a picker but /model never got one
+- Root cause was a missing feature surface, not a broken key handler: the up/down match arms only fired while a picker or menu was open
+- Reused the existing Pick struct rather than a new picker type; added a kind enum (Session|Model) to route Enter, and a top window index so long lists scroll instead of walking off-screen
+- Lesson: when two slash commands do the same shape of thing, check whether one already has the UI the other is missing before writing new key handling

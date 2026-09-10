@@ -1,5 +1,6 @@
 /target
 model.json
+session.json
 .agents/
 .claude/
 .pi/

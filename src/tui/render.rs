@@ -189,11 +189,22 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
     };
 
     if let Some(p) = &app.pick {
+        let hint = match p.kind {
+            app::PickKind::Session => "↑/↓ select · enter resume · esc cancel",
+            app::PickKind::Model => "↑/↓ select · enter switch · esc cancel",
+        };
         let mut out = vec![sel_row(&format!("  {} ({})", p.title, p.rows.len()), false)];
-        for (i, (label, _)) in p.rows.iter().enumerate() {
+        for (i, (label, _)) in p.rows.iter().enumerate().skip(p.top).take(app::PICK_ROWS) {
             out.push(sel_row(&format!("{}{label}", if i == p.idx { "▸ " } else { "  " }), i == p.idx));
         }
-        out.push(sel_row("  ↑/↓ select · enter resume · esc cancel", false));
+        if p.rows.len() > app::PICK_ROWS {
+            out.push(sel_row(
+                &format!("  {hint}  · {}/{}", p.idx + 1, p.rows.len()),
+                false,
+            ));
+        } else {
+            out.push(sel_row(&format!("  {hint}"), false));
+        }
         return out;
     }
 
