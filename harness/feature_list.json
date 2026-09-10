@@ -17,7 +17,7 @@
     {
       "id": "feat-002",
       "name": "Core Agent Loop",
-      "description": "System prompt → user task → LLM tool calls → tool execution → feedback loop terminates correctly",
+      "description": "System prompt \u00e2\u2020\u2019 user task \u00e2\u2020\u2019 LLM tool calls \u00e2\u2020\u2019 tool execution \u00e2\u2020\u2019 feedback loop terminates correctly",
       "dependencies": [
         "feat-001"
       ],
@@ -42,7 +42,7 @@
         "feat-002"
       ],
       "status": "done",
-      "evidence": "ai_core/tools.rs, the original 5 tools; edit_file enforces a unique match, run_command is platform-aware. Extended by feat-021 (grep/glob/list_dir/multi_edit, ranged reads, timeout) and feat-023 (delete/move, background jobs, todo, delegate, permission gate, root guard) — 16 tools total"
+      "evidence": "ai_core/tools.rs, the original 5 tools; edit_file enforces a unique match, run_command is platform-aware. Extended by feat-021 (grep/glob/list_dir/multi_edit, ranged reads, timeout) and feat-023 (delete/move, background jobs, todo, delegate, permission gate, root guard) \u00e2\u20ac\u201d 16 tools total"
     },
     {
       "id": "feat-005",
@@ -99,7 +99,7 @@
     {
       "id": "feat-010",
       "name": "TUI Experience: semantic status + spinner + editing + scrollback + slash commands",
-      "description": "Semantic status symbols/colors (⠋ working, ✓ success, ✗ failure, ⚠ warn, ℹ info, cyan › prompt), animated spinner, cursor editing + history recall, PageUp/PageDown scrollback, /use /resume /tree slash commands, input overflow window, user lines flush-left with dim number + cyan caret",
+      "description": "Semantic status symbols/colors (\u00e2\u00a0\u2039 working, \u00e2\u0153\u201c success, \u00e2\u0153\u2014 failure, \u00e2\u0161\u00a0 warn, \u00e2\u201e\u00b9 info, cyan \u00e2\u20ac\u00ba prompt), animated spinner, cursor editing + history recall, PageUp/PageDown scrollback, /use /resume /tree slash commands, input overflow window, user lines flush-left with dim number + cyan caret",
       "dependencies": [
         "feat-006"
       ],
@@ -109,7 +109,7 @@
     {
       "id": "feat-011",
       "name": "Interrupt Key Model (pi-style)",
-      "description": "Esc interrupts the running agent (cooperative AtomicBool checked between iterations and per stream chunk), Ctrl+C clears input, Ctrl+D exits when input empty; interrupted turns show '⚠ interrupted'; quit no longer waits for in-flight turn",
+      "description": "Esc interrupts the running agent (cooperative AtomicBool checked between iterations and per stream chunk), Ctrl+C clears input, Ctrl+D exits when input empty; interrupted turns show '\u00e2\u0161\u00a0 interrupted'; quit no longer waits for in-flight turn",
       "dependencies": [
         "feat-010"
       ],
@@ -119,7 +119,7 @@
     {
       "id": "feat-012",
       "name": "/reload: hot rebuild + relaunch",
-      "description": "TUI slash command rebuilds rustypi from its own source (CARGO_MANIFEST_DIR) into target/reload, runs a uniquely-named copy of the binary (never the built file itself, so cargo can always overwrite it despite Windows exe-locking), and relaunches: exec on Unix, wait-as-thin-wrapper on Windows (exiting after spawn would let the shell fight the child for console input). Preserves the session (saved first, then --resume), live model (--url/--key/--model, survives a mid-session /use), and visible transcript (reconstructed from session.json on the new process). Guarded to idle turns only; build failures leave the running session untouched. /model lists saved profiles (active marked) or switches by name.",
+      "description": "TUI slash command rebuilds rustypi from its own source (CARGO_MANIFEST_DIR) into target/reload, runs a uniquely-named copy of the binary (never the built file itself, so cargo can always overwrite it despite Windows exe-locking), and relaunches: exec on Unix, wait-as-thin-wrapper on Windows (exiting after spawn would let the shell fight the child for console input). Preserves the session (saved first, then --resume), live model (--url/--key/--model, survives a mid-session /use), and visible transcript (reconstructed from session.json on the new process). Guarded to idle turns only; build failures leave the running session untouched. /model opens an arrow-key picker over saved profiles (active marked, starts selected) or switches by name.",
       "dependencies": [
         "feat-008",
         "feat-011"
@@ -130,12 +130,12 @@
     {
       "id": "feat-013",
       "name": "Tool wall time",
-      "description": "Every finished tool row carries its own wall time (✓ src/main.rs  450ms); Event::ToolEnd gained an ms field, measured around dispatch in run_agent and around the cargo build in /reload",
+      "description": "Every finished tool row carries its own wall time (\u00e2\u0153\u201c src/main.rs  450ms); Event::ToolEnd gained an ms field, measured around dispatch in run_agent and around the cargo build in /reload",
       "dependencies": [
         "feat-006"
       ],
       "status": "done",
-      "evidence": "ai_core::took unit-checked in --self-test; visible as '✓ echo hi  15ms' in --self-test output"
+      "evidence": "ai_core::took unit-checked in --self-test; visible as '\u00e2\u0153\u201c echo hi  15ms' in --self-test output"
     },
     {
       "id": "feat-014",
@@ -150,7 +150,7 @@
     {
       "id": "feat-015",
       "name": "Per-turn token/tps/wall stats",
-      "description": "After each turn: '· 142 tok · 38.4 tps · 6.2s', dim. Tokens come from the server's usage.completion_tokens when sent, else a chars/4 estimate marked with '~'; tps is over generation time only (clock starts at the first token) so tool waits don't dilute it",
+      "description": "After each turn: '\u00c2\u00b7 142 tok \u00c2\u00b7 38.4 tps \u00c2\u00b7 6.2s', dim. Tokens come from the server's usage.completion_tokens when sent, else a chars/4 estimate marked with '~'; tps is over generation time only (clock starts at the first token) so tool waits don't dilute it",
       "dependencies": [
         "feat-006"
       ],
@@ -160,7 +160,7 @@
     {
       "id": "feat-016",
       "name": "reasoning_content thinking block",
-      "description": "Thinking models' reasoning_content (or reasoning) deltas stream into a dim '│ ' block that closes when the answer or a tool call starts; never folded into content or sent back to the model. Plain mode writes it to stderr",
+      "description": "Thinking models' reasoning_content (or reasoning) deltas stream into a dim '\u00e2\u201d\u201a ' block that closes when the answer or a tool call starts; never folded into content or sent back to the model. Plain mode writes it to stderr",
       "dependencies": [
         "feat-006"
       ],
@@ -170,7 +170,7 @@
     {
       "id": "feat-017",
       "name": "Slash-command menu",
-      "description": "Typing a lone '/word' opens the command menu above the input: 5 rows visible, up/down walks the whole filtered list, Tab completes, Enter runs, Esc dismisses for that text, 'n/total' counter row when it overflows. Queued commands (/undo /commit /plan /test /export) are listed with '· soon' and print a pointer to harness/open-work.md when run",
+      "description": "Typing a lone '/word' opens the command menu above the input: 5 rows visible, up/down walks the whole filtered list, Tab completes, Enter runs, Esc dismisses for that text, 'n/total' counter row when it overflows. Queued commands (/undo /commit /plan /test /export) are listed with '\u00c2\u00b7 soon' and print a pointer to harness/open-work.md when run",
       "dependencies": [
         "feat-006"
       ],
@@ -190,17 +190,17 @@
     {
       "id": "feat-019",
       "name": "Active session name in status line",
-      "description": "The status line's right slot reads '<session> · <model>' (prototype shows the name in its title bar); seeded from the session file's stem, updated by Event::SessionName on resume and rename",
+      "description": "The status line's right slot reads '<session> \u00c2\u00b7 <model>' (prototype shows the name in its title bar); seeded from the session file's stem, updated by Event::SessionName on resume and rename",
       "dependencies": [
         "feat-018"
       ],
       "status": "done",
-      "evidence": "cargo build clean; name_of() covered by session::tests; visible as 'two · Qwen/...' when launched with --session two"
+      "evidence": "cargo build clean; name_of() covered by session::tests; visible as 'two \u00c2\u00b7 Qwen/...' when launched with --session two"
     },
     {
       "id": "feat-020",
       "name": "/rename <new-name>",
-      "description": "Renames the active session's file to .rustypi/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints 'ℹ renamed old → new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as '· soon'",
+      "description": "Renames the active session's file to .rustypi/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints '\u00e2\u201e\u00b9 renamed old \u00e2\u2020\u2019 new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as '\u00c2\u00b7 soon'",
       "dependencies": [
         "feat-018"
       ],
@@ -246,6 +246,16 @@
       ],
       "status": "done",
       "evidence": "render.rs tests markdown_markers_become_styling_not_literal_characters and markdown_wrapping_measures_visible_text_not_markers; cargo test 12 passed"
+    },
+    {
+      "id": "feat-025",
+      "name": "Alternate Screen TUI",
+      "description": "The TUI runs on the terminal's alternate screen buffer (EnterAlternateScreen on start, LeaveAlternateScreen on exit, both quit and /reload paths) instead of the main screen. Launch paints a fresh canvas \u2014 no gap between the shell prompt and the bottom-pinned panel, no leftovers from previous runs; quit restores the primary buffer exactly, so shell history survives and the 'Come back again, boss' farewell lands right under the launch line. The earlier quit-time escape clears (ESC[2J/3J) are gone \u2014 3J was eating the shell scrollback. Transcripts persist via session.json + /resume, not terminal scrollback.",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "src/tui/mod.rs run(): EnterAlternateScreen/cursor::Hide on start, cursor::Show/LeaveAlternateScreen before the Exit match; live-verified in PowerShell (no gap at launch, farewell under the prompt, scrollback intact); cargo test 13 passed; release build + --self-test OK"
     }
   ]
 }

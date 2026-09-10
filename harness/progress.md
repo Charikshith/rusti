@@ -119,13 +119,13 @@ paths (the temp dir is on another drive here) — production paths always are.
 Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live runs with
 `--session smoke` and `--session two` against 127.0.0.1:8080.
 
-## Completed (23/23 features)
+## Completed (25/25 features)
 1. ✅ Project Setup & Baseline — cargo build (release), cargo test, --self-test
 2. ✅ Core Agent Loop — run_agent with tool dispatch, session persistence (round cap now 50, see feat-022)
 3. ✅ LLM Streaming & SSE — reqwest SSE with \n\n/\r\n\r\n delimiters, per-index argument accumulation
 4. ✅ Tool Implementations — the original 5: read/write/edit file, run command, ask user (extended by feat-021/023)
 5. ✅ Model Config & CLI — model.json with profiles, --list/--use/--add, env vars, interactive add
-6. ✅ TUI Mode — pi-style main screen, synchronized output (CSI 2026), differential rendering, plain fallback
+6. ✅ TUI Mode — pi-style renderer, synchronized output (CSI 2026), differential rendering, plain fallback (screen model now alternate, see 25)
 7. ✅ Self-Test — fake SSE server, sync tool assertions, session tree checks
 8. ✅ Session Persistence & Tree — tree structure (id/parentId), pi-style branching, --tree (diff renderer) + --resume
 9. ✅ Live LLM Integration — tested against localhost:20128 with cx/gpt-5.4-mini and mimo-v2.5-pro
@@ -143,6 +143,8 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 21. ✅ Native Search & Edit Tools — grep/glob/list_dir (ripgrep when installed, std fallback), multi_edit, ranged reads, command timeout
 22. ✅ Iteration Cap & Project Instructions — 50 rounds with --max-iters, AGENTS.md appended to the system prompt every turn
 23. ✅ Agent Safety & Workflow Tools — permission gate (--yolo), project-root write guard, delete/move, background jobs, todo, delegate sub-agent
+24. ✅ TUI Markdown Rendering — headings/bold/inline code/bullets/fences as style runs, no parser crate
+25. ✅ Alternate Screen TUI — fresh canvas at launch (no gap below the prompt), quit restores the primary buffer exactly (history intact, farewell under the launch line)
 
 ## Build Status
 - `cargo build --release` — 0 warnings, 0 errors (release rebuild blocked while the TUI runs: exe lock — use /reload in-TUI instead)
