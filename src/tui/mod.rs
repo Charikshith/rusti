@@ -306,8 +306,11 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         agent.0.take().map(|h| h.join());
         match res? {
             app::Exit::Quit => {
-                // leave a clean screen, not this session's transcript
-                let _ = execute!(stdout(), terminal::Clear(terminal::ClearType::All));
+                // wipe the visible screen AND the scrollback, home the cursor,
+                // so the next prompt starts fresh — no gap, no old transcript.
+                // 3J is ignored by terminals that don't support it (safe).
+                let _ = write!(stdout(), "\x1b[2J\x1b[3J\x1b[H");
+                let _ = stdout().flush();
                 println!("Come back again, boss");
                 Ok(())
             }
