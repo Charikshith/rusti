@@ -46,3 +46,9 @@
 - Windows exe lock: running TUI blocks cargo from overwriting rustypi.exe; the in-TUI /reload (target/reload + staged copy) is the designed path, but closing the TUI + plain rebuild is simpler when possible.
 - Leftover transcript on relaunch: main-screen TUI (no alternate buffer, by design) + no clear-on-quit. Fixed with terminal::Clear(All) + farewell line on Exit::Quit.
 - No user corrections this session; the "why do I see the old screen" confusion was binary staleness, not render state.
+
+## 2026-07-14 (2) — quit-screen saga: main-screen design was the root cause
+- Three attempts at the quit artifact: ESC[2J alone (gap remained, farewell floated at bottom), +ESC[3J (gap gone but ate the shell history), 2J+home (gap remained between launch line and panel — the panel pins to the terminal bottom by design).
+- Root cause was never the clear sequence: a main-screen TUI with a bottom-pinned panel always leaves a hole between the shell's last line and the input field. Alternate screen is the only fix that preserves the primary buffer exactly.
+- Switched to EnterAlternateScreen/LeaveAlternateScreen; quit now needs no clearing at all, farewell prints right under the launch line.
+- Lesson: when a cosmetic terminal fix needs escalating escape-sequence hacks, question the screen-buffer model instead of tuning the sequences.

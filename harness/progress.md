@@ -167,3 +167,6 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - The permission prompt end to end in the TUI (the ask path it reuses is exercised, the gate itself is not)
 - `delegate` against a real model
 - Any long task against the raised 50-round cap — context compaction is the likely first wall
+
+## 2026-07-14 — alternate screen
+- TUI now runs on the alternate screen (EnterAlternateScreen/LeaveAlternateScreen): no gap between the shell prompt and the bottom-pinned panel at launch, and quit restores the primary buffer exactly — `Come back again, boss` prints right under the launch line, shell history untouched. Transcripts persist via session.json + /resume.
