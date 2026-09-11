@@ -87,7 +87,7 @@ pub fn set_max_iters(n: usize) {
 }
 
 /// Project instructions files, first hit wins. Read every turn so edits are live.
-const INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "RUSTYPI.md", "CLAUDE.md"];
+const INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "RUSTI.md", "CLAUDE.md"];
 const MAX_INSTRUCTIONS: usize = 20_000;
 
 fn instructions_from(dir: &std::path::Path) -> Option<(String, String)> {
@@ -134,7 +134,7 @@ fn decide(name: &str, answer: &str) -> bool {
     }
 }
 
-/// One level of delegation: a fresh session under .rustypi/sessions/, same tools, same cap.
+/// One level of delegation: a fresh session under .rusti/sessions/, same tools, same cap.
 static DEPTH: AtomicUsize = AtomicUsize::new(0);
 
 async fn delegate(client: &llm::Client, task: &str, cancel: &AtomicBool) -> (bool, String) {
@@ -407,14 +407,14 @@ pub fn self_test() {
     assert_eq!(MAX_ITERS.load(Ordering::Relaxed), 1);
     set_max_iters(50);
 
-    // project instructions: AGENTS.md wins over RUSTYPI.md; empty/missing -> none
+    // project instructions: AGENTS.md wins over RUSTI.md; empty/missing -> none
     let d = std::path::Path::new("_test_instr");
     std::fs::create_dir_all(d).unwrap();
     assert!(instructions_from(d).is_none());
-    std::fs::write(d.join("RUSTYPI.md"), "use tabs").unwrap();
-    assert_eq!(instructions_from(d).unwrap(), ("RUSTYPI.md".to_string(), "use tabs".to_string()));
+    std::fs::write(d.join("RUSTI.md"), "use tabs").unwrap();
+    assert_eq!(instructions_from(d).unwrap(), ("RUSTI.md".to_string(), "use tabs".to_string()));
     std::fs::write(d.join("AGENTS.md"), "  \n").unwrap(); // blank file is skipped
-    assert_eq!(instructions_from(d).unwrap().0, "RUSTYPI.md");
+    assert_eq!(instructions_from(d).unwrap().0, "RUSTI.md");
     std::fs::write(d.join("AGENTS.md"), "run cargo test").unwrap();
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();

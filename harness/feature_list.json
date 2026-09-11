@@ -1,8 +1,8 @@
 {
   "_meta": {
     "type": "state",
-    "title": "rustypi Feature Tracker",
-    "description": "Tracks feature status for the rustypi Rust coding agent",
+    "title": "rusti Feature Tracker",
+    "description": "Tracks feature status for the rusti Rust coding agent",
     "artifact": "harness/feature_list.json"
   },
   "features": [
@@ -94,7 +94,7 @@
         "feat-006"
       ],
       "status": "done",
-      "evidence": "model.json with mimo-v2.5-pro default, key persisted, streaming verified via curl and rustypi CLI"
+      "evidence": "model.json with mimo-v2.5-pro default, key persisted, streaming verified via curl and rusti CLI"
     },
     {
       "id": "feat-010",
@@ -119,7 +119,7 @@
     {
       "id": "feat-012",
       "name": "/reload: hot rebuild + relaunch",
-      "description": "TUI slash command rebuilds rustypi from its own source (CARGO_MANIFEST_DIR) into target/reload, runs a uniquely-named copy of the binary (never the built file itself, so cargo can always overwrite it despite Windows exe-locking), and relaunches: exec on Unix, wait-as-thin-wrapper on Windows (exiting after spawn would let the shell fight the child for console input). Preserves the session (saved first, then --resume), live model (--url/--key/--model, survives a mid-session /use), and visible transcript (reconstructed from session.json on the new process). Guarded to idle turns only; build failures leave the running session untouched. /model opens an arrow-key picker over saved profiles (active marked, starts selected) or switches by name.",
+      "description": "TUI slash command rebuilds rusti from its own source (CARGO_MANIFEST_DIR) into target/reload, runs a uniquely-named copy of the binary (never the built file itself, so cargo can always overwrite it despite Windows exe-locking), and relaunches: exec on Unix, wait-as-thin-wrapper on Windows (exiting after spawn would let the shell fight the child for console input). Preserves the session (saved first, then --resume), live model (--url/--key/--model, survives a mid-session /use), and visible transcript (reconstructed from session.json on the new process). Guarded to idle turns only; build failures leave the running session untouched. /model opens an arrow-key picker over saved profiles (active marked, starts selected) or switches by name.",
       "dependencies": [
         "feat-008",
         "feat-011"
@@ -180,12 +180,12 @@
     {
       "id": "feat-018",
       "name": "Named sessions + /resume picker",
-      "description": "--session NAME (or RUSTYPI_SESSION) stores a session at .rustypi/sessions/NAME.json, the root session.json staying the unnamed default. /resume with no argument opens an arrow-driven picker (name, entries, relative age, latest user message); /resume 2 or /resume NAME skips it. Resuming replaces the on-screen transcript and recallable history via Event::Resumed",
+      "description": "--session NAME (or RUSTI_SESSION) stores a session at .rusti/sessions/NAME.json, the root session.json staying the unnamed default. /resume with no argument opens an arrow-driven picker (name, entries, relative age, latest user message); /resume 2 or /resume NAME skips it. Resuming replaces the on-screen transcript and recallable history via Event::Resumed",
       "dependencies": [
         "feat-006"
       ],
       "status": "done",
-      "evidence": "session::tests::info_reports_entry_count_and_latest_user_message; tests::task_arg_skips_flag_values; smoke: rustypi --session smoke \"...\" wrote .rustypi/sessions/smoke.json and answered"
+      "evidence": "session::tests::info_reports_entry_count_and_latest_user_message; tests::task_arg_skips_flag_values; smoke: rusti --session smoke \"...\" wrote .rusti/sessions/smoke.json and answered"
     },
     {
       "id": "feat-019",
@@ -200,7 +200,7 @@
     {
       "id": "feat-020",
       "name": "/rename <new-name>",
-      "description": "Renames the active session's file to .rustypi/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints '\u00e2\u201e\u00b9 renamed old \u00e2\u2020\u2019 new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as '\u00c2\u00b7 soon'",
+      "description": "Renames the active session's file to .rusti/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints '\u00e2\u201e\u00b9 renamed old \u00e2\u2020\u2019 new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as '\u00c2\u00b7 soon'",
       "dependencies": [
         "feat-018"
       ],
@@ -220,17 +220,17 @@
     {
       "id": "feat-022",
       "name": "Iteration Cap & Project Instructions",
-      "description": "MAX_ITERS 10 -> 50, overridable with --max-iters N / RUSTYPI_MAX_ITERS; system prompt appends AGENTS.md (fallback RUSTYPI.md, CLAUDE.md) from cwd, re-read every turn so edits are live, capped at 20k chars",
+      "description": "MAX_ITERS 10 -> 50, overridable with --max-iters N / RUSTI_MAX_ITERS; system prompt appends AGENTS.md (fallback RUSTI.md, CLAUDE.md) from cwd, re-read every turn so edits are live, capped at 20k chars",
       "dependencies": [
         "feat-002"
       ],
       "status": "done",
-      "evidence": "--self-test: set_max_iters floor, instructions_from precedence (AGENTS.md > RUSTYPI.md, blank file skipped), system_prompt starts with SYSTEM_PROMPT"
+      "evidence": "--self-test: set_max_iters floor, instructions_from precedence (AGENTS.md > RUSTI.md, blank file skipped), system_prompt starts with SYSTEM_PROMPT"
     },
     {
       "id": "feat-023",
       "name": "Agent Safety & Workflow Tools",
-      "description": "Permission gate on write/edit/multi_edit/run_command/run_background/delete/move via Event::Ask (y / n / a=always for that tool), --yolo or RUSTYPI_YOLO=1 skips; project-root guard on all write paths (canonicalized deepest-existing ancestor, refuses ../ and absolute-outside); delete_file, move_file; run_background + job_output + job_stop (taskkill /T on Windows); todo list tool rendered to the transcript; delegate(task) runs a one-level sub-agent in its own .rustypi/sessions/sub-*.json and returns only its report",
+      "description": "Permission gate on write/edit/multi_edit/run_command/run_background/delete/move via Event::Ask (y / n / a=always for that tool), --yolo or RUSTI_YOLO=1 skips; project-root guard on all write paths (canonicalized deepest-existing ancestor, refuses ../ and absolute-outside); delete_file, move_file; run_background + job_output + job_stop (taskkill /T on Windows); todo list tool rendered to the transcript; delegate(task) runs a one-level sub-agent in its own .rusti/sessions/sub-*.json and returns only its report",
       "dependencies": [
         "feat-021"
       ],

@@ -4,7 +4,7 @@
 - **Fixed feat-026 — multi-tool-call message integrity.** A session failed on *every* turn with
   `[CommandCode error: {"type":"server_error","message":"Tool result is missing for tool call call_00_7dueXDf20YUXmQlI48NA3107."}]`,
   while the same model worked through pi.
-- **Root cause (rustypi, not the provider):** `run_agent` added each tool result as a **sibling**
+- **Root cause (rusti, not the provider):** `run_agent` added each tool result as a **sibling**
   under the assistant entry. `path_messages()` walks a single parent chain from the active leaf, so a
   turn that emitted two tool calls (`run_command` + `list_dir`) sent only the *last* result — the
   first tool call was left dangling and the API rejected the request. The broken prefix stayed on the

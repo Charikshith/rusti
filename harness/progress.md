@@ -1,4 +1,4 @@
-# Progress: rustypi
+# Progress: rusti
 
 ## Current State
 **Phase**: MVP Complete — Agent Live-Tested
@@ -49,15 +49,15 @@
   being wrong alone
 
 ## Session 2026-09-09: Safety + workflow tools (feat-023)
-- Permission gate in `run_agent` before `dispatch`: gated tools ask through the existing `Event::Ask` (so the TUI needed no change) with `y / n / a(lways for this tool)`; `decide()` is the pure decision so it is under test. `--yolo` / `RUSTYPI_YOLO=1` skips. Piped stdin -> "no answer given" -> denied, by design
+- Permission gate in `run_agent` before `dispatch`: gated tools ask through the existing `Event::Ask` (so the TUI needed no change) with `y / n / a(lways for this tool)`; `decide()` is the pure decision so it is under test. `--yolo` / `RUSTI_YOLO=1` skips. Piped stdin -> "no answer given" -> denied, by design
 - `tools::guard()` refuses writes outside the canonicalized cwd; it canonicalizes the deepest *existing* ancestor and re-appends the rest so not-yet-created files and `../` are judged on the real path. Applied to write/multi_edit/delete/move only; reads stay open (recorded as Read-Side Sandbox in open-work)
-- New tools: `delete_file`, `move_file` (refuses to clobber), `run_background` / `job_output` / `job_stop` (shared 1 MB ring buffer fed by pump threads; `job_output(0)` lists; stop uses `taskkill /T /F` on Windows because `cmd /C` wraps the real process), `todo` (whole-list replace, rendered `☑ ◐ ☐` and emitted as `Event::Text` lines), `delegate` (one level, `Box::pin(run_agent)` on a fresh `Session` under `.rustypi/sessions/sub-*.json`, `DEPTH` guard refuses nesting)
+- New tools: `delete_file`, `move_file` (refuses to clobber), `run_background` / `job_output` / `job_stop` (shared 1 MB ring buffer fed by pump threads; `job_output(0)` lists; stop uses `taskkill /T /F` on Windows because `cmd /C` wraps the real process), `todo` (whole-list replace, rendered `☑ ◐ ☐` and emitted as `Event::Text` lines), `delegate` (one level, `Box::pin(run_agent)` on a fresh `Session` under `.rusti/sessions/sub-*.json`, `DEPTH` guard refuses nesting)
 - `dispatch` now takes `client` and `cancel` for delegate; `edit_file`/`run_command` share `shell()`; `truncate` is `pub`
 - Self-test flips `YOLO` on for the fake-server run (a prompt with no stdin would deny the scripted `run_command`) and off again around the guard checks
 
 ## Session 2026-09-09: Iteration cap + project instructions (feat-022)
-- `MAX_ITERS` is now an `AtomicUsize` defaulting to 50 (was a const 10 that killed any real read/edit/test/fix task); `--max-iters N` or `RUSTYPI_MAX_ITERS` overrides, floor 1. Flag is in `VALUE_FLAGS` so its value is never mistaken for the task
-- `system_prompt()` appends the working directory's `AGENTS.md` (fallback `RUSTYPI.md`, `CLAUDE.md`; blank files skipped, 20k cap). Read every turn — the system entry already refreshed each turn, so instruction edits are live mid-session
+- `MAX_ITERS` is now an `AtomicUsize` defaulting to 50 (was a const 10 that killed any real read/edit/test/fix task); `--max-iters N` or `RUSTI_MAX_ITERS` overrides, floor 1. Flag is in `VALUE_FLAGS` so its value is never mistaken for the task
+- `system_prompt()` appends the working directory's `AGENTS.md` (fallback `RUSTI.md`, `CLAUDE.md`; blank files skipped, 20k cap). Read every turn — the system entry already refreshed each turn, so instruction edits are live mid-session
 
 ## Session 2026-09-09: Native search + edit tools (feat-021)
 - Tools grew from 5 to 9: `grep`, `glob`, `list_dir`, `multi_edit`; `read_file` gained `offset`/`limit` (ranged reads are line-numbered, whole reads stay raw); `run_command` gained `timeout_secs` (default 120, polls `try_wait`, kills at deadline)
@@ -67,7 +67,7 @@
 - Removed the three matching open-work items (Command Timeouts, Native Search Tools, Multi-Edit)
 
 ## Session 2026-09-09: /reload (hot rebuild + relaunch)
-- Added TUI `/reload`: rebuilds rustypi from `CARGO_MANIFEST_DIR` (works even when cwd is some other project being coded on) into `target/reload`, then runs a uniquely-named *copy* of the binary — the built file is never the running one, so cargo can always overwrite it (Windows locks a running exe). Relaunch is a true `exec` on Unix; on Windows the old process waits as a thin wrapper (exiting after `spawn` let the shell take its prompt back and fight the child for console input). A first version ping-ponged two build dirs — that breaks on the 3rd reload once parents wait, hence the copy approach
+- Added TUI `/reload`: rebuilds rusti from `CARGO_MANIFEST_DIR` (works even when cwd is some other project being coded on) into `target/reload`, then runs a uniquely-named *copy* of the binary — the built file is never the running one, so cargo can always overwrite it (Windows locks a running exe). Relaunch is a true `exec` on Unix; on Windows the old process waits as a thin wrapper (exiting after `spawn` let the shell take its prompt back and fight the child for console input). A first version ping-ponged two build dirs — that breaks on the 3rd reload once parents wait, hence the copy approach
 - Relaunch preserves: session (saved first, `--resume` only if that save succeeded — a turn that failed before its first save otherwise pointed `--resume` at a missing file), the live model/url/key (explicit flags, survives a mid-session `/use` even if model.json disagrees), and the visible transcript (now reconstructed from `session.json` on TUI startup — previously a resumed session showed a blank screen). `--tree` is stripped from the relaunch argv
 - Added `/model`: lists saved profiles with the active one marked, or `/model <name>` switches (shares `switch_model` with `/use`)
 - Build failures are non-destructive: reported inline (tail of stderr), current session/process untouched; gated on `app.done` so it can't race an in-flight turn
@@ -81,7 +81,7 @@
 - Compared against pi interactive mode source; remaining gaps recorded in harness/open-work.md
 
 ## Session 2026-09-09: HTML prototype parity (feat-013 … feat-018)
-Implemented the 8 gaps between prototype/rustypi-tui.html and the Rust TUI, one at a time:
+Implemented the 8 gaps between prototype/rusti-tui.html and the Rust TUI, one at a time:
 1. Tool wall time — `Event::ToolEnd` carries `ms`, measured around dispatch (and around /reload's cargo build); `ai_core::took` formats 450ms / 1.6s
 2. Ctrl+C twice to exit — first press clears input + cancels the turn, second within 2s quits, yellow `press ctrl+c again to exit` while armed, any other key disarms
 3. `/quit` — `handle_command` returns bool; true means Exit::Quit
@@ -89,7 +89,7 @@ Implemented the 8 gaps between prototype/rustypi-tui.html and the Rust TUI, one 
 5. Thinking block — `reasoning_content`/`reasoning` deltas stream into a dim `│ ` block, closed by the answer or a tool call, never fed back as content
 6. Slash menu — lone `/word` opens it above the input: 5 rows, up/down over the whole list, Tab completes, Enter runs, Esc dismisses for that text, counter row on overflow, queued commands shown `· soon`
 7. Status hint policy — `ctrl+c twice to quit` only on a fresh prompt or when scrolled off the bottom, else blank
-8. Named sessions + `/resume` picker — `--session NAME` → `.rustypi/sessions/NAME.json` (root session.json stays the unnamed default), no-arg `/resume` opens an arrow picker, `/resume 2|NAME` skips it, `Event::Resumed` swaps transcript + history
+8. Named sessions + `/resume` picker — `--session NAME` → `.rusti/sessions/NAME.json` (root session.json stays the unnamed default), no-arg `/resume` opens an arrow picker, `/resume 2|NAME` skips it, `Event::Resumed` swaps transcript + history
 
 Also fixed (root cause, found by the smoke run): `task_arg` took any bare argument as the task,
 so `--session smoke "..."` ran "smoke" as the task — flag values are now skipped for
@@ -108,7 +108,7 @@ Verification: `cargo test` 6 passed (new: stats row, slash filter, session info,
 ## Session 2026-09-09b: prototype refresh (feat-019, feat-020)
 The prototype gained three things after the parity pass; all three landed:
 - Active session name in the chrome — the status line's right slot is now `<session> · <model>`, fed by `Event::SessionName` (seeded from the session file stem, updated on resume and rename)
-- `/rename <new-name>` — moves the active session to `.rustypi/sessions/<name>.json`; name check is ASCII alnum + `._-` up to 40, refuses a taken or current name, an unsaved session just repoints its path. Extracted as `rename_session()` so the file move is under test
+- `/rename <new-name>` — moves the active session to `.rusti/sessions/<name>.json`; name check is ASCII alnum + `._-` up to 40, refuses a taken or current name, an unsaved session just repoints its path. Extracted as `rename_session()` so the file move is under test
 - `/session list|switch` added to the menu as `· soon` (still queued in open-work)
 
 Also: `/reload`'s relaunch argv now replaces a stale `--session` pair with the live session name, so a mid-session `/rename` survives the hot rebuild.
@@ -183,4 +183,4 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 
 - `/use` / `/model` used to append the line `  ✓ model switched to <model>` to the transcript, but the bottom status line already shows `<session> · <model>` (tui/render.rs), so the note was redundant.
 - Dropped the `Event::Text` in the `Job::Model` arm (tui/mod.rs); the status line updates immediately because `switch_model` sets `app.model` synchronously.
-- Verification: `cargo check` clean, `cargo test` 13 passed. Release build was blocked by the Windows exe lock (a rustypi TUI running) — unrelated to the change.
+- Verification: `cargo check` clean, `cargo test` 13 passed. Release build was blocked by the Windows exe lock (a rusti TUI running) — unrelated to the change.

@@ -54,13 +54,13 @@ pub enum Job {
     Reload,
 }
 
-/// Absolute path to rustypi's own Cargo.toml, baked in at build time — so
-/// /reload rebuilds rustypi's source even when the agent's cwd is some other
+/// Absolute path to rusti's own Cargo.toml, baked in at build time — so
+/// /reload rebuilds rusti's source even when the agent's cwd is some other
 /// project it's coding on.
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Copy the freshly built binary to a unique name and return its path. We run
-/// copies, never `target/reload/release/rustypi` itself, so cargo can always
+/// copies, never `target/reload/release/rusti` itself, so cargo can always
 /// overwrite that file: Windows locks a running exe, and on Windows every
 /// previous generation stays alive as a thin wrapper (see run()), so a fixed
 /// pair of build dirs would run out on the third reload. Stale copies from
@@ -70,7 +70,7 @@ fn stage_reload_exe(target_dir: &str) -> io::Result<String> {
     if let Ok(rd) = std::fs::read_dir(target_dir) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with("rustypi-") && name.ends_with(ext) {
+            if name.starts_with("rusti-") && name.ends_with(ext) {
                 let _ = std::fs::remove_file(e.path());
             }
         }
@@ -79,8 +79,8 @@ fn stage_reload_exe(target_dir: &str) -> io::Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let exe = format!("{target_dir}/rustypi-{ts}{ext}");
-    std::fs::copy(format!("{target_dir}/release/rustypi{ext}"), &exe)?;
+    let exe = format!("{target_dir}/rusti-{ts}{ext}");
+    std::fs::copy(format!("{target_dir}/release/rusti{ext}"), &exe)?;
     Ok(exe)
 }
 
@@ -423,7 +423,7 @@ mod tests {
         s.save().unwrap();
 
         assert!(rename_session(&mut s, "bad name").is_err());
-        let name = "rustypi_rename_test";
+        let name = "rusti_rename_test";
         assert!(rename_session(&mut s, name).unwrap().ends_with(name));
         assert_eq!(s.path, crate::session::path_for(name));
         assert!(std::path::Path::new(&s.path).exists());

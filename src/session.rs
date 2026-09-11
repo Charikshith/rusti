@@ -11,14 +11,14 @@ pub const PATH: &str = "session.json";
 
 /// Named sessions live here; the bare session.json at the root stays the
 /// unnamed default, so sessions saved before naming existed still load.
-pub const DIR: &str = ".rustypi/sessions";
+pub const DIR: &str = ".rusti/sessions";
 
 pub fn path_for(name: &str) -> String {
     format!("{DIR}/{name}.json")
 }
 
 /// Display name of a session file: its stem, so
-/// `.rustypi/sessions/main.json` reads "main" and the root file "session".
+/// `.rusti/sessions/main.json` reads "main" and the root file "session".
 pub fn name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_stem()
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn info_reports_entry_count_and_latest_user_message() {
-        let p = std::env::temp_dir().join("rustypi_info_test.json");
+        let p = std::env::temp_dir().join("rusti_info_test.json");
         let path = p.to_string_lossy().into_owned();
         let mut s = Session::with_path("m".into(), &path);
         let sys = s.add(Entry::new("system", "sys".into()), None);
@@ -248,7 +248,7 @@ second".into()), Some(sys));
         let i = info(&path).unwrap();
         assert_eq!(i.entries, 3);
         assert_eq!(i.head, "first second");
-        assert_eq!(i.name, "rustypi_info_test");
+        assert_eq!(i.name, "rusti_info_test");
         std::fs::remove_file(&path).ok();
 
         assert!(valid_name("tui-colors") && valid_name("a.b_c9"));

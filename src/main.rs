@@ -1,4 +1,4 @@
-// rustypi: minimal coding agent in Rust. CLI front end —
+// rusti: minimal coding agent in Rust. CLI front end —
 // all agent logic lives in the ai_core module. Model details persist in
 // model.json (see config.rs); the CLI picks the saved profile, or asks to
 // add one when none exists. Flags/env override the saved profile.
@@ -57,10 +57,10 @@ fn main() {
         return;
     }
 
-    if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTYPI_YOLO").map_or(false, |v| v == "1") {
+    if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTI_YOLO").map_or(false, |v| v == "1") {
         ai_core::tools::YOLO.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    if let Some(n) = get(&args, "--max-iters", "RUSTYPI_MAX_ITERS") {
+    if let Some(n) = get(&args, "--max-iters", "RUSTI_MAX_ITERS") {
         match n.parse::<usize>() {
             Ok(n) if n > 0 => ai_core::set_max_iters(n),
             _ => { eprintln!("--max-iters needs a positive integer, got '{n}'"); std::process::exit(1); }
@@ -71,8 +71,8 @@ fn main() {
     let tui_mode = args.iter().any(|a| a == "--tui");
 
     // session + task first (so --tree can be cancelled before any model config)
-    // --session NAME → .rustypi/sessions/NAME.json, else the root session.json
-    let session_path = get(&args, "--session", "RUSTYPI_SESSION")
+    // --session NAME → .rusti/sessions/NAME.json, else the root session.json
+    let session_path = get(&args, "--session", "RUSTI_SESSION")
         .map(|n| session::path_for(&n))
         .unwrap_or_else(|| session::PATH.to_string());
     let mut session;

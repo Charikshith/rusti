@@ -1,4 +1,4 @@
-# rustypi
+# rusti
 
 Minimal coding agent in Rust: async core (tokio + reqwest), custom ANSI
 TUI (no ratatui), ~2.6 MB release binary.
@@ -7,25 +7,25 @@ TUI (no ratatui), ~2.6 MB release binary.
 cargo build --release
 
 # model.json (in cwd) persists model details. First launch asks interactively:
-./target/release/rustypi "add a --version flag to src/main.rs"
+./target/release/rusti "add a --version flag to src/main.rs"
 
 # manage saved models
-./target/release/rustypi --list            # show saved profiles (* = default)
-./target/release/rustypi --use <name>      # switch default
-./target/release/rustypi --add             # add another profile interactively
+./target/release/rusti --list            # show saved profiles (* = default)
+./target/release/rusti --use <name>      # switch default
+./target/release/rusti --add             # add another profile interactively
 
 # TUI mode (custom ANSI renderer, streaming transcript, Esc quits)
 # auto-falls back to plain stream when stdin is piped
-./target/release/rustypi --tui "your task"
+./target/release/rusti --tui "your task"
 
 # session tree (pi-style branching)
-./target/release/rustypi --tree            # browse + branch from earlier entries
-./target/release/rustypi --resume          # continue from active leaf
+./target/release/rusti --tree            # browse + branch from earlier entries
+./target/release/rusti --resume          # continue from active leaf
 
 # flags/env still override the saved profile
-./target/release/rustypi --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTYPI_MAX_ITERS)
-./target/release/rustypi --yolo "task"            # no permission prompts, no project-root guard (env RUSTYPI_YOLO=1)
-./target/release/rustypi --self-test       # offline check, fake server
+./target/release/rusti --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTI_MAX_ITERS)
+./target/release/rusti --yolo "task"            # no permission prompts, no project-root guard (env RUSTI_YOLO=1)
+./target/release/rusti --self-test       # offline check, fake server
 ```
 
 `model.json` example:
@@ -83,7 +83,7 @@ model can inspect dependency sources. `--yolo` lifts both the prompts and the gu
 ## sub-agents and background jobs
 
 `delegate(task)` runs a fresh agent with the same tools in its own session file
-(`.rustypi/sessions/sub-<pid>-<ts>.json`) and returns only its final report, keeping
+(`.rusti/sessions/sub-<pid>-<ts>.json`) and returns only its final report, keeping
 the subtask's reads and edits out of the main context. One level deep; the sub-agent
 streams into the same transcript. `run_background` starts a server or watcher and
 returns a job id; `job_output` reads what it has printed so far, `job_stop` kills the
@@ -92,7 +92,7 @@ a visible checklist for multi-step work.
 
 ## project instructions
 
-If the working directory has an `AGENTS.md` (fallback `RUSTYPI.md`, then `CLAUDE.md`),
+If the working directory has an `AGENTS.md` (fallback `RUSTI.md`, then `CLAUDE.md`),
 its contents are appended to the system prompt. The file is re-read every turn, so
 edits take effect on the next message without a restart.
 
@@ -106,7 +106,7 @@ rather than reflowed.
 
 ## TUI
 
-rustypi uses its own custom terminal renderer built with direct ANSI
+rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
 binary small (~2.6 MB) and the rendering fast — full-screen redraw with
 word wrap, streaming text, and an input box for ask_user questions.
@@ -124,7 +124,7 @@ sessions are stored as a tree of entries with `id`/`parentId` fields,
 mirroring pi's session model. the current position is the active leaf.
 
 ```sh
-./target/release/rustypi --tree   # browse the tree interactively
+./target/release/rusti --tree   # browse the tree interactively
 ```
 
 selection semantics (same as pi's `/tree`):
@@ -139,8 +139,8 @@ with piped stdin: plain numbered list, type a number and press Enter.
 
 ## /reload
 
-Inside the TUI, `/reload` rebuilds rustypi from its own source and relaunches
-in place — for developing rustypi with rustypi. It preserves the session
+Inside the TUI, `/reload` rebuilds rusti from its own source and relaunches
+in place — for developing rusti with rusti. It preserves the session
 (`--resume`), the active model (even if switched mid-session with `/use`),
 and the visible transcript. Only runs when idle (finish or Esc-interrupt the
 current turn first); a build failure is reported inline and leaves the

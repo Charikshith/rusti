@@ -29,10 +29,10 @@
 - Esc→interrupt vs Ctrl+C→clear vs Ctrl+D→exit: pi's exact key model; users habitually hit Ctrl+C to cancel — noted as a follow-up option
 
 ### 2026-09-09 — TUI prototype review loop (Lavish)
-- Ran `prototype/rustypi-tui.html` through five rounds of browser annotation; every request (whole-line tool colour, /quit, /resume picker, dim reasoning block, per-tool ms, quit-hint gating, /rename) already existed in `src` — confirmed only after `rtk proxy grep`
+- Ran `prototype/rusti-tui.html` through five rounds of browser annotation; every request (whole-line tool colour, /quit, /resume picker, dim reasoning block, per-tool ms, quit-hint gating, /rename) already existed in `src` — confirmed only after `rtk proxy grep`
 - Correction received: told the user three features were unbuilt on the strength of a filtered grep that returned nothing. Lesson saved as `harness/memory/rtk-filters-command-output.md`
 - Session-start `git status` listed no `src` changes; `git diff --stat HEAD` later showed 14 files / 1015 insertions. Cause unconfirmed — stale snapshot or a concurrent session in the same worktree. Check `git diff --stat HEAD` before trusting the startup snapshot
-- `cargo build --release` fails with `Access is denied` on `target/release/rustypi.exe` while a rustypi is running (Windows exe lock); debug builds and `cargo test` are unaffected
+- `cargo build --release` fails with `Access is denied` on `target/release/rusti.exe` while a rusti is running (Windows exe lock); debug builds and `cargo test` are unaffected
 - `rtk npx … --agent-reply "multi\nline"` dies with `npx: batch file arguments are invalid`; single-line arguments only
 
 ### 2026-09-09 — /model navigation bug
@@ -42,8 +42,8 @@
 - Lesson: when two slash commands do the same shape of thing, check whether one already has the UI the other is missing before writing new key handling
 
 ## 2026-09-10 — /model picker + quit farewell
-- User saw the OLD plain-text /model list twice because they ran target/release/rustypi.exe while the picker was only in the uncommitted working tree — committed code ≠ running binary is the trap here.
-- Windows exe lock: running TUI blocks cargo from overwriting rustypi.exe; the in-TUI /reload (target/reload + staged copy) is the designed path, but closing the TUI + plain rebuild is simpler when possible.
+- User saw the OLD plain-text /model list twice because they ran target/release/rusti.exe while the picker was only in the uncommitted working tree — committed code ≠ running binary is the trap here.
+- Windows exe lock: running TUI blocks cargo from overwriting rusti.exe; the in-TUI /reload (target/reload + staged copy) is the designed path, but closing the TUI + plain rebuild is simpler when possible.
 - Leftover transcript on relaunch: main-screen TUI (no alternate buffer, by design) + no clear-on-quit. Fixed with terminal::Clear(All) + farewell line on Exit::Quit.
 - No user corrections this session; the "why do I see the old screen" confusion was binary staleness, not render state.
 
@@ -53,7 +53,7 @@
 - Switched to EnterAlternateScreen/LeaveAlternateScreen; quit now needs no clearing at all, farewell prints right under the launch line.
 - Lesson: when a cosmetic terminal fix needs escalating escape-sequence hacks, question the screen-buffer model instead of tuning the sequences.
 ## 2026-09-10 (3) - CommandCode "Tool result is missing"
-- Reported as a provider problem; it was a rustypi bug. Traced by walking the active parent chain in session.json: m3 (2 tool calls) -> m5 only, m4 orphaned.
+- Reported as a provider problem; it was a rusti bug. Traced by walking the active parent chain in session.json: m3 (2 tool calls) -> m5 only, m4 orphaned.
 - Had to look up: session.add with the same parent creates a fan-out, and path() follows one chain - the tree looked whole but the request was not.
 - Surprise: the error repeated on every later turn because the broken prefix stayed on the active path; no retry could clear it.
 - Would do differently: when a provider rejects on message shape, dump the actual request (path_messages output) before blaming the provider.

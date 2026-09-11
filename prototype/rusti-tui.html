@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>rustypi TUI prototype</title>
+<title>rusti TUI prototype</title>
 <style>
   /* palette - mirrors the ANSI codes used in src/tui/render.rs */
   :root {
@@ -82,7 +82,7 @@
 </style>
 
 <div class="wrap">
-  <div class="bar"><i></i><i></i><i></i><span>rustypi --tui &nbsp;&middot;&nbsp; D:\Code\AI\Agents\rustypi &nbsp;&middot;&nbsp; <span id="sess"></span></span></div>
+  <div class="bar"><i></i><i></i><i></i><span>rusti --tui &nbsp;&middot;&nbsp; D:\Code\AI\Agents\rusti &nbsp;&middot;&nbsp; <span id="sess"></span></span></div>
   <div id="term">
     <div id="transcript"></div>
     <div id="overlay" hidden></div>
@@ -125,8 +125,8 @@ const CMDS = [
   { c: '/resume',  d: 'pick a saved session and continue it' },
   { c: '/rename',  d: '/rename <new-name> - rename the active session' },
   { c: '/tree',    d: 'dump the current session path' },
-  { c: '/reload',  d: 'rebuild rustypi from source and relaunch' },
-  { c: '/quit',    d: 'exit rustypi (same as ctrl+c twice)' },
+  { c: '/reload',  d: 'rebuild rusti from source and relaunch' },
+  { c: '/quit',    d: 'exit rusti (same as ctrl+c twice)' },
   { c: '/undo',    d: 'drop the last turn', soon: true },
   { c: '/commit',  d: 'draft a commit message from this session', soon: true },
   { c: '/plan',    d: 'plan mode: no writes until approved', soon: true },
@@ -135,7 +135,7 @@ const CMDS = [
   { c: '/session', d: '/session list|switch <name>', soon: true },
 ];
 const MENU_ROWS = 5;      // visible at once; arrows scroll the rest
-// saved sessions. real source: .rustypi/sessions/<name>.json, one tree per
+// saved sessions. real source: .rusti/sessions/<name>.json, one tree per
 // name (open-work.md "Named / Multiple Sessions"); today src has a single
 // session.json, so the picker below is the proposal, not the built behaviour.
 const SESSIONS = [
@@ -420,7 +420,7 @@ function command(raw) {
                    '3. user: add a --version flag to src/main.rs',
                    '4. assistant: Added --version to src/main.rs.'].join('\n'));
     case '/rename': {
-      // the name is a file stem (.rustypi/sessions/<name>.json), so it gets
+      // the name is a file stem (.rusti/sessions/<name>.json), so it gets
       // the same char check the real command would need
       if (!arg) return push('  \u2717 usage: /rename <new-name>');
       if (!/^[\w.-]{1,40}$/.test(arg)) return push('  \u2717 letters, digits, . _ - only (max 40)');
@@ -526,7 +526,7 @@ function quit() {
   S.exitArmed = false;
   S.cancel = true;
   if (S.ask) { const r = S.ask; S.ask = null; r('interrupted'); }
-  push('  ℹ (prototype) rustypi would exit here');
+  push('  ℹ (prototype) rusti would exit here');
 }
 
 // page-level so typing works without clicking first (review surfaces may take
