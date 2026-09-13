@@ -18,12 +18,24 @@ bytes = "1"
 # after any profile/dependency change — it recompiles the world):
 #   opt-level=3  23.5s / 3.27MB      opt-level=2  24.0s / 3.13MB
 #   opt-level=s  19.0s / 2.55MB      opt-level=z  15.7s / 2.33MB
-#   opt-level=z + trimmed reqwest    13.7s / 1.87MB   <- here
 # "z" is both faster to optimize and much smaller; fat LTO's cost scales with
 # how much IR it merges, so dropping reqwest's unused http2/charset helps twice.
+# The lto x codegen-units matrix, all at opt-level=z with reqwest trimmed:
+#            cgu=1           cgu=4            cgu=16
+#   fat     12.8s/1.87MB    11.7s/1.97MB     12.1s/2.02MB
+#   thin     6.9s/2.02MB     4.2s/2.16MB <-   4.1s/2.28MB
+# Read it twice. Fat LTO is nearly flat across cgu because it merges everything
+# into ONE module and optimizes that serially — cgu only splits the front-end
+# codegen, which is not the bottleneck, so fat cannot reach 10s at any setting.
+# Thin optimizes its units in parallel, so cgu is the whole game; cgu=1 is a
+# fat-LTO habit that serialized exactly the work a one-line edit redoes.
+# And fat/cgu=16 is strictly dominated: same 2.02MB as thin/cgu=1 for 5s more.
+# cgu=16 over 4 is 0.1s for another 120KB — not worth it.
 # `incremental = true` was measured and changed nothing — LTO re-merges anyway.
+# panic="abort" would shave more, but tools.rs relies on join().unwrap_or_default()
+# to survive a panicked reader thread — leave it.
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 4
 strip = true
 opt-level = "z"
