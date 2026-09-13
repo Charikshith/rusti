@@ -2,7 +2,7 @@
 
 ## Suggested Order (2026-09-13 review)
 
-Tier 1 — bites on the first real long task: Tool Output Visibility (Prompt-Token Tracking, Context Compaction, Retry landed as feat-028/029/030)
+Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
 Tier 2 — daily-driver quality: Diff Before Edit + Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer
 Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
 
@@ -20,10 +20,10 @@ Where: tui/mod.rs word_wrap()
 
 ## TUI Experience Gaps (from pi comparison, 2026-04-10 session)
 
-### Tool Output Visibility
-When: User sees `✓ cargo test` but not WHY it failed
-What: Show expandable tool stdout/stderr in tool lines (Ctrl+O expands all); result already stored in session entries, this is a rendering change only
-Where: tui/render.rs + tui/app.rs ToolEnd handler
+### Tool Output Expand Toggle
+When: feat-031 shows the tail of *failed* tool output only; a successful `cargo test` or `grep` still hides its result
+What: Ctrl+O toggles showing the tail for every tool line (carry `output` on success too, render on demand); the data is already in the session entries
+Where: tui/app.rs ToolEnd handler + key handler, ai_core/mod.rs ToolEnd emit
 
 ### Editor Autocomplete
 When: Typing speed matters; model/file names not discoverable (slash commands done)

@@ -405,12 +405,13 @@ pub fn ui_loop(
                     app.lines.push(format!("  ⠋ {t}"));
                     app.tool_line = Some(app.lines.len() - 1);
                 }
-                ai_core::Event::ToolEnd { summary, ok, ms } => {
+                ai_core::Event::ToolEnd { summary, ok, ms, output } => {
                     let line = format!("  {} {summary}  {}", if ok { "✓" } else { "✗" }, ai_core::took(ms));
                     match app.tool_line.take() {
                         Some(i) if i < app.lines.len() && app.lines[i].starts_with("  ⠋ ") => app.lines[i] = line,
                         _ => app.lines.push(line),
                     }
+                    app.lines.extend(ai_core::fail_tail(&output)); // "  · " rows render dim like the stats line
                 }
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Resumed { lines, history, msg_num } => {

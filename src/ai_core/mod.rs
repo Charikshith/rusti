@@ -14,7 +14,7 @@ pub enum Event {
     ReasoningDelta(String),                    // a chunk of reasoning_content (thinking models)
     Text(String),                              // a complete line of text
     ToolStart(String),                         // tool about to run (short summary)
-    ToolEnd { summary: String, ok: bool, ms: u128 }, // tool finished, with wall time
+    ToolEnd { summary: String, ok: bool, ms: u128, output: String }, // tool finished, with wall time; output only on failure
     Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
     SessionName(String),                       // active session's name, for the status line
     Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
@@ -49,8 +49,11 @@ fn emit(ev: Event) {
             }
             Event::Text(t) => println!("{t}"),
             Event::ToolStart(t) => eprintln!("  ⠋ {t}"),
-            Event::ToolEnd { summary, ok, ms } => {
-                eprintln!("  {} {summary}  {}", if ok { "✓" } else { "✗" }, took(ms))
+            Event::ToolEnd { summary, ok, ms, output } => {
+                eprintln!("  {} {summary}  {}", if ok { "✓" } else { "✗" }, took(ms));
+                for l in fail_tail(&output) {
+                    eprintln!("{l}");
+                }
             }
             Event::TaskEnd { ok, error } => {
                 if !ok {
@@ -268,7 +271,8 @@ pub async fn run_agent(
                 Ok(()) => dispatch(client, &tc.name, &tc.arguments, cancel).await,
                 Err(e) => (false, e),
             };
-            emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis() });
+            let output = if ok { String::new() } else { result.clone() };
+            emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
             parent = session.add(te, Some(parent));
@@ -281,6 +285,20 @@ pub async fn run_agent(
 /// Wall time for a finished tool, terminal-short: "450ms" / "1.6s".
 pub fn took(ms: u128) -> String {
     if ms < 1000 { format!("{ms}ms") } else { format!("{:.1}s", ms as f64 / 1000.0) }
+}
+
+/// The last lines of a failed tool's output as dim transcript rows, so the
+/// user sees WHY under the ✗ without opening the session file.
+pub fn fail_tail(output: &str) -> Vec<String> {
+    const KEEP: usize = 8;
+    let lines: Vec<&str> = output.lines().map(str::trim_end).filter(|l| !l.is_empty()).collect();
+    let skip = lines.len().saturating_sub(KEEP);
+    let mut out = Vec::new();
+    if skip > 0 {
+        out.push(format!("  · … {skip} more lines"));
+    }
+    out.extend(lines[skip..].iter().map(|l| format!("  · {l}")));
+    out
 }
 
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
@@ -461,6 +479,16 @@ pub fn self_test() {
 
     assert_eq!(took(450), "450ms");
     assert_eq!(took(1600), "1.6s");
+
+    // failed tool output: blank lines dropped, long output keeps the tail with a count
+    assert!(fail_tail("").is_empty());
+    assert_eq!(fail_tail("a\r\n\nb\n"), vec!["  · a", "  · b"]);
+    let ten: String = (1..=10).map(|i| format!("l{i}\n")).collect();
+    let t = fail_tail(&ten);
+    assert_eq!(t.len(), 9);
+    assert_eq!(t[0], "  · … 2 more lines");
+    assert_eq!(t[1], "  · l3");
+    assert_eq!(t[8], "  · l10");
 
     // max iters: 1 round with a tool call and no final answer -> iteration error
     set_max_iters(1);

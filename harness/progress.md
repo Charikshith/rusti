@@ -209,3 +209,10 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Transcript line: `⚠ HTTP 503 ...: busy — retry 1/3 in 1.0s`.
 - `--self-test` fake server answers 503 on connection #1, then the two scripted SSE bodies — retry is exercised
   on every self-test run. `cargo test` 13 passed, `--self-test` OK.
+
+## Session 2026-09-13 (4): feat-031 — failed tool output under the ✗ line
+- `Event::ToolEnd` gained `output` (filled only when `ok == false`, empty otherwise so success stays cheap).
+- `ai_core::fail_tail()` turns it into the last 8 non-empty lines as `  · ` rows (dim via the existing stats
+  style) plus `  · … N more lines` when cut; TUI, plain pipe, and CLI stderr all use it.
+- Deferred: Ctrl+O toggle to expand successful tool output (open-work "Tool Output Expand Toggle").
+- `cargo test` 13 passed, `--self-test` OK. Tier 1 of the 2026-09-13 backlog is complete.

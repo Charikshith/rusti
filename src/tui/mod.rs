@@ -230,14 +230,14 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                         .output();
                     let ms = t0.elapsed().as_millis();
                     let fail = |event_tx: &mpsc::Sender<ai_core::Event>, detail: String| {
-                        let _ = event_tx.send(ai_core::Event::ToolEnd { summary: "cargo build --release".into(), ok: false, ms });
+                        let _ = event_tx.send(ai_core::Event::ToolEnd { summary: "cargo build --release".into(), ok: false, ms, output: String::new() });
                         let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ reload failed:\n{detail}")));
                         let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
                     };
                     match out {
                         Ok(o) if o.status.success() => match stage_reload_exe(&target_dir) {
                             Ok(exe) => {
-                                let _ = event_tx.send(ai_core::Event::ToolEnd { summary: "cargo build --release".into(), ok: true, ms });
+                                let _ = event_tx.send(ai_core::Event::ToolEnd { summary: "cargo build --release".into(), ok: true, ms, output: String::new() });
                                 // a turn that failed before its first save leaves entries only in
                                 // memory; persist now so --resume finds them (and doesn't exit 1)
                                 let resume = !session.is_empty() && session.save().is_ok();

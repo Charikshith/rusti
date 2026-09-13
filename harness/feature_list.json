@@ -307,6 +307,16 @@
       ],
       "status": "done",
       "evidence": "--self-test fake server answers 503 on the first connection and the run still completes (RETRY_BASE_MS shrunk to 10ms); retryable() asserted for 503/429 vs 400/401. cargo test 13 passed; --self-test OK."
+    },
+    {
+      "id": "feat-031",
+      "name": "Tool Output Visibility (failures)",
+      "description": "Event::ToolEnd carries the tool's output when it failed; every renderer (TUI, plain pipe, CLI stderr) prints the last 8 non-empty lines under the ✗ line as dim '  · ' rows, with a '… N more lines' header when truncated. Successful tools stay one line. No expand toggle yet.",
+      "dependencies": [
+        "feat-013"
+      ],
+      "status": "done",
+      "evidence": "--self-test asserts fail_tail on empty / CRLF+blank / 10-line inputs; cargo test 13 passed; --self-test OK."
     }
   ]
 }
