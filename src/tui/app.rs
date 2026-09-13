@@ -86,8 +86,21 @@ pub struct Pick {
     pub kind: PickKind,
     pub title: String,
     pub rows: Vec<(String, String)>,
-    pub idx: usize,
-    pub top: usize, // first visible row (window for long lists)
+    pub idx: usize,   // indexes visible(), not rows
+    pub top: usize,   // first visible row (window for long lists)
+    pub filter: String, // typed while the picker is open; substring, case-insensitive
+}
+
+impl Pick {
+    /// Rows matching the typed filter. 37 model profiles is a scroll; three
+    /// letters is not.
+    pub fn visible(&self) -> Vec<&(String, String)> {
+        if self.filter.is_empty() {
+            return self.rows.iter().collect();
+        }
+        let f = self.filter.to_lowercase();
+        self.rows.iter().filter(|(label, _)| label.to_lowercase().contains(&f)).collect()
+    }
 }
 
 /// How ui_loop ended: a plain quit, or a /reload handoff to a new process.
@@ -224,7 +237,10 @@ pub fn ui_loop(
                     }
                     match (k.code, k.modifiers) {
                         // ── session picker owns the keyboard while open ──
-                        (code, _) if app.pick.is_some() => picker_key(&mut app, code, job_tx),
+                        // Ctrl+key falls through, so ctrl+c/ctrl+d still work while it's open
+                        (code, m) if app.pick.is_some() && !m.contains(KeyModifiers::CONTROL) => {
+                            picker_key(&mut app, code, job_tx)
+                        }
                         // ── slash-command menu (open while input is a lone "/word") ──
                         (KeyCode::Up, _) if !menu_items(&app).is_empty() => {
                             app.menu_idx = app.menu_idx.saturating_sub(1);
@@ -269,6 +285,7 @@ pub fn ui_loop(
                             }
                             app.input.clear();
                             app.cursor = 0;
+                            app.pick = None; // first press clears whatever is in the way
                             if !app.done {
                                 cancel.store(true, Ordering::Relaxed);
                                 if let Some((_, reply)) = app.ask.take() {
@@ -429,7 +446,7 @@ pub fn ui_loop(
                     // start on the active leaf (marked ◀ by tree::rows), like /model starts on the active profile
                     let idx = rows.iter().rposition(|(l, _)| l.ends_with(" ◀")).unwrap_or(rows.len() - 1);
                     let top = idx.saturating_sub(PICK_ROWS / 2);
-                    app.pick = Some(Pick { kind: PickKind::Tree, title: "session tree".into(), rows, idx, top });
+                    app.pick = Some(Pick { kind: PickKind::Tree, title: "session tree".into(), rows, idx, top, filter: String::new() });
                 }
                 ai_core::Event::Prefill(t) => {
                     app.cursor = t.chars().count();
@@ -616,8 +633,9 @@ pub fn picker_nav(idx: usize, top: usize, n: usize, delta: isize) -> (usize, usi
     (idx, top)
 }
 
-/// Keys while the picker is open: arrows move, Enter selects, Esc cancels,
-/// everything else is swallowed.
+/// Keys while the picker is open: arrows move, typing filters, Enter selects,
+/// Esc cancels, everything else is swallowed. Ctrl+key never reaches here, so
+/// Ctrl+C still quits instead of typing a 'c'.
 fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
     match code {
         KeyCode::Esc => {
@@ -626,10 +644,29 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
         }
         KeyCode::Enter => {
             let Some(p) = app.pick.take() else { return };
+            let Some((_, value)) = p.visible().get(p.idx).map(|(l, v)| (l.clone(), v.clone())) else {
+                return; // filtered down to nothing: Enter has nothing to pick
+            };
             match p.kind {
-                PickKind::Session => { let _ = job_tx.send(Job::ResumePath(p.rows[p.idx].1.clone())); }
-                PickKind::Model => switch_model(app, job_tx, &p.rows[p.idx].1),
-                PickKind::Tree => { let _ = job_tx.send(Job::Select(p.rows[p.idx].1.clone())); }
+                PickKind::Session => { let _ = job_tx.send(Job::ResumePath(value)); }
+                PickKind::Model => switch_model(app, job_tx, &value),
+                PickKind::Tree => { let _ = job_tx.send(Job::Select(value)); }
+            }
+            return;
+        }
+        KeyCode::Char(c) => {
+            if let Some(p) = app.pick.as_mut() {
+                p.filter.push(c);
+                p.idx = 0; // the old selection may not even be on the list now
+                p.top = 0;
+            }
+            return;
+        }
+        KeyCode::Backspace => {
+            if let Some(p) = app.pick.as_mut() {
+                p.filter.pop();
+                p.idx = 0;
+                p.top = 0;
             }
             return;
         }
@@ -638,7 +675,7 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
     }
     let Some(p) = app.pick.as_mut() else { return };
     let delta: isize = if code == KeyCode::Up { -1 } else { 1 };
-    let (idx, top) = picker_nav(p.idx, p.top, p.rows.len(), delta);
+    let (idx, top) = picker_nav(p.idx, p.top, p.visible().len(), delta);
     p.idx = idx;
     p.top = top;
 }
@@ -683,6 +720,7 @@ fn resume(app: &mut App, job_tx: &Sender<Job>, arg: &str) {
             .collect(),
         idx: 0,
         top: 0,
+        filter: String::new(),
     });
 }
 
@@ -728,5 +766,6 @@ fn pick_model(app: &mut App) {
         rows,
         idx,
         top,
+        filter: String::new(),
     });
 }

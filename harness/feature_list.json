@@ -446,6 +446,30 @@
       ],
       "status": "done",
       "evidence": "Verified by reading tui/app.rs resume(): the arg branch resolves an index or a name to a path and sends Job::ResumePath; the no-arg branch builds the Session picker. Nothing was missing. cargo test 16 passed."
+    },
+    {
+      "id": "feat-043",
+      "name": "Bottom-anchored transcript",
+      "description": "render::transcript_window(total, height, scroll_up) returns (blank rows above, first line, one past last). A transcript shorter than the viewport now pads ABOVE instead of below, so the first message sits just over the input like a shell prompt rather than stranded at row 0 with a screen of empty space under it. scroll_up is also clamped so it cannot walk past the first line.",
+      "dependencies": [
+        "feat-025"
+      ],
+      "status": "done",
+      "evidence": "Reported from a screenshot: the first reply rendered at the top with a large gap above the input. tui::tests::transcript_sits_on_the_input_instead_of_floating_at_the_top covers empty, short, exactly-full, overflowing, scrolled, over-scrolled, short-plus-scroll and zero-height. cargo test 18 passed. Needs a visual confirm in a live TUI."
+    },
+    {
+      "id": "feat-044",
+      "name": "Type-to-filter in the pickers",
+      "description": "Pick gained a `filter` string and a visible() that keeps rows whose label contains it, case-insensitively — so /model (37 profiles), /resume and /tree all narrow as you type. idx/top reset on every keystroke, Backspace deletes, Enter on an empty result set does nothing, and the header shows '(3/37)  qwen▌'. The key guard now lets Ctrl+key fall through, so Ctrl+C quits instead of typing a 'c' into the filter, and a first Ctrl+C also closes the picker.",
+      "dependencies": [
+        "feat-017",
+        "feat-032"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::picker_filter_matches_anywhere_in_the_row_ignoring_case covers empty/hit/case-insensitive/substring-of-the-model-id/no-match. cargo test 18 passed. Needs a live TUI to confirm the keystrokes.",
+      "decisions": [
+        "Substring, not fuzzy: the labels are short and a fuzzy matcher is either a dependency or a scoring function nobody asked for. Matching the whole label means 'zai-org' finds glm-5.1 by its model id, not just its profile name."
+      ]
     }
   ]
 }

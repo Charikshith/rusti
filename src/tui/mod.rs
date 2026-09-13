@@ -521,6 +521,42 @@ mod tests {
     }
 
     #[test]
+    fn transcript_sits_on_the_input_instead_of_floating_at_the_top() {
+        // short transcript: the gap goes ABOVE it, so the first message is
+        // just over the prompt rather than stranded at row 0
+        assert_eq!(render::transcript_window(3, 10, 0), (7, 0, 3));
+        assert_eq!(render::transcript_window(0, 10, 0), (10, 0, 0)); // empty
+        assert_eq!(render::transcript_window(10, 10, 0), (0, 0, 10)); // exactly full
+        assert_eq!(render::transcript_window(100, 10, 0), (0, 90, 100)); // follows the bottom
+        assert_eq!(render::transcript_window(100, 10, 5), (0, 85, 95)); // scrolled up 5
+        assert_eq!(render::transcript_window(100, 10, 999), (0, 0, 10)); // can't pass the first line
+        assert_eq!(render::transcript_window(3, 10, 5), (7, 0, 3)); // nothing to scroll to
+        assert_eq!(render::transcript_window(5, 0, 0), (0, 5, 5)); // no room at all
+    }
+
+    #[test]
+    fn picker_filter_matches_anywhere_in_the_row_ignoring_case() {
+        let pick = |filter: &str| app::Pick {
+            kind: app::PickKind::Model,
+            title: "models".into(),
+            rows: vec![
+                ("qwen3.6-plus  cmc/Qwen/Qwen3.6-Plus".into(), "qwen3.6-plus".into()),
+                ("glm-5.1  cmc/zai-org/GLM-5.1".into(), "glm-5.1".into()),
+                ("kimi-k2.6  cmc/moonshotai/Kimi-K2.6".into(), "kimi-k2.6".into()),
+            ],
+            idx: 0,
+            top: 0,
+            filter: filter.into(),
+        };
+        let names = |f: &str| -> Vec<String> { pick(f).visible().iter().map(|(_, v)| v.clone()).collect() };
+        assert_eq!(names("").len(), 3);
+        assert_eq!(names("qwen"), vec!["qwen3.6-plus"]); // matches the lower-cased name
+        assert_eq!(names("QWEN"), vec!["qwen3.6-plus"]); // and ignores the case typed
+        assert_eq!(names("zai-org"), vec!["glm-5.1"]); // matches the model id, not just the name
+        assert!(names("nope").is_empty());
+    }
+
+    #[test]
     fn footer_shows_only_the_parts_that_exist() {
         assert_eq!(
             app::footer_right(false, "main", "mimo", "master", 4321, 25_000, 100_000),

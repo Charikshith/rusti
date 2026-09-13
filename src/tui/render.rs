@@ -16,6 +16,20 @@ use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
 /// Braille spinner frames (~20fps at the 50ms poll rate).
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/// Which slice of the wrapped transcript is on screen, as (blank rows above,
+/// first line, one past the last).
+///
+/// The transcript rests ON the input the way a shell does: when it is shorter
+/// than the viewport the blank space goes above it, not below, so the first
+/// message appears just over the prompt and later ones rise from the bottom.
+/// scroll_up pins lines above the fold and cannot walk off the first line.
+pub fn transcript_window(total: usize, height: usize, scroll_up: usize) -> (usize, usize, usize) {
+    let scroll = scroll_up.min(total.saturating_sub(height));
+    let end = total - scroll;
+    let start = end.saturating_sub(height);
+    (height - (end - start), start, end)
+}
+
 /// State carried between frames for differential rendering.
 pub struct RenderState {
     prev_lines: Vec<String>,
@@ -74,23 +88,18 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     if !app.current.is_empty() {
         push_wrapped(&app.current.clone(), &mut all);
     }
-    // scroll: 0 = follow bottom; scroll_up = lines pinned above it
-    let view = all.len().saturating_sub(transcript_h + app.scroll_up);
+    let (pad, start, end) = transcript_window(all.len(), transcript_h, app.scroll_up);
 
     // ── compose frame: one string per screen row ──
     let mut frame: Vec<String> = Vec::with_capacity(h);
 
-    for i in 0..transcript_h {
-        let li = view + i;
-        let content = if li < all.len() {
-            let (st, row) = &all[li];
-            // markdown rows are already wrapped and styled; truncating would cut
-            // an escape sequence in half
-            if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w)) }
-        } else {
-            String::new()
-        };
-        frame.push(content);
+    for _ in 0..pad {
+        frame.push(String::new());
+    }
+    for (st, row) in &all[start..end] {
+        // markdown rows are already wrapped and styled; truncating would cut
+        // an escape sequence in half
+        frame.push(if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w)) });
     }
 
     frame.push(String::new()); // blank spacer
@@ -189,19 +198,25 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
 
     if let Some(p) = &app.pick {
         let hint = match p.kind {
-            app::PickKind::Session => "↑/↓ select · enter resume · esc cancel",
-            app::PickKind::Model => "↑/↓ select · enter switch · esc cancel",
-            app::PickKind::Tree => "↑/↓ select · enter branch here · esc cancel",
+            app::PickKind::Session => "↑/↓ select · enter resume · type to filter · esc cancel",
+            app::PickKind::Model => "↑/↓ select · enter switch · type to filter · esc cancel",
+            app::PickKind::Tree => "↑/↓ select · enter branch here · type to filter · esc cancel",
         };
-        let mut out = vec![sel_row(&format!("  {} ({})", p.title, p.rows.len()), false)];
-        for (i, (label, _)) in p.rows.iter().enumerate().skip(p.top).take(app::PICK_ROWS) {
+        let vis = p.visible();
+        let count = if p.filter.is_empty() {
+            format!("({})", p.rows.len())
+        } else {
+            format!("({}/{})  {}▌", vis.len(), p.rows.len(), p.filter)
+        };
+        let mut out = vec![sel_row(&format!("  {} {count}", p.title), false)];
+        if vis.is_empty() {
+            out.push(sel_row("  nothing matches", false));
+        }
+        for (i, (label, _)) in vis.iter().enumerate().skip(p.top).take(app::PICK_ROWS) {
             out.push(sel_row(&format!("{}{label}", if i == p.idx { "▸ " } else { "  " }), i == p.idx));
         }
-        if p.rows.len() > app::PICK_ROWS {
-            out.push(sel_row(
-                &format!("  {hint}  · {}/{}", p.idx + 1, p.rows.len()),
-                false,
-            ));
+        if vis.len() > app::PICK_ROWS {
+            out.push(sel_row(&format!("  {hint}  · {}/{}", p.idx + 1, vis.len()), false));
         } else {
             out.push(sel_row(&format!("  {hint}"), false));
         }

@@ -320,3 +320,18 @@ profiles point at :20128 and work. `--use <name>` fixes it; left alone, it is th
 
 **Still unverified — needs an interactive terminal**: every TUI surface from feat-032 on (/tree picker, /undo, /plan
 toggle and its footer marker, /commit, /export, `!cmd`, the footer itself, failed-tool output rendering).
+
+## Session 2026-09-13 (13): TUI polish from the first live run — feat-043/044
+User ran the TUI and sent a screenshot. Two findings, both fixed.
+- **feat-043 transcript floated at the top.** `draw()` filled the transcript area top-down from `view` and padded
+  with blanks *below*, so a short transcript left a screenful of gap above the input. Now
+  `render::transcript_window()` returns the pad/start/end and the pad goes ABOVE — content rests on the input like a
+  shell, new lines rise from the bottom. scroll_up is clamped so it can't walk past the first line (it previously
+  could, silently shrinking the visible slice).
+- **feat-044 type-to-filter in the pickers.** `/model` lists 37 profiles; scrolling that is the wrong tool. `Pick`
+  gained `filter` + `visible()`, shared by all three pickers (/model, /resume, /tree) since they share the struct.
+  Substring and case-insensitive over the whole label, so "zai-org" finds glm-5.1 by its model id.
+- Safety detail: the picker key guard swallowed *everything* unmodified, so adding Char() would have made Ctrl+C
+  type a 'c'. The guard now lets Ctrl+key fall through, and a first Ctrl+C closes the picker.
+- `cargo test` 18 passed. **The exe could not be relinked — the user's TUI still holds it**; they must quit and
+  rebuild to see these.
