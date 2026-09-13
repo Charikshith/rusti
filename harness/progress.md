@@ -348,3 +348,15 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - Trap avoided: Up/Down were history recall, so the first Up in a half-written multi-line draft would have replaced
   it. They now walk the draft's lines while it contains a newline.
 - `cargo test` 19 passed, `--self-test` OK, binary relinked once the user's TUI released it.
+
+## Session 2026-09-13 (15): feat-047 — resumed sessions lost their tool lines
+- User reported "only 1 message" after a resume. Read their session.json rather than guessing: 7 entries — system,
+  user "hi", ONE assistant carrying four tool_calls, and four tool results. So the user/assistant count was right;
+  what vanished was the body of the turn, because `render_history` skipped every tool entry.
+- `render_history` now queues each call's summary (via the same `ai_core::tool_summary` the live path uses) and pairs
+  it with the tool results chained after it — feat-026's chaining is what makes the ordering reliable.
+- `Entry.ok: Option<bool>` added and set when a result is stored, so the replay shows the real ✓/✗. Older entries
+  render `·` rather than being guessed at from their text ("user denied …" is a heuristic that would mislabel any
+  tool whose real output mentions an error).
+- Durations deliberately not replayed: never stored, and a previous run's wall time is noise in a resumed view.
+- `cargo test` 19 passed. **Binary not relinked — the user's TUI held it again**, so the live resume is unconfirmed.

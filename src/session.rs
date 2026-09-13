@@ -107,13 +107,17 @@ pub struct Entry {
     pub tool_calls: Option<Value>,   // assistant only
     #[serde(rename = "toolCallId", default)]
     pub tool_call_id: Option<String>, // tool only
+    /// Whether a tool call succeeded, so a resumed transcript can redraw its
+    /// ✓/✗. None on entries written before this was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
     #[serde(default)]
     pub ts: u64,
 }
 
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.

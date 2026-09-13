@@ -377,6 +377,7 @@ pub async fn run_agent(
             emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
+            te.ok = Some(ok);
             parent = session.add(te, Some(parent));
         }
         session.save().map_err(|e| format!("saving session: {e}"))?;
@@ -404,7 +405,7 @@ pub fn fail_tail(output: &str) -> Vec<String> {
 }
 
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
-fn tool_summary(name: &str, args: &Value) -> String {
+pub fn tool_summary(name: &str, args: &Value) -> String {
     match name {
         "read_file" | "write_file" | "edit_file" | "list_dir" =>
             args["path"].as_str().unwrap_or("?").to_string(),

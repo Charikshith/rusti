@@ -497,6 +497,21 @@
       "decisions": [
         "Up/Down were rebound for multi-line drafts only. Leaving them on history would have made the first Up silently replace a half-written multi-line message."
       ]
+    },
+    {
+      "id": "feat-047",
+      "name": "Resumed transcripts replay tool lines",
+      "description": "render_history() dropped every tool entry, so resuming a session showed the question and the answer with nothing in between — a turn that ran four tools looked like the agent did nothing. It now walks the assistant entry's tool_calls, builds each summary with the same ai_core::tool_summary the live path uses, and pairs them in order with the tool results chained after it (feat-026 guarantees that order). Entry gained `ok: Option<bool>`, set when the result is stored, so the replay draws the real ✓/✗; entries written before the field render a neutral '·'. The blank line after assistant prose is now only emitted when the turn actually ended there.",
+      "dependencies": [
+        "feat-008",
+        "feat-026"
+      ],
+      "status": "done",
+      "evidence": "Diagnosed from the user's session.json: 7 entries — system, user 'hi', one assistant with four tool_calls, four tool results — of which only the two prose lines were rendered. tui::tests::render_history_replays_prose_and_tool_lines_but_not_the_system_prompt asserts the full line list including ✓/✗ pairing in call order, and a second session covers the neutral '·' for entries lacking `ok`. cargo test 19 passed. The binary could not be relinked (the user's TUI held it), so this is unconfirmed in a live resume.",
+      "decisions": [
+        "Stored `ok` rather than guessing the outcome from the result text: 'user denied …' and 'error …' are heuristics that would mislabel a tool whose legitimate output mentions an error.",
+        "Durations are not replayed. They were never stored, and a wall time from a previous run is noise in a resumed transcript."
+      ]
     }
   ]
 }

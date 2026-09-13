@@ -161,6 +161,9 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
     let mut lines = Vec::new();
     let mut history = Vec::new();
     let mut n = 0;
+    // Tool results are chained after the assistant entry that called them, in
+    // call order (see feat-026), so a queue pairs each result with its summary.
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     for e in session.path() {
         match e.role.as_str() {
             "user" => {
@@ -168,11 +171,40 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
                 lines.push(format!("{n}› {}", e.content));
                 history.push(e.content.clone());
             }
-            "assistant" if !e.content.is_empty() => {
-                lines.push(e.content.clone());
-                lines.push(String::new());
+            "assistant" => {
+                let calls = e
+                    .tool_calls
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                if !e.content.is_empty() {
+                    lines.push(e.content.clone());
+                    if calls.is_empty() {
+                        lines.push(String::new()); // the turn ended here
+                    }
+                }
+                for c in calls {
+                    let name = c["function"]["name"].as_str().unwrap_or("?");
+                    let args: serde_json::Value = c["function"]["arguments"]
+                        .as_str()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or(serde_json::Value::Null);
+                    pending.push_back(ai_core::tool_summary(name, &args));
+                }
             }
-            _ => {} // system / tool / tool-call-only assistant entries: not shown
+            // without the tool lines a resumed turn looks like the agent did
+            // nothing between the question and the answer
+            "tool" => {
+                let summary = pending.pop_front().unwrap_or_else(|| "tool".into());
+                let mark = match e.ok {
+                    Some(true) => "✓",
+                    Some(false) => "✗",
+                    None => "·", // written before `ok` was recorded
+                };
+                lines.push(format!("  {mark} {summary}"));
+            }
+            _ => {} // the system prompt is not transcript
         }
     }
     (lines, history, n)
@@ -452,18 +484,49 @@ mod tests {
     }
 
     #[test]
-    fn render_history_reconstructs_transcript_skipping_system_and_tool_calls() {
+    fn render_history_replays_prose_and_tool_lines_but_not_the_system_prompt() {
         let mut s = Session::new("m".into());
         let sys = s.add(Entry::new("system", "sys prompt".into()), None);
         let u1 = s.add(Entry::new("user", "first task".into()), Some(sys));
-        let a1 = s.add(Entry::new("assistant", String::new()), Some(u1)); // tool-call turn, no text
-        let t1 = s.add(Entry::new("tool", "tool output".into()), Some(a1));
-        s.add(Entry::new("assistant", "done".into()), Some(t1));
+        let mut a1 = Entry::new("assistant", "Let me look.".into());
+        a1.tool_calls = Some(serde_json::json!([
+            {"function": {"name": "read_file", "arguments": "{\"path\":\"src/main.rs\"}"}},
+            {"function": {"name": "run_command", "arguments": "{\"command\":\"cargo test\"}"}},
+        ]));
+        let a1 = s.add(a1, Some(u1));
+        let mut t1 = Entry::new("tool", "fn main…".into());
+        t1.ok = Some(true);
+        let t1 = s.add(t1, Some(a1));
+        let mut t2 = Entry::new("tool", "[exit 101]".into());
+        t2.ok = Some(false);
+        let t2 = s.add(t2, Some(t1));
+        s.add(Entry::new("assistant", "done".into()), Some(t2));
 
         let (lines, history, n) = render_history(&s);
         assert_eq!(n, 1);
-        assert_eq!(lines, vec!["1› first task".to_string(), "done".to_string(), String::new()]);
+        // the tool lines are the body of the turn: without them a resumed
+        // session looks like the agent answered without doing anything
+        assert_eq!(
+            lines,
+            vec![
+                "1› first task".to_string(),
+                "Let me look.".to_string(),
+                "  ✓ src/main.rs".to_string(),   // summary + outcome, paired in call order
+                "  ✗ cargo test".to_string(),
+                "done".to_string(),
+                String::new(), // the turn ended on prose
+            ]
+        );
         assert_eq!(history, vec!["first task".to_string()]);
+
+        // an entry written before `ok` was recorded renders neutrally, not as a failure
+        let mut old = Session::new("m".into());
+        let u = old.add(Entry::new("user", "q".into()), None);
+        let mut a = Entry::new("assistant", String::new()); // tool-call turn, no prose
+        a.tool_calls = Some(serde_json::json!([{"function": {"name": "glob", "arguments": "{\"pattern\":\"*.rs\"}"}}]));
+        let a = old.add(a, Some(u));
+        old.add(Entry::new("tool", "x".into()), Some(a));
+        assert_eq!(render_history(&old).0, vec!["1› q".to_string(), "  · *.rs".to_string()]);
     }
 
     #[test]
