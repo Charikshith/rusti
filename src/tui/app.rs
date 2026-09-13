@@ -125,6 +125,10 @@ pub struct App {
     pub hist_idx: Option<usize>,
     pub tool_line: Option<usize>, // index of the active "⠋" tool line
     pub ask_line: Option<usize>,  // index of the pending question's line
+    /// Transient confirmation shown on the status line. Session bookkeeping
+    /// ("resumed …", "exported …") is not part of the conversation, so it does
+    /// not belong in the transcript.
+    pub notice: Option<(String, std::time::Instant)>,
     pub exit_armed: Option<std::time::Instant>, // first ctrl+c seen; a second within 2s quits
     // per-turn accounting for the "· tok · tps · s" line
     pub turn_t0: std::time::Instant,
@@ -146,11 +150,22 @@ pub struct App {
 
 /// How long a first Ctrl+C stays armed for the second one.
 const ARM_WINDOW: Duration = Duration::from_secs(2);
+/// How long a transient confirmation stays on the status line.
+const NOTICE_TTL: Duration = Duration::from_secs(3);
 
 impl App {
     /// True while a second Ctrl+C would exit.
     pub fn armed(&self) -> bool {
         self.exit_armed.map(|t| t.elapsed() < ARM_WINDOW).unwrap_or(false)
+    }
+
+    /// The current notice, if it hasn't aged out. Nothing clears it — the
+    /// 50ms render loop simply stops showing it.
+    pub fn notice(&self) -> Option<&str> {
+        self.notice
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < NOTICE_TTL)
+            .map(|(t, _)| t.as_str())
     }
 
     /// The per-turn stats row: tokens, tokens/sec over generation time only
@@ -215,7 +230,7 @@ pub fn ui_loop(
         lines: seed_lines, current: String::new(),
         ask: None, input: String::new(), cursor: 0, done: true, model, session,
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
-        history: seed_history, hist_idx: None, tool_line: None, ask_line: None, exit_armed: None,
+        history: seed_history, hist_idx: None, tool_line: None, ask_line: None, notice: None, exit_armed: None,
         turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
         sess_tok: 0, branch: String::new(),
         thinking: false,
@@ -458,6 +473,7 @@ pub fn ui_loop(
                 }
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,
+                ai_core::Event::Notice(t) => app.notice = Some((t, std::time::Instant::now())),
                 ai_core::Event::Tree(rows) => {
                     // start on the active leaf (marked ◀ by tree::rows), like /model starts on the active profile
                     let idx = rows.iter().rposition(|(l, _)| l.ends_with(" ◀")).unwrap_or(rows.len() - 1);
@@ -557,10 +573,14 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         "/plan" => {
             let on = !ai_core::plan_mode();
             ai_core::set_plan(on);
-            app.lines.push(match on {
-                true => "  ℹ plan mode on — reads and searches only; /plan again to allow changes".into(),
-                false => "  ℹ plan mode off".to_string(),
-            });
+            // the footer carries the state; this is just the confirmation
+            app.notice = Some((
+                match on {
+                    true => "plan mode on — reads and searches only".to_string(),
+                    false => "plan mode off".to_string(),
+                },
+                std::time::Instant::now(),
+            ));
         }
         "/commit" => {
             if !app.done {

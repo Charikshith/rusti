@@ -116,6 +116,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let armed = app.armed();
     let left_plain = if armed {
         "press ctrl+c again to exit".to_string()
+    } else if let Some(n) = app.notice() {
+        format!("ℹ {n}")
     } else if !app.done {
         format!("{spin} working…")
     } else if app.fresh || app.scroll_up > 0 {

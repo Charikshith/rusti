@@ -360,3 +360,15 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   tool whose real output mentions an error).
 - Durations deliberately not replayed: never stored, and a previous run's wall time is noise in a resumed view.
 - `cargo test` 19 passed. **Binary not relinked — the user's TUI held it again**, so the live resume is unconfirmed.
+
+## Session 2026-09-13 (16): feat-048 — session bookkeeping is status, not transcript
+- User: the "resumed session.json (7 entries…)" line sat in the chat and should appear below and disappear.
+- `Event::Notice(String)` added: the TUI parks it in `App.notice` with a timestamp and the status line shows it for
+  3s, after which the 50ms render loop just stops drawing it (nothing to clear, no timer).
+- Converted the four session-management confirmations — resumed, branched at, exported to, renamed — plus the plan
+  mode toggle, whose state the footer already carries. **Failures deliberately stay in the transcript**: a message you
+  need to read must not vanish after three seconds.
+- Plain/CLI modes print notices as before; only the TUI treats them as transient.
+- Also confirmed the user is running a STALE BINARY: exe 2:36pm vs source 2:42pm, so feat-047's replayed tool lines
+  were not in the build they tested. cargo build has been blocked all session by their running TUI holding rusti.exe.
+- `cargo test` 19 passed; binary still not relinked.

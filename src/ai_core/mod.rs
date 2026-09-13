@@ -18,6 +18,7 @@ pub enum Event {
     Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
     SessionName(String),                       // active session's name, for the status line
     Git(String),                               // current branch, for the status line
+    Notice(String),                            // transient confirmation: status line, not transcript
     Tree(Vec<(String, String)>),               // (label, id) rows for the TUI's /tree picker
     Prefill(String),                           // put this text in the input (branching at a user message)
     Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
@@ -70,6 +71,7 @@ fn emit(ev: Event) {
             Event::Ask { .. } => {}
             Event::Resumed { .. } => {} // TUI-only: replaces the on-screen transcript
             Event::SessionName(_) => {} // TUI-only: status-line label
+            Event::Notice(t) => eprintln!("  ℹ {t}"), // no status line here: just print it
             Event::Tree(_) | Event::Prefill(_) | Event::Git(_) => {} // TUI-only
             Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end

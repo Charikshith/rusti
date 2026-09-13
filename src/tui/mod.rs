@@ -221,7 +221,7 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
             let _ = session.save();
             let (lines, history, msg_num) = render_history(session);
             let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
-            let _ = event_tx.send(ai_core::Event::Text(format!("  ℹ branched at {id}; continuing from here")));
+            let _ = event_tx.send(ai_core::Event::Notice(format!("branched at {id}; continuing from here")));
             if is_user {
                 let _ = event_tx.send(ai_core::Event::Prefill(text));
             }
@@ -274,7 +274,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                         session = loaded;
                         let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
                         let _ = event_tx.send(ai_core::Event::SessionName(crate::session::name_of(&path)));
-                        let _ = event_tx.send(ai_core::Event::Text(format!("  ℹ resumed {path} ({n} entries, leaf {leaf})")));
+                        let _ = event_tx.send(ai_core::Event::Notice(format!("resumed {path} ({n} entries, leaf {leaf})")));
                     }
                 }
                 Ok(Job::Reload) => {
@@ -321,14 +321,15 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     }
                 }
                 Ok(Job::Rename(name)) => {
+                    // a rename is bookkeeping; a failed one is something to read
                     let msg = match rename_session(&mut session, &name) {
                         Ok(note) => {
                             let _ = event_tx.send(ai_core::Event::SessionName(name.clone()));
-                            format!("  ℹ {note}")
+                            ai_core::Event::Notice(note)
                         }
-                        Err(e) => format!("  ✗ {e}"),
+                        Err(e) => ai_core::Event::Text(format!("  ✗ {e}")),
                     };
-                    let _ = event_tx.send(ai_core::Event::Text(msg));
+                    let _ = event_tx.send(msg);
                 }
                 Ok(Job::Tree) => {
                     let rows: Vec<(String, String)> = crate::tree::rows(&session)
@@ -346,7 +347,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                 Ok(Job::Export(to)) => {
                     let file = to.unwrap_or_else(|| format!("{}.md", crate::session::name_of(&session.path)));
                     let ev = match std::fs::write(&file, session.export_markdown()) {
-                        Ok(()) => ai_core::Event::Text(format!("  ℹ exported to {file}")),
+                        Ok(()) => ai_core::Event::Notice(format!("exported to {file}")),
                         Err(e) => ai_core::Event::Text(format!("  ✗ could not write {file}: {e}")),
                     };
                     let _ = event_tx.send(ev);

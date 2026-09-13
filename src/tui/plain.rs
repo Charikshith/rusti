@@ -31,6 +31,7 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
             }
             Ok(ai_core::Event::Resumed { .. }) => {} // /resume is a TUI slash command
             Ok(ai_core::Event::SessionName(_)) => {} // TUI status-line label
+            Ok(ai_core::Event::Notice(t)) => { writeln!(out, "  ℹ {t}")?; }
             Ok(ai_core::Event::Tree(_) | ai_core::Event::Prefill(_) | ai_core::Event::Git(_)) => {} // TUI-only
             Ok(ai_core::Event::Usage { .. }) => {} // per-turn stats are a TUI line
             Ok(ai_core::Event::TaskEnd { .. }) => break,
