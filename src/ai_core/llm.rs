@@ -81,9 +81,10 @@ impl Client {
         // usage when the server volunteers it (many OpenAI-compatible ones
         // don't, streaming); otherwise the 4-chars-a-token rule of thumb,
         // flagged as an estimate in the UI
+        let prompt_tokens = prompt.unwrap_or((body.to_string().len() as u64 + 3) / 4);
         emit(Event::Usage {
             tokens: usage.unwrap_or((content.chars().count() as u64 + 3) / 4),
-            prompt: prompt.unwrap_or((body.to_string().len() as u64 + 3) / 4),
+            prompt: prompt_tokens,
             est: usage.is_none() || prompt.is_none(),
             gen_ms: first.map(|t| t.elapsed().as_millis()).unwrap_or(0),
         });
@@ -99,7 +100,7 @@ impl Client {
             .collect();
         let finish_reason = finish
             .unwrap_or_else(|| if tool_calls.is_empty() { "stop".to_string() } else { "tool_calls".to_string() });
-        Ok(ChatResult { content, tool_calls, finish_reason })
+        Ok(ChatResult { content, tool_calls, finish_reason, prompt_tokens })
     }
 }
 
@@ -114,6 +115,7 @@ pub struct ChatResult {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: String,
+    pub prompt_tokens: u64, // context size this request sent (estimated if the server omits usage)
 }
 
 #[derive(Default, Clone)]

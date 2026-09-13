@@ -86,6 +86,56 @@ pub fn set_max_iters(n: usize) {
     MAX_ITERS.store(n.max(1), Ordering::Relaxed);
 }
 
+/// Prompt tokens above which the next request is preceded by compaction.
+/// Set it to ~80% of the model's window; --context / RUSTI_CONTEXT override.
+static CONTEXT_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(100_000);
+
+pub fn set_context_limit(n: u64) {
+    CONTEXT_LIMIT.store(n.max(1000), Ordering::Relaxed);
+}
+
+/// Entries kept verbatim after compaction (the current task's recent steps).
+const KEEP_TAIL: usize = 8;
+
+const COMPACT_PROMPT: &str = "The conversation above is being compacted to free context. Write a dense summary \
+for an agent that will continue the task with only this summary plus the most recent messages. Include: the \
+original task and any constraints the user stated; what has been done so far (files read/changed, commands run, \
+their outcomes); what was learned; decisions and their reasons; what is still left to do. Use exact file paths, \
+identifiers, and error text. No preamble.";
+
+/// Index where the kept tail starts: the earliest non-tool entry within the
+/// last KEEP_TAIL, so no tool result is left without its call. None when
+/// there is nothing before it worth summarizing.
+pub fn compact_cut(roles: &[&str]) -> Option<usize> {
+    if roles.first() != Some(&"system") {
+        return None;
+    }
+    let from = roles.len().saturating_sub(KEEP_TAIL).max(1);
+    let cut = (from..roles.len())
+        .find(|&i| roles[i] != "tool")
+        .or_else(|| (1..roles.len()).rev().find(|&i| roles[i] != "tool"))?;
+    (cut > 1).then_some(cut)
+}
+
+/// Summarize the active path (minus its tail) with one LLM call, then branch:
+/// system -> summary -> copies of the tail. The old entries stay in the tree.
+async fn compact(client: &llm::Client, session: &mut Session, cancel: &AtomicBool) -> Result<(), String> {
+    let path: Vec<Entry> = session.path().into_iter().cloned().collect();
+    let roles: Vec<&str> = path.iter().map(|e| e.role.as_str()).collect();
+    let Some(cut) = compact_cut(&roles) else { return Ok(()) };
+    emit(Event::Text(format!("  ⟳ compacting context: {} messages → summary", cut - 1)));
+    // ponytail: the summary streams into the transcript like any reply; a collapsed block would need TUI work
+    let mut msgs: Vec<Value> = path[..cut].iter().map(|e| e.to_message()).collect();
+    msgs.push(json!({"role": "user", "content": COMPACT_PROMPT}));
+    let res = client.chat_stream(&msgs, None, cancel).await?;
+    let summary = format!("[Summary of the conversation so far; earlier messages were compacted]\n{}", res.content.trim());
+    let mut parent = session.add(Entry::new("user", summary), Some(path[0].id.clone()));
+    for e in &path[cut..] {
+        parent = session.add(e.clone(), Some(parent)); // add() reassigns id/parent/ts
+    }
+    session.save().map_err(|e| format!("saving session: {e}"))
+}
+
 /// Project instructions files, first hit wins. Read every turn so edits are live.
 const INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "RUSTI.md", "CLAUDE.md"];
 const MAX_INSTRUCTIONS: usize = 20_000;
@@ -178,12 +228,17 @@ pub async fn run_agent(
         session.add(Entry::new("user", task.into()), session.active.clone());
     }
     let tools = tool_schemas();
+    let mut last_prompt = 0u64;
 
     for _ in 0..MAX_ITERS.load(Ordering::Relaxed) {
         if cancel.load(Ordering::Relaxed) {
             return Err("interrupted".into());
         }
+        if last_prompt > CONTEXT_LIMIT.load(Ordering::Relaxed) {
+            compact(client, session, cancel).await?;
+        }
         let res = client.chat_stream(&session.path_messages(), Some(&tools), cancel).await?;
+        last_prompt = res.prompt_tokens;
         if res.finish_reason != "tool_calls" {
             session.add(Entry::new("assistant", res.content.clone()), session.active.clone());
             session.save().map_err(|e| format!("saving session: {e}"))?;
@@ -406,6 +461,21 @@ pub fn self_test() {
     set_max_iters(0); // floors at 1
     assert_eq!(MAX_ITERS.load(Ordering::Relaxed), 1);
     set_max_iters(50);
+
+    // compaction cut: tail starts at a non-tool entry; nothing to summarize -> None
+    assert_eq!(compact_cut(&["system", "user", "assistant"]), None);
+    assert_eq!(compact_cut(&["user", "assistant"]), None);
+    let long: Vec<&str> = ["system", "user"].iter().copied()
+        .chain(std::iter::repeat(["assistant", "tool"]).take(6).flatten()).collect(); // 14 entries
+    assert_eq!(compact_cut(&long), Some(6)); // 14-8=6 lands on "assistant"
+    let stepped = &long[..11]; // 11-8=3 lands on a tool -> step forward to its next non-tool (4)
+    assert_eq!(compact_cut(stepped), Some(4));
+    let mut tools_only = vec!["system", "user", "assistant"];
+    tools_only.extend(std::iter::repeat("tool").take(10)); // one call, many results: fall back to the call
+    assert_eq!(compact_cut(&tools_only), Some(2));
+    set_context_limit(0);
+    assert_eq!(CONTEXT_LIMIT.load(Ordering::Relaxed), 1000); // floors
+    set_context_limit(100_000);
 
     // project instructions: AGENTS.md wins over RUSTI.md; empty/missing -> none
     let d = std::path::Path::new("_test_instr");

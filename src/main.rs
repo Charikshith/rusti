@@ -66,6 +66,12 @@ fn main() {
             _ => { eprintln!("--max-iters needs a positive integer, got '{n}'"); std::process::exit(1); }
         }
     }
+    if let Some(n) = get(&args, "--context", "RUSTI_CONTEXT") {
+        match n.parse::<u64>() {
+            Ok(n) if n > 0 => ai_core::set_context_limit(n),
+            _ => { eprintln!("--context needs a positive token count, got '{n}'"); std::process::exit(1); }
+        }
+    }
     let (url, key, model) = resolve_model(&args);
     let task_arg = task_arg(&args);
     let tui_mode = args.iter().any(|a| a == "--tui");
@@ -129,7 +135,7 @@ fn main() {
 }
 
 /// Flags that consume the next argument — their values are not the task.
-const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use", "--max-iters"];
+const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use", "--max-iters", "--context"];
 
 /// The first bare argument that isn't some flag's value.
 fn task_arg(args: &[String]) -> Option<String> {

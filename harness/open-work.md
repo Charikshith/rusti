@@ -2,18 +2,16 @@
 
 ## Suggested Order (2026-09-13 review)
 
-Tier 1 — bites on the first real long task: Context Compaction → Retry with Backoff → Tool Output Visibility (Prompt-Token Tracking landed as feat-028)
+Tier 1 — bites on the first real long task: Retry with Backoff → Tool Output Visibility (Prompt-Token Tracking and Context Compaction landed as feat-028/029)
 Tier 2 — daily-driver quality: Diff Before Edit + Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer
 Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
 
 ## Priority — Add When Needed
 
-### ★ Context Compaction
-When: Long conversations hit token limits — now the most likely first failure: feat-022 raised the round cap
-from 10 to 50 and feat-021 added output-heavy search tools, so a real task fills the window long before it
-runs out of rounds
-What: Summarize older messages, keep recent context; trigger on Event::Usage.prompt (feat-028) crossing a per-profile window size
-Where: ai_core/mod.rs run_agent loop
+### Compaction Follow-ups
+When: feat-029 landed with a global --context limit and a summary that streams into the transcript
+What: per-profile `context` field in model.json so the limit follows the model; `/compact` slash command for manual trigger; collapse the streamed summary into one dim block; retry-on-HTTP-400-context-error as a reactive trigger
+Where: config.rs profile, tui/app.rs handle_command, ai_core/mod.rs compact()
 
 ### unicode-width Word Wrap
 When: CJK or emoji output garbles the TUI

@@ -24,6 +24,7 @@ cargo build --release
 
 # flags/env still override the saved profile
 ./target/release/rusti --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTI_MAX_ITERS)
+./target/release/rusti --context 60000 "task"   # compact history once the prompt exceeds N tokens (default 100000, env RUSTI_CONTEXT)
 ./target/release/rusti --yolo "task"            # no permission prompts, no project-root guard (env RUSTI_YOLO=1)
 ./target/release/rusti --self-test       # offline check, fake server
 ```

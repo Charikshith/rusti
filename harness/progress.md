@@ -192,3 +192,12 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Fixed a stale `--self-test` assertion (5 → 6 entries on disk) that feat-026 left behind; self-test was failing on HEAD.
 - Backlog: open-work.md gained a tiered Suggested Order, Project Config File, Web Fetch Tool, MCP Client; stale TLS entry removed.
 - Verification: `cargo test` 13 passed, `--self-test` OK.
+
+## Session 2026-09-13 (2): feat-029 — context compaction
+- `run_agent` compacts before the next request once the last `prompt_tokens` exceed `CONTEXT_LIMIT`
+  (default 100k, `--context N` / `RUSTI_CONTEXT`, floors at 1000).
+- `compact()` summarizes `path[..cut]` with one tool-less LLM call, then branches `system -> summary (user role)
+  -> clones of path[cut..]`; `compact_cut` keeps the last 8 entries, snapped forward to a non-tool role so no tool
+  result is orphaned (falls back to the latest call when a tail is all results). Old entries stay in the tree.
+- `ChatResult.prompt_tokens` added so the loop sees the size without going through the event channel.
+- Verification: `cargo test` 13 passed, `--self-test` OK (compact_cut cases + limit floor). Live >100k run still pending.

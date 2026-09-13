@@ -286,6 +286,17 @@
       ],
       "status": "done",
       "evidence": "tui::tests::turn_stats_row_reports_tps_over_generation_time_only asserts the ctx suffix and ~ estimate marker; cargo test 13 passed; --self-test OK (also fixed its stale 5-entries-on-disk assertion left over from feat-026)."
+    },
+    {
+      "id": "feat-029",
+      "name": "Context Compaction",
+      "description": "When the last request's prompt_tokens exceed CONTEXT_LIMIT (default 100k; --context N / RUSTI_CONTEXT), run_agent summarizes the active path minus its last ~8 entries with one LLM call, then branches system -> summary(user) -> copies of the tail. The tail cut snaps to a non-tool entry so no tool result dangles. Old entries stay in the tree (pi-style, nothing lost); the transcript shows '⟳ compacting context: N messages → summary'.",
+      "dependencies": [
+        "feat-028",
+        "feat-008"
+      ],
+      "status": "done",
+      "evidence": "--self-test asserts compact_cut on short/no-system/14-entry/tool-boundary/tools-only paths and the set_context_limit floor; cargo test 13 passed; --self-test OK. Not yet exercised against a live model past 100k tokens."
     }
   ]
 }
