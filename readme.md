@@ -34,7 +34,7 @@ In the TUI: `/plan` toggles plan mode (the agent reads and proposes but every wr
 command is refused), `/tree` browses and branches the session, `/undo` puts back the files
 the last turn changed, `/commit` stages and commits the work, `/export` writes the
 transcript out as markdown, `/settings` chooses which status-line segments are shown,
-and `!cargo test` runs a shell command whose output the model
+`/mcp` switches MCP servers on and off, and `!cargo test` runs a shell command whose output the model
 sees on the next turn. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
 plan mode, the session, model, git branch, tokens used and how full the context is.
@@ -78,6 +78,7 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui.rs | ~190 | custom ANSI TUI renderer: scrolling transcript, streaming text, ask_user input |
 | ai_core/mod.rs | ~160 | run_agent loop, event system (SINK), tool dispatch, self-test |
 | ai_core/llm.rs | ~80 | reqwest SSE streaming client, tool-call argument accumulation |
+| ai_core/mcp.rs | ~410 | MCP client: stdio JSON-RPC 2.0, spawns servers, merges their tools in as `mcp__<server>__<tool>`, `/mcp` toggles them |
 | ai_core/tools.rs | ~470 | 17 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user, web_fetch (tags stripped); project-root guard |
 
 **Total application code: ~1,015 lines**
@@ -125,6 +126,40 @@ Model prose is rendered, not printed raw: ATX headings and `**bold**` come out b
 colour with the fence lines hidden. No parser crate — markers become style runs over
 the visible text, so wrapping still measures real columns. Fenced bodies are truncated
 rather than reflowed.
+
+## MCP servers
+
+`model.json` can list MCP servers. They start with rusti, and their tools join the
+built-in ones under `mcp__<server>__<tool>`:
+
+```json
+"mcp": {
+  "everything": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-everything"],
+    "enabled": true
+  },
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." },
+    "enabled": false
+  }
+}
+```
+
+`/mcp` lists them with their live state and switches them on or off — turning one on
+connects it there and then, turning one off kills the child process. The choice is
+written back to `model.json`, so it survives a restart.
+
+Transport is stdio with JSON-RPC 2.0, implemented directly against `std::process`
+and serde_json — no MCP SDK, no extra dependency. On Windows the command is run
+through `cmd /C`, because `npx` and `uvx` are `.cmd` shims that `CreateProcess`
+cannot execute directly.
+
+MCP tools are **always permission-gated** and always refused in plan mode. rusti
+cannot read a third-party tool's effects off its name, so it treats every one of
+them as if it mutates. `[a]lways` works on them like any other tool.
 
 ## TUI
 

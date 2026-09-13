@@ -36,13 +36,17 @@ env: LLM_URL LLM_KEY LLM_MODEL RUSTI_SESSION RUSTI_MAX_ITERS RUSTI_CONTEXT RUSTI
 
 model.json also carries project settings: \"allow\" (tools answered [a]lways, so the next
 run doesn't ask), \"max_iters\", \"context\". Flags and env override them.
+It also carries \"mcp\": MCP servers to start, each with a command, optional args/env,
+and \"enabled\". Their tools join the built-in ones as mcp__<server>__<tool>, are always
+permission-gated, and are refused in plan mode. Toggle them live with /mcp.
 
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   list, switch and name sessions
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
   /export         transcript to markdown      /reload           rebuild and relaunch
-  /settings       show/hide status-line parts  /quit
+  /settings       show/hide status-line parts  /mcp              MCP servers on/off
+  /quit
   !CMD            run a shell command; its output goes to the model too
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
 ";
@@ -169,6 +173,12 @@ fn main() {
             std::process::exit(1);
         }
         return;
+    }
+
+    // plain mode connects too, so a one-shot run gets the same tools as the TUI;
+    // status goes to stderr to keep stdout the answer alone for piping
+    for line in ai_core::mcp::connect_all() {
+        eprintln!("{}", line.trim_start());
     }
 
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

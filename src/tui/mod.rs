@@ -232,7 +232,11 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
 /// Entry point: spawns agent in background thread, renders TUI or plain stream.
 pub fn run(cfg: TuiConfig) -> io::Result<()> {
     let TuiConfig { client, session, model, cli_args } = cfg;
-    let (seed_lines, seed_history, seed_msg_num) = render_history(&session);
+    let (mut seed_lines, seed_history, seed_msg_num) = render_history(&session);
+    // MCP servers connect before the first frame, not in the agent thread: the
+    // model's tool list is built per turn, and a half-connected server would
+    // advertise nothing on the turn you just typed
+    seed_lines.extend(ai_core::mcp::connect_all());
     let seed_name = crate::session::name_of(&session.path);
 
     let (event_tx, event_rx) = mpsc::channel();

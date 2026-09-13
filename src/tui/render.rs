@@ -222,6 +222,7 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
             app::PickKind::Model => "↑/↓ select · enter switch · type to filter · esc cancel",
             app::PickKind::Tree => "↑/↓ select · enter branch here · type to filter · esc cancel",
             app::PickKind::Settings => "↑/↓ select · enter toggle · esc close",
+            app::PickKind::Mcp => "↑/↓ select · enter connect/disconnect · esc close",
         };
         let vis = p.visible();
         let count = if p.filter.is_empty() {

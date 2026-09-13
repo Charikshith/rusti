@@ -33,6 +33,23 @@ impl Default for Footer {
     }
 }
 
+/// One MCP server: a child process spoken to over stdio. `enabled` is what
+/// /mcp flips, so a server can be switched off without deleting its config.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct McpServer {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -45,6 +62,10 @@ pub struct Config {
     pub allow: Vec<String>,
     #[serde(default)]
     pub footer: Footer,
+    /// BTreeMap, not HashMap: the tool list sent to the model must be in a
+    /// stable order, or every run reshuffles it and defeats prompt caching.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub mcp: std::collections::BTreeMap<String, McpServer>,
     /// Per-project defaults for --max-iters / --context; flags and env win.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iters: Option<usize>,

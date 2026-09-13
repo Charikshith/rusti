@@ -38,6 +38,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
     Cmd { name: "/plan", desc: "toggle plan mode: read and propose, change nothing", soon: false },
     Cmd { name: "/settings", desc: "choose which segments the status line shows", soon: false },
+    Cmd { name: "/mcp", desc: "list MCP servers and switch them on or off", soon: false },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
     Cmd { name: "/export", desc: "/export [file.md] - write the transcript out as markdown", soon: false },
 ];
@@ -81,6 +82,7 @@ pub enum PickKind {
     Model,    // switch to the chosen model profile
     Tree,     // branch the session at the chosen entry
     Settings, // flip a status-line segment; the only kind Enter does not close
+    Mcp,      // connect/disconnect an MCP server; also stays open on Enter
 }
 
 /// An open list picker (/resume with no argument, /model with no argument).
@@ -585,6 +587,7 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/settings" => pick_settings(app),
+        "/mcp" => pick_mcp(app),
         "/tree" => { let _ = job_tx.send(Job::Tree); }
         "/export" => {
             let to = (!arg.is_empty()).then(|| arg.to_string());
@@ -762,10 +765,14 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
             let Some((_, value)) = p.visible().get(p.idx).map(|(l, v)| (l.clone(), v.clone())) else {
                 return; // filtered down to nothing: Enter has nothing to pick
             };
-            // settings is a toggle list, not a chooser: flipping one row is not
-            // a reason to close, you usually came to flip more than one
+            // toggle lists, not choosers: flipping one row is not a reason to
+            // close, you usually came to flip more than one
             if p.kind == PickKind::Settings {
                 toggle_footer(app, &value);
+                return;
+            }
+            if p.kind == PickKind::Mcp {
+                toggle_mcp(app, &value);
                 return;
             }
             let Some(p) = app.pick.take() else { return };
@@ -773,7 +780,7 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
                 PickKind::Session => { let _ = job_tx.send(Job::ResumePath(value)); }
                 PickKind::Model => switch_model(app, job_tx, &value),
                 PickKind::Tree => { let _ = job_tx.send(Job::Select(value)); }
-                PickKind::Settings => {} // returned above; closing is Esc's job
+                PickKind::Settings | PickKind::Mcp => {} // returned above; closing is Esc's job
             }
             return;
         }
@@ -891,6 +898,47 @@ fn pick_settings(app: &mut App) {
     // toggle than before it — clamp rather than point past the end
     p.idx = p.idx.min(p.visible().len().saturating_sub(1));
     app.pick = Some(p);
+}
+
+/// /mcp: configured servers with their live state. "on" means enabled in
+/// model.json; the tool count is what actually connected, so an enabled server
+/// showing no count is one that failed to start.
+fn pick_mcp(app: &mut App) {
+    let rows: Vec<(String, String)> = crate::ai_core::mcp::status()
+        .into_iter()
+        .map(|(name, enabled, connected, n)| {
+            let state = match (enabled, connected) {
+                (false, _) => "off".to_string(),
+                (true, true) => format!("on   {n} tools"),
+                (true, false) => "on   not connected".to_string(),
+            };
+            (format!("{name:<16} {state}"), name)
+        })
+        .collect();
+    let (idx, top, filter) = match app.pick.take() {
+        Some(p) if p.kind == PickKind::Mcp => (p.idx, p.top, p.filter),
+        _ => (0, 0, String::new()),
+    };
+    let mut p = Pick { kind: PickKind::Mcp, title: "mcp servers".into(), rows, idx, top, filter };
+    p.idx = p.idx.min(p.visible().len().saturating_sub(1));
+    app.pick = Some(p);
+}
+
+/// Enter on an /mcp row. Turning a server ON connects it here and now, which
+/// can take seconds and can fail, so the outcome goes to the status line
+/// either way rather than being silently swallowed.
+fn toggle_mcp(app: &mut App, name: &str) {
+    let on = crate::ai_core::mcp::status()
+        .into_iter()
+        .find(|(n, ..)| n == name)
+        .map(|(_, enabled, ..)| enabled)
+        .unwrap_or(false);
+    let msg = match crate::ai_core::mcp::set_enabled(name, !on) {
+        Ok(m) => m,
+        Err(e) => format!("mcp {name}: {e}"),
+    };
+    app.notice = Some((msg, std::time::Instant::now()));
+    pick_mcp(app);
 }
 
 /// Flip one segment and write it back to model.json. Load-then-save keeps the

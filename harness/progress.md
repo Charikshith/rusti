@@ -439,3 +439,40 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - **`/reload` builds into `target/reload`**, a separate 777MB tree — it did NOT inherit feat-051's warm
   `target/release`. The first `/reload` after this profile change pays a full cold rebuild, not 4.2s.
 - `tool-visual-examples.html` is untracked and predates this session; left alone.
+
+## Session 2026-09-13 (20): feat-055 MCP client
+
+- Backlog's largest tier-3c item. stdio + JSON-RPC 2.0 straight onto `std::process` and serde_json —
+  **no MCP SDK, no new dependency**. The protocol really is "one JSON object per line each way".
+- Servers live in `model.json` under `"mcp"`; enabled ones connect before the first frame (NOT in the
+  agent thread — the tool list is built per turn, so a half-connected server would advertise nothing on
+  the turn you just typed). Tools merge in as `mcp__<server>__<tool>`; `dispatch()` routes by prefix so
+  it does not gain an arm per server.
+- **Safety, deliberately not lazy**: `GATED` is a fixed list of built-ins, so MCP tools would have sailed
+  past the permission prompt entirely. Added `gated()` = `GATED.contains || is_mcp`, used by BOTH the
+  prompt and `plan_blocks`. A third-party tool's effects cannot be read off its name, so every MCP tool
+  counts as mutating even when it only reads.
+- `/mcp` toggles a server on/off: on connects there and then (can take seconds, can fail — outcome goes
+  to the status line), off drops it and `Drop` kills the child. Choice persists to model.json.
+- **Windows**: the command goes through `cmd /C`. `npx`/`uvx` are `.cmd` shims and `CreateProcess` cannot
+  execute them directly — this is the single most common "MCP server not found" cause on Windows.
+- Reader *threads* per pipe, not blocking reads: `recv_timeout` can give up on a hung server, a blocking
+  pipe read cannot. stderr is drained rather than nulled for two reasons — a full pipe buffer blocks the
+  server's writes and looks exactly like a hang, and the tail is what lets a failure say *why*.
+- Tools whose prefixed name passes 64 chars are dropped with a warning: the API rejects the whole request
+  otherwise, which would break every tool rather than just the long one.
+- `slug()` is lossy (`a.b` and `a_b` collide), so the advertised name is stored *beside* the original
+  instead of being parsed back off at call time.
+
+### Verification (three ways, because a protocol that only agrees with itself proves nothing)
+1. `tests/fake_mcp_server.py` — a real stdio server: tools/list, tools/call, `isError`, unknown name.
+2. That same test covers the Windows `cmd /C` path, since `cfg!(windows)` is true here.
+3. Real `npx @modelcontextprotocol/server-everything` driven through the actual Rust client:
+   13 tools discovered, `mcp__everything__echo` returned "Echo: hello from rusti". Throwaway test removed.
+- `cargo test` 24 passed.
+
+### Still open
+- No `resources/` or `prompts/` support — tools only. That is the 80% and the rest can wait for a need.
+- Servers are connected once at startup; a crashed server stays dead until `/mcp` toggles it off and on.
+- `Config::load_from` still swallows a malformed model.json silently (config.rs:60) — now worse, since a
+  bad hand-edit of the new `"mcp"` block resets models, allow AND the server list with no message.
