@@ -42,7 +42,7 @@ slash commands (--tui)
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
   /export         transcript to markdown      /reload           rebuild and relaunch
-  /quit
+  /settings       show/hide status-line parts  /quit
   !CMD            run a shell command; its output goes to the model too
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
 ";

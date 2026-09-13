@@ -641,14 +641,31 @@ mod tests {
 
     #[test]
     fn footer_shows_only_the_parts_that_exist() {
+        let on = crate::config::Footer::default();
         assert_eq!(
-            app::footer_right(false, "main", "mimo", "master", 4321, 25_000, 100_000),
+            app::footer_right(&on, false, "main", "mimo", "master", 4321, 25_000, 100_000),
             "main · mimo · ⎇ master · 4.3k tok · ctx 25%"
         );
-        // fresh session: no name, no branch, nothing counted yet
-        assert_eq!(app::footer_right(false, "", "mimo", "", 0, 0, 100_000), "mimo");
+        // fresh session: no name, no branch, nothing generated — but ctx is
+        // reported at 0% rather than hidden, since it resets every turn
+        assert_eq!(app::footer_right(&on, false, "", "mimo", "", 0, 0, 100_000), "mimo · ctx 0%");
         // plan mode leads, so a narrow terminal cuts it last
-        assert_eq!(app::footer_right(true, "", "mimo", "", 0, 0, 100_000), "plan · mimo");
+        assert_eq!(app::footer_right(&on, true, "", "mimo", "", 0, 0, 100_000), "plan · mimo · ctx 0%");
+    }
+
+    #[test]
+    fn settings_hide_footer_segments_but_never_plan_mode() {
+        let off = crate::config::Footer {
+            session: false, model: false, branch: false, tokens: false, context: false,
+        };
+        // everything off still announces plan mode: it is why writes get refused
+        assert_eq!(app::footer_right(&off, true, "main", "mimo", "master", 4321, 25_000, 100_000), "plan");
+        assert_eq!(app::footer_right(&off, false, "main", "mimo", "master", 4321, 25_000, 100_000), "");
+        let ctx_only = crate::config::Footer { context: true, ..off };
+        assert_eq!(
+            app::footer_right(&ctx_only, false, "main", "mimo", "master", 4321, 25_000, 100_000),
+            "ctx 25%"
+        );
     }
 
     #[test]

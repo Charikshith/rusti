@@ -16,6 +16,23 @@ pub struct ModelProfile {
     pub model: String,
 }
 
+/// Which status-line segments are drawn. All on by default; /settings toggles
+/// them and writes the result back here, so the choice outlives the process.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Footer {
+    pub session: bool,
+    pub model: bool,
+    pub branch: bool,
+    pub tokens: bool,
+    pub context: bool,
+}
+
+impl Default for Footer {
+    fn default() -> Self {
+        Self { session: true, model: true, branch: true, tokens: true, context: true }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -26,6 +43,8 @@ pub struct Config {
     /// startup, which is what makes that answer outlive the process.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
+    #[serde(default)]
+    pub footer: Footer,
     /// Per-project defaults for --max-iters / --context; flags and env win.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iters: Option<usize>,
@@ -99,5 +118,35 @@ fn required(label: &str, default: &str) -> Option<String> {
             Some(_) => eprintln!("  (required)"),
             None => return None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// /settings does load -> flip -> save. The risk is that round-trip
+    /// dropping the rest of model.json, or an older file with no "footer" key
+    /// failing to parse at all.
+    #[test]
+    fn toggling_footer_keeps_the_rest_of_the_file() {
+        let p = std::env::temp_dir().join("rusti_footer_test.json");
+        let p = p.to_str().unwrap();
+        std::fs::write(p, r#"{"default":"mimo","models":[{"name":"mimo","url":"u","key":"k","model":"m"}],"allow":["read"]}"#).unwrap();
+
+        // an older file has no "footer": it must still load, all segments on
+        let mut cfg = Config::load_from(p);
+        assert!(cfg.footer.context && cfg.footer.session, "missing footer must default to on");
+
+        cfg.footer.context = false;
+        cfg.save_to(p).unwrap();
+
+        let back = Config::load_from(p);
+        assert!(!back.footer.context, "toggle must survive the round-trip");
+        assert!(back.footer.session, "untouched segments stay on");
+        assert_eq!(back.default.as_deref(), Some("mimo"), "default must survive");
+        assert_eq!(back.models.len(), 1, "models must survive");
+        assert_eq!(back.allow, vec!["read"], "allow must survive");
+        let _ = std::fs::remove_file(p);
     }
 }

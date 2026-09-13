@@ -52,7 +52,13 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // bottom is pinned: blank spacer, panel (picker or slash menu), input, status.
     // The input is as tall as the draft — Shift+Enter puts newlines in it.
     let panel = panel_rows(app, w);
-    let input = input_rows(&app.input, app.cursor, w.saturating_sub(3));
+    // While a picker is open the filter IS the draft: it types at the prompt,
+    // not in the picker header. The real draft is hidden until Esc restores it.
+    let (draft, caret) = match &app.pick {
+        Some(p) => (p.filter.as_str(), p.filter.chars().count()),
+        None => (app.input.as_str(), app.cursor),
+    };
+    let input = input_rows(draft, caret, w.saturating_sub(3));
     let bottom_rows = 2 + input.len() + panel.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
@@ -94,6 +100,10 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     // ── compose frame: one string per screen row ──
     let mut frame: Vec<String> = Vec::with_capacity(h);
+    // ToolStart stores a literal "⠋"; the live frame is substituted at draw
+    // time so the glyph actually turns. Storing the animation would mean
+    // rewriting app.lines every tick just to move one character.
+    let spin = SPINNER[app.spinner % SPINNER.len()];
 
     for _ in 0..pad {
         frame.push(String::new());
@@ -101,7 +111,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     for (st, row) in &all[start..end] {
         // markdown rows are already wrapped and styled; truncating would cut
         // an escape sequence in half
-        frame.push(if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w)) });
+        frame.push(if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w), spin) });
     }
 
     frame.push(String::new()); // blank spacer
@@ -111,10 +121,9 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let input_len = input.len();
     frame.extend(input);
 
-    // status line: spinner + hint left, model right
-    let spin = SPINNER[app.spinner % SPINNER.len()];
+    // status line: session/model/branch left, spinner + hint right
     let armed = app.armed();
-    let left_plain = if armed {
+    let hint = if armed {
         "press ctrl+c again to exit".to_string()
     } else if let Some(n) = app.notice() {
         format!("ℹ {n}")
@@ -127,21 +136,26 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     } else {
         String::new()
     };
-    let right = app::footer_right(
-        crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
+    let footer = app::footer_right(
+        &app.footer, crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
         app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(),
     );
-    let model = truncate_str(&right, w.saturating_sub(left_plain.chars().count() + 3));
-    let used = left_plain.chars().count() + 1 + model.chars().count();
-    let mut srow = if app.done {
-        format!("\x1b[2m{left_plain}\x1b[0m")
-    } else {
-        format!("\x1b[33m{spin}\x1b[0m\x1b[2m working…\x1b[0m")
-    };
-    if used < w {
-        srow.extend(std::iter::repeat(' ').take(w - used));
+    // the session info gets the width; the hint is short and yields to it
+    let info = truncate_str(&footer, w.saturating_sub(hint.chars().count() + 3));
+    let mut srow = format!("\x1b[2m{info}\x1b[0m");
+    if !hint.is_empty() {
+        // draw_line clears to end of line, so this padding only pushes the hint
+        // to the right edge — it is not there to erase the previous frame
+        let used = info.chars().count() + 1 + hint.chars().count();
+        if used < w {
+            srow.extend(std::iter::repeat(' ').take(w - used));
+        }
+        srow.push_str(&if app.done {
+            format!("\x1b[2m{hint}\x1b[0m")
+        } else {
+            format!("\x1b[33m{spin}\x1b[0m\x1b[2m working…\x1b[0m")
+        });
     }
-    srow.push_str(&format!("\x1b[2m{model}\x1b[0m"));
     frame.push(srow);
 
     // ── differential draw ──
@@ -179,7 +193,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // ── position cursor at input ──
     // the input block ends just above the status line; the caret sits in the
     // row holding the cursor, which is not the last one in a multi-line draft
-    let (caret_line, caret_col) = caret_at(&app.input, app.cursor);
+    let (caret_line, caret_col) = caret_at(draft, caret);
     let input_top = h.saturating_sub(1 + input_len);
     let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
     let input_x = (2 + caret_col).min(w.saturating_sub(1)) as u16; // after "> "
@@ -207,12 +221,13 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
             app::PickKind::Session => "↑/↓ select · enter resume · type to filter · esc cancel",
             app::PickKind::Model => "↑/↓ select · enter switch · type to filter · esc cancel",
             app::PickKind::Tree => "↑/↓ select · enter branch here · type to filter · esc cancel",
+            app::PickKind::Settings => "↑/↓ select · enter toggle · esc close",
         };
         let vis = p.visible();
         let count = if p.filter.is_empty() {
             format!("({})", p.rows.len())
         } else {
-            format!("({}/{})  {}▌", vis.len(), p.rows.len(), p.filter)
+            format!("({}/{})", vis.len(), p.rows.len())
         };
         let mut out = vec![sel_row(&format!("  {} {count}", p.title), false)];
         if vis.is_empty() {
@@ -278,6 +293,10 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// than ESC[2m — Windows Terminal renders dim as barely-darker, which is what made
 /// reasoning and answer text look identical.
 const THINK: &str = "\x1b[3;38;5;249m";
+/// Tool output text. 256-colour 245 (#8a8a8a) for the same reason THINK avoids
+/// ESC[2m — and a shade under THINK so reasoning still reads as the brighter of
+/// the two greys, with the italic carrying the rest of the difference.
+const DIM: &str = "\x1b[38;5;245m";
 const RESET: &str = "\x1b[0m";
 
 /// Rows that carry a status marker; these keep the per-row glyph colouring.
@@ -297,42 +316,53 @@ fn line_style(l: &str) -> u8 {
         b't' // reasoning_content
     } else if l.starts_with("  · ") {
         b's' // turn stats
-    } else if MARKERS.iter().any(|p| l.starts_with(p)) || is_user_line(l) {
+    } else if is_user_line(l) {
+        b'u' // split from b'k': the query stays bright, tool rows do not
+    } else if MARKERS.iter().any(|p| l.starts_with(p)) {
         b'k'
     } else {
         b'm'
     }
 }
 
-fn colorize_row(style: u8, s: &str) -> String {
+fn colorize_row(style: u8, s: &str, spin: char) -> String {
     match style {
         // the │ is an internal sentinel for line_style, never drawn: italic grey
         // carries the block on its own, the way the reference terminals do it
         b't' => return format!("  {THINK}{}{RESET}", s.strip_prefix("  │ ").unwrap_or(s)),
         b's' => return format!("\x1b[2m{s}\x1b[0m"),
+        // the user's own query: cyan "N›" marker so it's easy to find when
+        // scrolling back, text at full brightness like the model's answer.
+        // Wrapped rows carry no marker and must stay bright too — that's the
+        // whole reason this isn't b'k'.
+        b'u' => {
+            let i = s.bytes().take_while(u8::is_ascii_digit).count();
+            return if i > 0 && s[i..].starts_with("› ") {
+                format!("\x1b[36m{}›\x1b[0m{}", &s[..i], &s[i + '›'.len_utf8()..])
+            } else {
+                format!("  {s}")
+            };
+        }
         _ => {}
     }
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i > 0 && s[i..].starts_with("› ") {
-        // the user's own query: plain white, flush left, no accent colours.
-        // (the old form also ate the space after ›, printing "1›hello")
-        s.to_string()
-    } else if let Some(rest) = s.strip_prefix("  ⠋ ") {
-        format!("  \x1b[33m⠋\x1b[0m {rest}")
+    // b'k': tool rows. Coloured glyph, dim text, so a wall of tool output
+    // recedes behind the prose instead of competing with it.
+    if let Some(rest) = s.strip_prefix("  ⠋ ") {
+        // the one row that is still happening: turning spinner + bold text, so
+        // "running" and "finished a while ago" cannot be confused at a glance.
+        // ToolEnd rewrites this row to ✓/✗, which lands in the dim branches
+        // below — that swap is what un-bolds it.
+        format!("  \x1b[33m{spin}\x1b[0m {BOLD}{rest}{RESET}")
     } else if let Some(rest) = s.strip_prefix("  ✓ ") {
-        format!("  \x1b[32m✓\x1b[0m {rest}")
+        format!("  \x1b[32m✓\x1b[0m {DIM}{rest}{RESET}")
     } else if let Some(rest) = s.strip_prefix("  ✗ ") {
-        format!("  \x1b[31m✗\x1b[0m {rest}")
+        format!("  \x1b[31m✗\x1b[0m {DIM}{rest}{RESET}")
     } else if let Some(rest) = s.strip_prefix("  ⚠ ") {
-        format!("  \x1b[33m⚠\x1b[0m {rest}")
+        format!("  \x1b[33m⚠\x1b[0m {DIM}{rest}{RESET}")
     } else if let Some(rest) = s.strip_prefix("  ℹ ") {
-        format!("  \x1b[34mℹ\x1b[0m {rest}")
+        format!("  \x1b[34mℹ\x1b[0m {DIM}{rest}{RESET}")
     } else {
-        format!("  {s}")
+        format!("  {DIM}{s}{RESET}") // wrapped continuation of a tool row
     }
 }
 
@@ -508,19 +538,30 @@ mod tests {
         // every row of a logical line, the way draw() feeds them
         let rows = |line: &str| -> Vec<String> {
             let st = line_style(line);
-            word_wrap(line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80))).collect()
+            word_wrap(line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80), '⠋')).collect()
         };
         let first = |line: &str| rows(line).remove(0);
+        // a running tool must be impossible to mistake for a finished one:
+        // the glyph turns with the frame, and the text is bold, not dim
+        let run = colorize_row(line_style("  ⠋ pwd"), "  ⠋ pwd", '⠹');
+        assert!(run.contains('⠹'), "spinner must show the live frame, not the stored ⠋: {run:?}");
+        assert!(run.contains(BOLD) && !run.contains(DIM), "running tool must be bold: {run:?}");
+        assert!(first("  ✓ Cargo.toml  0ms").contains(DIM), "a finished tool un-bolds to dim");
+        assert!(!first("  ✓ Cargo.toml  0ms").contains(BOLD), "a finished tool is not bold");
         assert!(first("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
         assert!(first("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
         assert!(first("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
         assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
         assert!(first("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
-        // the user's query stays plain white — no escapes at all — and keeps
-        // the space after the caret that the old branch swallowed
-        assert_eq!(first("1› hello"), "1› hello");
-        assert_eq!(first("12› hi there"), "12› hi there");
+        // tool text is dim, so a wall of output recedes behind the prose
+        assert!(first("  ✓ Cargo.toml  0ms").contains(DIM), "tool text must be dim");
+        // the user's query keeps a cyan marker and BRIGHT text, on every row —
+        // wrapped rows carry no marker, so they must not fall into the dim branch
+        let q = rows("9› hello there, this is a long query that will certainly wrap past eighty columns");
+        assert!(q[0].starts_with("\x1b[36m9›\x1b[0m"), "query marker must be cyan: {:?}", q[0]);
+        assert!(q.len() > 1 && q.iter().all(|r| !r.contains(DIM)), "query must stay bright: {q:?}");
+        assert_eq!(first("12› hi there"), "\x1b[36m12›\x1b[0m hi there");
     }
 
     /// Markdown markers must be gone from the visible text, replaced by styling.
@@ -572,15 +613,16 @@ mod tests {
         let long = "  │ ".to_string() + &"thinking ".repeat(60);
         let st = line_style(&long);
         let rows: Vec<String> =
-            word_wrap(&long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40))).collect();
+            word_wrap(&long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40), '⠋')).collect();
         assert!(rows.len() > 3, "expected a wrapped block, got {}", rows.len());
         assert!(rows.iter().all(|r| r.contains(THINK)), "every row must be italic grey: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains('│')), "the sentinel bar is never drawn");
         // the answer is the plain one, so the two can never be confused
-        assert!(!colorize_row(line_style("an answer"), "an answer").contains(THINK));
+        assert!(!colorize_row(line_style("an answer"), "an answer", '⠋').contains(THINK));
         // paragraph breaks inside a block survive and stay styled
         let two = "  │ first thought\n\nsecond thought";
         let st = line_style(two);
-        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r).contains(THINK)));
+        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(THINK)));
     }
 }
+

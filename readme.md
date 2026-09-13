@@ -1,7 +1,7 @@
 # rusti
 
 Minimal coding agent in Rust: async core (tokio + reqwest), custom ANSI
-TUI (no ratatui), ~1.9 MB release binary.
+TUI (no ratatui), ~2.2 MB release binary.
 
 ```sh
 cargo build --release
@@ -33,7 +33,8 @@ cargo build --release
 In the TUI: `/plan` toggles plan mode (the agent reads and proposes but every write and
 command is refused), `/tree` browses and branches the session, `/undo` puts back the files
 the last turn changed, `/commit` stages and commits the work, `/export` writes the
-transcript out as markdown, and `!cargo test` runs a shell command whose output the model
+transcript out as markdown, `/settings` chooses which status-line segments are shown,
+and `!cargo test` runs a shell command whose output the model
 sees on the next turn. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
 plan mode, the session, model, git branch, tokens used and how full the context is.
@@ -129,13 +130,15 @@ rather than reflowed.
 
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
-binary small (~1.9 MB) and the rendering fast — full-screen redraw with
+binary small (~2.2 MB) and the rendering fast — full-screen redraw with
 word wrap, streaming text, and an input box for ask_user questions.
 
-`/reload` rebuilds with the release profile, so it is tuned to be quick *and*
-small: full LTO with `opt-level = "z"` and reqwest's unused http2/charset
-features dropped gets a 1.87 MB binary in ~14s (from 3.27 MB in 23.5s). See the
-measurement table in `Cargo.toml`.
+`/reload` rebuilds with the release profile, so it is tuned for the wait you
+actually sit through: thin LTO at `codegen-units = 4` with `opt-level = "z"` and
+reqwest's unused http2/charset features dropped gets a 2.16 MB binary in ~4.2s
+(from 3.27 MB in 23.5s). Fat LTO is 1.87 MB but cannot beat 11.7s at any
+`codegen-units`, because it merges the whole program into one module and
+optimizes that serially. See the full matrix in `Cargo.toml`.
 
 for non-interactive environments (piped stdin, SSH, CI), it falls back
 automatically to plain stdout/stderr streaming.

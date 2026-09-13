@@ -400,3 +400,42 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   https://example.com, live streaming + tool call against the proxy, and web_fetch over https all still work.
 - Reverted the earlier thin-LTO change entirely; readme size claims corrected (2.6MB → 1.9MB) and its stale
   "/tree dumps the session path" line fixed.
+
+## Session 2026-09-13 (19): feat-051 build, feat-052 transcript weight, feat-053 /settings, feat-054 tool status
+
+- **feat-052 first half**: the picker's typed filter was drawn in its header next to the row count.
+  Moved to the `>` prompt — while a picker is open the filter IS the draft (real draft hidden until Esc).
+  Filter still has no left/right cursor movement; `picker_key` only appends and backspaces.
+- **feat-052 second half**: transcript weight was flat — user queries, model prose and tool output all
+  full brightness. User lines get a cyan `N›` marker (bright text), tool output drops to 256-colour 245.
+  **Trap**: user lines shared style `b'k'` with tool rows, so dimming the tool fallthrough would have
+  dimmed every *wrapped* row of a long query while row 1 stayed bright. Split them into `b'u'`.
+  Used 245 not `ESC[2m` for the reason already on THINK: Windows Terminal barely darkens `2m`.
+- Status line moved right→left on request; padding is now only emitted when there IS a hint, since
+  `draw_line` clears to end-of-line and never needed padding to erase the previous frame.
+- **feat-051**: user asked for release under 10s. feat-049 had *already* tried thin LTO and reverted it
+  to protect size — so this time the whole `lto × codegen-units` matrix got measured before deciding.
+  Fat is nearly FLAT across cgu (12.8 / 11.7 / 12.1) because it merges the program into one module and
+  optimizes serially; cgu only splits front-end codegen. **Fat's floor is 11.7s — it cannot meet a 10s
+  target at any setting**, which is what makes this reversal different from the last one. Thin + cgu=4:
+  4.2s / 2.16MB. `cgu=1` is a fat-LTO habit that cost 2.7s here. Full matrix in Cargo.toml.
+  If size ever outranks the 2.7s again, thin/cgu=1 at 2.02MB is the fallback — NOT fat/cgu=16, which is
+  strictly dominated (same 2.02MB, 5s slower).
+- **feat-053**: `ctx %` already existed but was gated on `ctx > 0`, and `turn_ctx` resets to 0 at the start
+  of every turn — so it vanished exactly when you were watching it fill. Gate removed. `/settings` reuses
+  the picker (`PickKind::Settings`, Enter toggles and does NOT close) and persists to model.json.
+  Plan mode is deliberately not toggleable: it is *why* writes get refused.
+- **feat-054**: `ToolStart` stored a literal `⠋`, so a running command looked identical to a stalled one,
+  and its text was dim like finished output. Live frame now substituted at draw time from `app.spinner`;
+  running row is bold, and `ToolEnd`'s glyph swap un-bolds it.
+
+### Found, not fixed
+- **`Config::load_from` swallows a malformed model.json silently** (`config.rs:60`, `.ok()` twice): one wrong
+  key returns all-defaults with no message. Caught it by writing a test fixture with `base` instead of `url`
+  and watching `default` come back `None`. Now that `/settings` writes to that file, a bad hand-edit loses
+  models and `allow` invisibly. Ten-line fix; the highest-value thing left.
+- **No `panic::set_hook`**: the restore at `mod.rs:394` is a plain sequential call, so a panic skips
+  raw-mode-off and alternate-screen-exit and wrecks the terminal. Also the precondition for `panic="abort"`.
+- **`/reload` builds into `target/reload`**, a separate 777MB tree — it did NOT inherit feat-051's warm
+  `target/release`. The first `/reload` after this profile change pays a full cold rebuild, not 4.2s.
+- `tool-visual-examples.html` is untracked and predates this session; left alone.

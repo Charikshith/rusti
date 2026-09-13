@@ -37,6 +37,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/undo", desc: "put back the files the last turn changed and rewind to before it", soon: false },
     Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
     Cmd { name: "/plan", desc: "toggle plan mode: read and propose, change nothing", soon: false },
+    Cmd { name: "/settings", desc: "choose which segments the status line shows", soon: false },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
     Cmd { name: "/export", desc: "/export [file.md] - write the transcript out as markdown", soon: false },
 ];
@@ -74,10 +75,12 @@ pub fn filter_cmds(input: &str) -> Vec<&'static Cmd> {
 }
 
 /// What an open list picker selects (Enter's action).
+#[derive(PartialEq)]
 pub enum PickKind {
-    Session, // resume the chosen session file
-    Model,   // switch to the chosen model profile
-    Tree,    // branch the session at the chosen entry
+    Session,  // resume the chosen session file
+    Model,    // switch to the chosen model profile
+    Tree,     // branch the session at the chosen entry
+    Settings, // flip a status-line segment; the only kind Enter does not close
 }
 
 /// An open list picker (/resume with no argument, /model with no argument).
@@ -130,6 +133,7 @@ pub struct App {
     /// ("resumed …", "exported …") is not part of the conversation, so it does
     /// not belong in the transcript.
     pub notice: Option<(String, std::time::Instant)>,
+    pub footer: crate::config::Footer, // which status-line segments to draw
     pub exit_armed: Option<std::time::Instant>, // first ctrl+c seen; a second within 2s quits
     // per-turn accounting for the "· tok · tps · s" line
     pub turn_t0: std::time::Instant,
@@ -233,6 +237,7 @@ pub fn ui_loop(
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
         history: seed_history, hist_idx: None, tool_line: None, ask_line: None, retry_line: None,
         notice: None, exit_armed: None,
+        footer: crate::config::Config::load().footer,
         turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
         sess_tok: 0, branch: String::new(),
         thinking: false,
@@ -579,6 +584,7 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
                 let _ = job_tx.send(Job::Rename(arg.to_string()));
             }
         }
+        "/settings" => pick_settings(app),
         "/tree" => { let _ = job_tx.send(Job::Tree); }
         "/export" => {
             let to = (!arg.is_empty()).then(|| arg.to_string());
@@ -695,23 +701,32 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
     let _ = job_tx.send(Job::Task(raw));
 }
 
-/// Right of the status line: what this session is, and how full it is.
-pub fn footer_right(plan: bool, session: &str, model: &str, branch: &str, sess_tok: u64, ctx: u64, limit: u64) -> String {
+/// The status line: what this session is, and how full it is. Every segment
+/// except `plan` is toggleable via /settings — plan is a mode you are IN, not
+/// decoration, so hiding it would hide the reason writes are being refused.
+pub fn footer_right(
+    f: &crate::config::Footer, plan: bool, session: &str, model: &str, branch: &str,
+    sess_tok: u64, ctx: u64, limit: u64,
+) -> String {
     let mut parts = Vec::new();
     if plan {
         parts.push("plan".to_string()); // first, so a narrow terminal truncates it last
     }
-    if !session.is_empty() {
+    if f.session && !session.is_empty() {
         parts.push(session.to_string());
     }
-    parts.push(model.to_string());
-    if !branch.is_empty() {
+    if f.model {
+        parts.push(model.to_string());
+    }
+    if f.branch && !branch.is_empty() {
         parts.push(format!("⎇ {branch}"));
     }
-    if sess_tok > 0 {
+    if f.tokens && sess_tok > 0 {
         parts.push(format!("{} tok", kilo(sess_tok)));
     }
-    if ctx > 0 {
+    // no `ctx > 0` gate: turn_ctx resets to 0 at the start of every turn, so
+    // gating made the reading vanish exactly when you were watching it
+    if f.context {
         parts.push(format!("ctx {}%", ctx * 100 / limit.max(1)));
     }
     parts.join(" · ")
@@ -743,14 +758,22 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
             return;
         }
         KeyCode::Enter => {
-            let Some(p) = app.pick.take() else { return };
+            let Some(p) = app.pick.as_ref() else { return };
             let Some((_, value)) = p.visible().get(p.idx).map(|(l, v)| (l.clone(), v.clone())) else {
                 return; // filtered down to nothing: Enter has nothing to pick
             };
+            // settings is a toggle list, not a chooser: flipping one row is not
+            // a reason to close, you usually came to flip more than one
+            if p.kind == PickKind::Settings {
+                toggle_footer(app, &value);
+                return;
+            }
+            let Some(p) = app.pick.take() else { return };
             match p.kind {
                 PickKind::Session => { let _ = job_tx.send(Job::ResumePath(value)); }
                 PickKind::Model => switch_model(app, job_tx, &value),
                 PickKind::Tree => { let _ = job_tx.send(Job::Select(value)); }
+                PickKind::Settings => {} // returned above; closing is Esc's job
             }
             return;
         }
@@ -842,6 +865,54 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
 
 /// /model (no argument): open an interactive picker over the saved profiles,
 /// marking the active one. Up/down navigate, Enter switches, Esc cancels.
+/// /settings: the status-line segments as an on/off list. Rebuilt in place
+/// after every toggle so the marks are the live state, keeping the cursor and
+/// the typed filter where they were — you are usually flipping a second row.
+fn pick_settings(app: &mut App) {
+    let f = app.footer.clone();
+    // no on-marker here: the picker draws ▸ for the cursor, and a second ▸ for
+    // "enabled" just reads as two cursors. The on/off column already says it.
+    let row = |key: &str, on: bool, what: &str| {
+        (format!("{:<9} {:<3}  {what}", key, if on { "on" } else { "off" }), key.to_string())
+    };
+    let rows = vec![
+        row("session", f.session, "session name"),
+        row("model", f.model, "model id"),
+        row("branch", f.branch, "git branch"),
+        row("tokens", f.tokens, "tokens generated this session"),
+        row("context", f.context, "how full the context window is"),
+    ];
+    let (idx, top, filter) = match app.pick.take() {
+        Some(p) if p.kind == PickKind::Settings => (p.idx, p.top, p.filter),
+        _ => (0, 0, String::new()),
+    };
+    let mut p = Pick { kind: PickKind::Settings, title: "status line".into(), rows, idx, top, filter };
+    // the labels carry "on"/"off", so a filter can match fewer rows after a
+    // toggle than before it — clamp rather than point past the end
+    p.idx = p.idx.min(p.visible().len().saturating_sub(1));
+    app.pick = Some(p);
+}
+
+/// Flip one segment and write it back to model.json. Load-then-save keeps the
+/// rest of the file (models, allow, defaults) intact.
+fn toggle_footer(app: &mut App, key: &str) {
+    let f = &mut app.footer;
+    match key {
+        "session" => f.session = !f.session,
+        "model" => f.model = !f.model,
+        "branch" => f.branch = !f.branch,
+        "tokens" => f.tokens = !f.tokens,
+        "context" => f.context = !f.context,
+        _ => return,
+    }
+    let mut cfg = crate::config::Config::load();
+    cfg.footer = app.footer.clone();
+    if let Err(e) = cfg.save() {
+        app.notice = Some((format!("settings not saved: {e}"), std::time::Instant::now()));
+    }
+    pick_settings(app);
+}
+
 fn pick_model(app: &mut App) {
     let cfg = crate::config::Config::load();
     if cfg.models.is_empty() {
