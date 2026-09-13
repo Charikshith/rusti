@@ -207,16 +207,52 @@ async fn permitted(name: &str, summary: &str) -> Result<(), String> {
     if tools::YOLO.load(Ordering::Relaxed) || !GATED.contains(&name) || ALLOWED.lock().unwrap().iter().any(|a| a == name) {
         return Ok(());
     }
-    let (_, ans) = tools::ask_user(&format!("allow {name} {summary}? [y]es / [n]o / [a]lways for {name}")).await;
-    if decide(name, &ans) { Ok(()) } else { Err(format!("user denied {name}: {}", ans.trim())) }
+    let (_, ans) = tools::ask_user(&format!("allow {name} {summary}? [y]es / [n]o / [a]lways (saved)")).await;
+    match decide(&ans) {
+        Answer::Once => Ok(()),
+        Answer::Always => {
+            allow_tool(name);
+            Ok(())
+        }
+        Answer::Deny => Err(format!("user denied {name}: {}", ans.trim())),
+    }
 }
 
-/// y/yes -> once, a/always -> this tool for the rest of the process, anything else -> deny.
-fn decide(name: &str, answer: &str) -> bool {
+enum Answer {
+    Once,
+    Always,
+    Deny,
+}
+
+/// y/yes -> once, a/always -> from now on, anything else -> deny.
+fn decide(answer: &str) -> Answer {
     match answer.trim().to_ascii_lowercase().as_str() {
-        "a" | "always" => { ALLOWED.lock().unwrap().push(name.to_string()); true }
-        "y" | "yes" => true,
-        _ => false,
+        "a" | "always" => Answer::Always,
+        "y" | "yes" => Answer::Once,
+        _ => Answer::Deny,
+    }
+}
+
+/// Allow `name` for the rest of this run, and save it so the next run won't ask.
+fn allow_tool(name: &str) {
+    ALLOWED.lock().unwrap().push(name.to_string());
+    let mut cfg = crate::config::Config::load();
+    if cfg.allow.iter().any(|a| a == name) {
+        return;
+    }
+    cfg.allow.push(name.to_string());
+    if let Err(e) = cfg.save() {
+        emit(Event::Text(format!("  ⚠ allowed {name} for this run only ({e})")));
+    }
+}
+
+/// Seed the permission gate with the tools already saved in the project config.
+pub fn allow_from_config(names: &[String]) {
+    let mut a = ALLOWED.lock().unwrap();
+    for n in names {
+        if !a.iter().any(|x| x == n) {
+            a.push(n.clone());
+        }
     }
 }
 
@@ -566,11 +602,14 @@ pub fn self_test() {
         assert!(system_prompt().contains("# Git\nbranch: "));
     }
 
-    // permission decisions
-    assert!(decide("write_file", "y") && decide("write_file", " Yes "));
-    assert!(!decide("write_file", "n") && !decide("write_file", "") && !decide("write_file", "no answer given"));
-    assert!(decide("run_command", "a"));
-    assert!(ALLOWED.lock().unwrap().iter().any(|a| a == "run_command"));
+    // permission decisions (decide stays pure — saving happens in permitted)
+    assert!(matches!(decide("y"), Answer::Once) && matches!(decide(" Yes "), Answer::Once));
+    assert!(matches!(decide("n"), Answer::Deny) && matches!(decide(""), Answer::Deny));
+    assert!(matches!(decide("no answer given"), Answer::Deny));
+    assert!(matches!(decide("a"), Answer::Always) && matches!(decide("ALWAYS"), Answer::Always));
+    // a saved "always" answer is what survives a restart
+    allow_from_config(&["run_command".to_string(), "run_command".to_string()]);
+    assert_eq!(ALLOWED.lock().unwrap().iter().filter(|a| *a == "run_command").count(), 1);
 
     // project-root guard (yolo off for this block)
     tools::YOLO.store(false, Ordering::Relaxed);
@@ -673,6 +712,16 @@ pub fn self_test() {
     c.save_to("_test_model.json").unwrap();
     let c2 = crate::config::Config::load_from("_test_model.json");
     assert_eq!(c2.resolve().map(|m| m.model.as_str()), Some("gpt-x"));
+    // project settings round-trip, and stay out of the file until they're set
+    let written = std::fs::read_to_string("_test_model.json").unwrap();
+    assert!(!written.contains("allow") && !written.contains("max_iters") && !written.contains("context"));
+    c.allow.push("run_command".into());
+    c.max_iters = Some(7);
+    c.context = Some(2000);
+    c.save_to("_test_model.json").unwrap();
+    let c3 = crate::config::Config::load_from("_test_model.json");
+    assert_eq!(c3.allow, vec!["run_command".to_string()]);
+    assert_eq!((c3.max_iters, c3.context), (Some(7), Some(2000)));
     std::fs::remove_file("_test_model.json").unwrap();
     println!("self-test OK");
 }

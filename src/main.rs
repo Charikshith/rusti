@@ -34,6 +34,9 @@ flags
 
 env: LLM_URL LLM_KEY LLM_MODEL RUSTI_SESSION RUSTI_MAX_ITERS RUSTI_CONTEXT RUSTI_YOLO
 
+model.json also carries project settings: \"allow\" (tools answered [a]lways, so the next
+run doesn't ask), \"max_iters\", \"context\". Flags and env override them.
+
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   sessions
   /tree           browse and branch           /undo             revert the last turn's file changes
@@ -93,6 +96,16 @@ fn main() {
             None => eprintln!("aborted"),
         }
         return;
+    }
+
+    // project settings first, so flags and env below still override them
+    let saved = config::Config::load();
+    ai_core::allow_from_config(&saved.allow);
+    if let Some(n) = saved.max_iters {
+        ai_core::set_max_iters(n);
+    }
+    if let Some(n) = saved.context {
+        ai_core::set_context_limit(n);
     }
 
     if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTI_YOLO").map_or(false, |v| v == "1") {

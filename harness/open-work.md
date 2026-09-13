@@ -4,7 +4,11 @@
 
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
 Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and deliberately skipped — see its entry below.
-Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
+Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
+  3a (small, each removes daily friction): Plan Mode → Web Fetch → /session list|switch → /export (Project Config landed as feat-038)
+  3b (worth it once 3a lands): Test Loop, Diff in the Tool Line, Tool Output Expand Toggle, Read-Side Sandbox, Multi-Level Undo
+  3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
+     OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
 
 ## Priority — Add When Needed
 
@@ -79,10 +83,12 @@ When: Model reads/lists/greps paths outside the project (../, absolute, ~) — w
 What: Extend `tools::guard` to read_file/list_dir/grep/glob behind an `--allow-outside` flag; today reads are deliberately open so the model can look at dependency sources
 Where: ai_core/tools.rs guard()
 
-### Project Config File
-When: Permission "always" answers live only in process memory (ALLOWED in ai_core/mod.rs) and vanish on exit; default model / max-iters must be re-passed per run
-What: `.rusti/config.json` with a persistent tool allowlist, default profile, and max_iters; loaded at startup, written when the user answers `always`
-Where: config.rs, ai_core/mod.rs permission gate, main.rs
+### Project Config Follow-ups
+When: feat-038 put `allow` / `max_iters` / `context` in model.json (not the separate `.rusti/config.json` first
+sketched — one file and one loader beat two, and the profile default already lived there)
+What: a way to see and forget saved permissions without hand-editing JSON (`/allow` listing them, `--forget NAME`);
+per-profile `context` so the limit follows the model rather than the project
+Where: config.rs, tui/app.rs handle_command
 
 ### Diff in the Tool Line
 When: feat-033 `/undo` can revert an edit, but you still can't *see* what edit_file/write_file changed before deciding

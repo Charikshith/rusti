@@ -40,6 +40,13 @@ session, model, git branch, tokens used and how full the context is.
 {"default": "ollama", "models": [{"name": "ollama", "url": "http://localhost:11434/v1/chat/completions", "key": "", "model": "llama3.2"}]}
 ```
 
+It doubles as the project config. Answering `[a]lways` at a permission prompt appends the
+tool to `"allow"`, so the next run doesn't ask again; `"max_iters"` and `"context"` set
+per-project defaults that flags and env still override:
+```json
+{"allow": ["read_file", "run_command"], "max_iters": 100, "context": 60000}
+```
+
 ## architecture
 
 ```

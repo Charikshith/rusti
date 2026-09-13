@@ -252,3 +252,16 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
   `Mutex` statics and the interactive permission prompt under contention. Reasoning recorded in open-work.
 - `start_task()` extracted from the Enter handler so /commit reuses the same turn setup.
 - `cargo test` 15 passed, `--self-test` OK, `--help`/`--version` checked by hand. TUI paths not driven interactively.
+
+## Session 2026-09-13 (8): Tier 3 resequenced, feat-038 project config
+- Tier 3 was filed in arrival order; resequenced by friction-removed ÷ effort into 3a (Plan Mode, Web Fetch,
+  /session switch, /export), 3b (Test Loop, tool-line diff, expand toggle, read sandbox, multi-level undo),
+  3c (prompt caching, native Anthropic/Gemini, image input, MCP — only when the need is real).
+- **feat-038**: `model.json` gained `allow` / `max_iters` / `context`, all optional and omitted from the file when
+  unset, so every existing model.json keeps loading untouched. `[a]lways` now appends to `allow` and saves —
+  permissions survive a restart, which was the actual daily friction.
+- **Decision**: extended model.json rather than adding `.rusti/config.json` as the backlog sketched. One file, one
+  loader, and the profile default already lived there. Recorded on the feature entry.
+- `decide()` became a pure `Answer` parse with the saving moved into `permitted()`, so `--self-test` can exercise the
+  permission logic without writing to the user's real model.json (it would have, the naive way).
+- `cargo test` 15 passed, `--self-test` OK, `--list` verified against a model.json with none of the new keys.

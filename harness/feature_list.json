@@ -380,6 +380,20 @@
       ],
       "status": "done",
       "evidence": "tui::tests::footer_shows_only_the_parts_that_exist covers the full line and the fresh-session case; cargo test 15 passed."
+    },
+    {
+      "id": "feat-038",
+      "name": "Project config (persistent permissions)",
+      "description": "model.json gained allow / max_iters / context, all serde-optional and skipped when unset so existing files are untouched. Answering [a]lways at a permission prompt appends the tool to allow and saves, so the next run doesn't ask; main.rs seeds the gate via ai_core::allow_from_config before flags and env, which still override max_iters/context. decide() was split into a pure Answer parse with the saving moved into permitted(), so --self-test never writes to the real model.json.",
+      "dependencies": [
+        "feat-023",
+        "feat-005"
+      ],
+      "status": "done",
+      "evidence": "--self-test asserts the Answer parse, that allow_from_config de-duplicates, that a fresh config writes none of the three keys, and that they round-trip once set. `rusti --list` still reads a model.json without them. cargo test 15 passed; --self-test OK. The prompt-suppression path itself needs a live model to drive.",
+      "decisions": [
+        "Extended model.json instead of adding .rusti/config.json as the backlog sketched: one file, one loader, and the default-profile half of the feature already lived there. Renaming the file is the cheap fix if the mixed contents grate."
+      ]
     }
   ]
 }

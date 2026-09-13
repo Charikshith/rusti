@@ -22,6 +22,15 @@ pub struct Config {
     pub default: Option<String>,
     #[serde(default)]
     pub models: Vec<ModelProfile>,
+    /// Tools the user answered "always" to. Seeded into the permission gate at
+    /// startup, which is what makes that answer outlive the process.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    /// Per-project defaults for --max-iters / --context; flags and env win.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iters: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<u64>,
 }
 
 impl Config {
