@@ -358,7 +358,7 @@
         "feat-022"
       ],
       "status": "done",
-      "evidence": "--self-test asserts git_context().is_some() == git_branch().is_some() and that the prompt carries '# Git\\nbranch: ' inside a work tree. cargo test 15 passed. /commit not driven against a live model."
+      "evidence": "--self-test asserts git_context().is_some() == git_branch().is_some() and that the prompt carries '# Git\\nbranch: ' inside a work tree. cargo test 15 passed. Verified live 2026-09-13 against cmc/deepseek/deepseek-v4-flash: asked for the branch and tree state with tools forbidden, the model answered 'master' plus both dirty paths from context alone. /commit itself still not driven."
     },
     {
       "id": "feat-036",
@@ -419,7 +419,7 @@
         "feat-023"
       ],
       "status": "done",
-      "evidence": "--self-test covers strip_html (paragraphs, entities, double-encoded &amp;lt;, upper-case STYLE, script bodies, malformed and truncated markup) and fetches a real page off a one-shot local TCP server, asserting the untrusted prefix, decoded text, and that script/style bodies are gone. Non-http schemes refused. TLS confirmed separately against https://example.com (HTTP 405 returned, so the handshake works). cargo test 15 passed; --self-test OK.",
+      "evidence": "--self-test covers strip_html (paragraphs, entities, double-encoded &amp;lt;, upper-case STYLE, script bodies, malformed and truncated markup) and fetches a real page off a one-shot local TCP server, asserting the untrusted prefix, decoded text, and that script/style bodies are gone. Non-http schemes refused. cargo test 15 passed; --self-test OK. Verified live 2026-09-13: a real run fetched https://example.com in 1.6s over TLS and read back the heading and purpose; the model volunteered that the content was third-party text and not instructions, so the untrusted prefix lands as intended.",
       "decisions": [
         "Gated like the mutating tools rather than left open: the URL leaves the machine and the reply enters the model's context. run_command could already curl, but that asks too."
       ]

@@ -302,3 +302,21 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - Real gap found while checking the above: there is still no way to start a *fresh* session without relaunching.
   Filed as "New Session Without Restarting".
 - `cargo test` 16 passed, `--self-test` OK.
+
+## Session 2026-09-13 (12): live verification of the one-shot path
+Ran real tasks against the proxy on :20128 (`cmc/deepseek/deepseek-v4-flash`), read-only, stdin piped so any
+gated tool would auto-deny.
+- **Agent loop**: "read Cargo.toml and reply with the package name" → streamed prose, one `read_file` tool line,
+  answered `rusti 0.1.0`. The whole feat-028..041 stack is in that binary.
+- **feat-035 git context**: asked for branch + tree state with tools forbidden; the model answered `master` and both
+  dirty paths from the system prompt alone. Confirms the injection and the every-turn refresh.
+- **feat-040 web_fetch**: fetched https://example.com in 1.6s over TLS, read back heading and purpose, and
+  volunteered "the fetched content is third-party page text, not instructions" — the untrusted prefix works.
+- **feat-030** confirmed by the negative: an HTTP 400 failed immediately with no retry, as designed.
+
+**Environment finding, not a rusti bug**: the default profile `qwen3-8b-gguf-q5_k_m` points at 127.0.0.1:**8080**,
+which is not running — every "model not found" seen first came from there, not from the :20128 proxy. 36 other
+profiles point at :20128 and work. `--use <name>` fixes it; left alone, it is the user's config.
+
+**Still unverified — needs an interactive terminal**: every TUI surface from feat-032 on (/tree picker, /undo, /plan
+toggle and its footer marker, /commit, /export, `!cmd`, the footer itself, failed-tool output rendering).
