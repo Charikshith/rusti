@@ -201,3 +201,11 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
   result is orphaned (falls back to the latest call when a tail is all results). Old entries stay in the tree.
 - `ChatResult.prompt_tokens` added so the loop sees the size without going through the event channel.
 - Verification: `cargo test` 13 passed, `--self-test` OK (compact_cut cases + limit floor). Live >100k run still pending.
+
+## Session 2026-09-13 (3): feat-030 — retry with backoff
+- `chat_stream` wraps connect + status check in a loop: connection errors and HTTP 408/429/5xx retry up to 3×
+  with 1s/2s/4s backoff (`RETRY_BASE_MS` static, shrunk in tests); sleep polls `cancel` every 50ms.
+- Other 4xx fail at once. Nothing after the first streamed byte is retried, so output never duplicates.
+- Transcript line: `⚠ HTTP 503 ...: busy — retry 1/3 in 1.0s`.
+- `--self-test` fake server answers 503 on connection #1, then the two scripted SSE bodies — retry is exercised
+  on every self-test run. `cargo test` 13 passed, `--self-test` OK.

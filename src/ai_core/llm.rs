@@ -7,8 +7,17 @@ use super::{emit, Event};
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+const RETRIES: u32 = 3;
+/// First backoff step; doubles per attempt (1s, 2s, 4s). Tests shrink it.
+pub static RETRY_BASE_MS: AtomicU64 = AtomicU64::new(1000);
+
+/// Transient statuses worth a retry; other 4xx are the caller's fault.
+pub fn retryable(status: u16) -> bool {
+    matches!(status, 408 | 429) || status >= 500
+}
 
 pub struct Client {
     pub url: String,
@@ -36,16 +45,41 @@ impl Client {
         if let Some(t) = tools {
             body["tools"] = Value::Array(t.to_vec());
         }
-        let mut req = self.http.post(&self.url).json(&body);
-        if !self.key.is_empty() {
-            req = req.bearer_auth(&self.key);
-        }
-        let resp = req.send().await.map_err(|e| format!("request failed: {e}"))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("HTTP {status}: {}", truncate(&text, 500)));
-        }
+        // retries cover only the connect + status phase: once content has
+        // streamed, replaying would duplicate output in the transcript
+        let mut attempt = 0u32;
+        let resp = loop {
+            let mut req = self.http.post(&self.url).json(&body);
+            if !self.key.is_empty() {
+                req = req.bearer_auth(&self.key);
+            }
+            let err = match req.send().await {
+                Ok(r) if r.status().is_success() => break r,
+                Ok(r) => {
+                    let status = r.status();
+                    let text = r.text().await.unwrap_or_default();
+                    let msg = format!("HTTP {status}: {}", truncate(&text, 500));
+                    if !retryable(status.as_u16()) {
+                        return Err(msg);
+                    }
+                    msg
+                }
+                Err(e) => format!("request failed: {e}"),
+            };
+            if attempt >= RETRIES {
+                return Err(err);
+            }
+            attempt += 1;
+            let wait = RETRY_BASE_MS.load(Ordering::Relaxed) << (attempt - 1);
+            emit(Event::Text(format!("  ⚠ {err} — retry {attempt}/{RETRIES} in {:.1}s", wait as f64 / 1000.0)));
+            let t0 = Instant::now();
+            while (t0.elapsed().as_millis() as u64) < wait {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("interrupted".into());
+                }
+                tokio::time::sleep(Duration::from_millis(wait.min(50))).await;
+            }
+        };
 
         let mut stream = resp.bytes_stream();
         let mut buf = BytesMut::new();

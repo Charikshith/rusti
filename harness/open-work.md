@@ -2,7 +2,7 @@
 
 ## Suggested Order (2026-09-13 review)
 
-Tier 1 — bites on the first real long task: Retry with Backoff → Tool Output Visibility (Prompt-Token Tracking and Context Compaction landed as feat-028/029)
+Tier 1 — bites on the first real long task: Tool Output Visibility (Prompt-Token Tracking, Context Compaction, Retry landed as feat-028/029/030)
 Tier 2 — daily-driver quality: Diff Before Edit + Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer
 Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
 
@@ -58,10 +58,10 @@ Where: tui/app.rs Enter handler
 
 ## Agent Capability (from 2026-09-09 review) — ★ = start here
 
-### Retry with Backoff
-When: Transient errors (connection reset, 429, 5xx) fail the whole turn
-What: Retry chat_stream up to N times with exponential backoff; surface `⚠ retrying…` in the TUI; never retry after partial content was streamed
-Where: ai_core/llm.rs chat_stream, ai_core/mod.rs run_agent
+### Retry Follow-ups
+When: feat-030 retries connect/status failures only
+What: honor `Retry-After` on 429; retry a `stream error` that arrives before the first token (today it fails the turn)
+Where: ai_core/llm.rs chat_stream
 
 ### Parallel Tool Calls
 When: Model emits several independent tool calls in one turn; they run one by one

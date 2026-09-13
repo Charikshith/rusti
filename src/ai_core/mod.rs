@@ -413,12 +413,19 @@ pub fn self_test() {
             let mut buf = [0u8; 65536];
             s.read(&mut buf).unwrap();
             n += 1;
-            let body = if n == 1 { &sse_tool } else { sse_done };
+            if n == 1 {
+                // transient failure first: the client must retry, not give up
+                s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy").unwrap();
+                continue;
+            }
+            let body = if n == 2 { &sse_tool } else { sse_done };
             s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).unwrap();
-            if n >= 2 { break; }
+            if n >= 3 { break; }
         }
     });
 
+    assert!(llm::retryable(503) && llm::retryable(429) && !llm::retryable(400) && !llm::retryable(401));
+    llm::RETRY_BASE_MS.store(10, Ordering::Relaxed);
     tools::YOLO.store(true, Ordering::Relaxed); // the fake stream calls run_command; no stdin to answer a prompt
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     rt.block_on(async {
