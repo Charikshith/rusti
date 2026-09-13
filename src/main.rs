@@ -44,6 +44,7 @@ slash commands (--tui)
   /export         transcript to markdown      /reload           rebuild and relaunch
   /quit
   !CMD            run a shell command; its output goes to the model too
+  shift+enter     newline in the draft (alt+enter where the terminal eats shift)
 ";
 
 fn main() {

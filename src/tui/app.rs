@@ -124,6 +124,7 @@ pub struct App {
     pub history: Vec<String>,
     pub hist_idx: Option<usize>,
     pub tool_line: Option<usize>, // index of the active "⠋" tool line
+    pub ask_line: Option<usize>,  // index of the pending question's line
     pub exit_armed: Option<std::time::Instant>, // first ctrl+c seen; a second within 2s quits
     // per-turn accounting for the "· tok · tps · s" line
     pub turn_t0: std::time::Instant,
@@ -214,7 +215,7 @@ pub fn ui_loop(
         lines: seed_lines, current: String::new(),
         ask: None, input: String::new(), cursor: 0, done: true, model, session,
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
-        history: seed_history, hist_idx: None, tool_line: None, exit_armed: None,
+        history: seed_history, hist_idx: None, tool_line: None, ask_line: None, exit_armed: None,
         turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
         sess_tok: 0, branch: String::new(),
         thinking: false,
@@ -269,7 +270,7 @@ pub fn ui_loop(
                             if !app.done {
                                 cancel.store(true, Ordering::Relaxed);
                                 // dismiss a pending question so the agent unblocks
-                                if let Some((_, reply)) = app.ask.take() {
+                                if let Some(reply) = close_ask(&mut app, "interrupted") {
                                     let _ = reply.send("interrupted".into());
                                 }
                             }
@@ -288,7 +289,7 @@ pub fn ui_loop(
                             app.pick = None; // first press clears whatever is in the way
                             if !app.done {
                                 cancel.store(true, Ordering::Relaxed);
-                                if let Some((_, reply)) = app.ask.take() {
+                                if let Some(reply) = close_ask(&mut app, "interrupted") {
                                     let _ = reply.send("interrupted".into());
                                 }
                             }
@@ -307,13 +308,19 @@ pub fn ui_loop(
                         // Submit answer to Ask
                         (KeyCode::Enter, _) if app.ask.is_some() => {
                             app.fresh = false;
-                            let (_, reply) = app.ask.take().unwrap();
                             let ans = app.input.trim().to_string();
-                            app.msg_num += 1;
-                            app.lines.push(format!("{}› {ans}", app.msg_num));
                             app.input.clear();
                             app.cursor = 0;
-                            let _ = reply.send(ans);
+                            if let Some(reply) = close_ask(&mut app, &ans) {
+                                let _ = reply.send(ans);
+                            }
+                        }
+                        // Shift+Enter (Alt+Enter where the terminal eats Shift):
+                        // a newline in the input instead of submitting it
+                        (KeyCode::Enter, m) if m.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
+                            let byte = app.input.char_indices().nth(app.cursor).map(|(i, _)| i).unwrap_or(app.input.len());
+                            app.input.insert(byte, '\n');
+                            app.cursor += 1;
                         }
 
                         // Enter: slash command or task
@@ -372,6 +379,15 @@ pub fn ui_loop(
                         (KeyCode::Right, _) => { if app.cursor < app.input.chars().count() { app.cursor += 1; } }
                         (KeyCode::Home, _) => { app.cursor = 0; }
                         (KeyCode::End, _) => { app.cursor = app.input.chars().count(); }
+
+                        // multi-line input: the arrows walk its lines instead of
+                        // recalling history, which would throw the draft away
+                        (KeyCode::Up, _) if app.input.contains('\n') => {
+                            app.cursor = move_line(&app.input, app.cursor, -1);
+                        }
+                        (KeyCode::Down, _) if app.input.contains('\n') => {
+                            app.cursor = move_line(&app.input, app.cursor, 1);
+                        }
 
                         // history recall (not while answering Ask)
                         (KeyCode::Up, _) if !app.ask.is_some() && !app.history.is_empty() => {
@@ -471,6 +487,7 @@ pub fn ui_loop(
                 ai_core::Event::Ask { question, reply } => {
                     app.flush();
                     app.lines.push(format!("  ℹ {question}"));
+                    app.ask_line = Some(app.lines.len() - 1);
                     app.ask = Some((question, reply));
                 }
                 ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
@@ -574,6 +591,55 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         _ => app.lines.push(format!("  ✗ unknown command: {cmd}")),
     }
     false
+}
+
+/// Close a pending question, recording the answer on the question's own line.
+/// An answer to a permission prompt is not a turn in the conversation, so it
+/// must not take a message number of its own.
+fn close_ask(app: &mut App, ans: &str) -> Option<tokio::sync::oneshot::Sender<String>> {
+    let (question, reply) = app.ask.take()?;
+    if let Some(i) = app.ask_line.take() {
+        if i < app.lines.len() {
+            app.lines[i] = format!("  ℹ {question} → {ans}");
+        }
+    }
+    Some(reply)
+}
+
+/// The cursor one line up (-1) or down (+1) in a multi-line input, keeping the
+/// column where the shorter line allows it.
+pub fn move_line(input: &str, cursor: usize, delta: isize) -> usize {
+    let chars: Vec<char> = input.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let line_start = |mut i: usize| {
+        while i > 0 && chars[i - 1] != '\n' {
+            i -= 1;
+        }
+        i
+    };
+    let start = line_start(cursor);
+    let col = cursor - start;
+    if delta < 0 {
+        if start == 0 {
+            return cursor; // already on the first line
+        }
+        let prev = line_start(start - 1);
+        prev + col.min(start - 1 - prev)
+    } else {
+        let mut end = cursor;
+        while end < chars.len() && chars[end] != '\n' {
+            end += 1;
+        }
+        if end >= chars.len() {
+            return cursor; // already on the last line
+        }
+        let next = end + 1;
+        let mut next_end = next;
+        while next_end < chars.len() && chars[next_end] != '\n' {
+            next_end += 1;
+        }
+        next + col.min(next_end - next)
+    }
 }
 
 /// Show the message, reset the per-turn counters, hand it to the agent thread.

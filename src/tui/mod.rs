@@ -535,6 +535,25 @@ mod tests {
     }
 
     #[test]
+    fn shift_enter_drafts_move_the_cursor_by_line_not_through_history() {
+        //  "ab\ncde\nf" — char indices: a0 b1 \n2 c3 d4 e5 \n6 f7
+        let s = "ab\ncde\nf";
+        assert_eq!(render::caret_at(s, 0), (0, 0));
+        assert_eq!(render::caret_at(s, 2), (0, 2)); // end of line 0, before the \n
+        assert_eq!(render::caret_at(s, 3), (1, 0)); // start of line 1
+        assert_eq!(render::caret_at(s, 7), (2, 0));
+        assert_eq!(render::caret_at(s, 8), (2, 1)); // end of the draft
+
+        assert_eq!(app::move_line(s, 4, -1), 1); // col 1 of line 1 -> col 1 of line 0
+        assert_eq!(app::move_line(s, 1, -1), 1); // first line: stays put
+        assert_eq!(app::move_line(s, 1, 1), 4); // down keeps the column
+        assert_eq!(app::move_line(s, 5, 1), 8); // col 2 -> line 2 is shorter, clamps to its end
+        assert_eq!(app::move_line(s, 8, 1), 8); // last line: stays put
+        assert_eq!(app::move_line("one line", 3, -1), 3); // nothing to move to
+        assert_eq!(app::move_line("", 0, 1), 0);
+    }
+
+    #[test]
     fn picker_filter_matches_anywhere_in_the_row_ignoring_case() {
         let pick = |filter: &str| app::Pick {
             kind: app::PickKind::Model,

@@ -470,6 +470,33 @@
       "decisions": [
         "Substring, not fuzzy: the labels are short and a fuzzy matcher is either a dependency or a scoring function nobody asked for. Matching the whole label means 'zai-org' finds glm-5.1 by its model id, not just its profile name."
       ]
+    },
+    {
+      "id": "feat-045",
+      "name": "Permission answer stops being a message turn",
+      "description": "Answering a permission prompt or an ask_user question used to do msg_num += 1 and push '2› y', so the reply was numbered as if it were the user's next message in the conversation — it is not; it never enters the session. App now records ask_line when the question is drawn, and close_ask() rewrites that line in place as 'ℹ <question> → <answer>', the same replace-in-place pattern ToolEnd uses for ToolStart. Esc and Ctrl+C route through the same helper, so an interrupted question is marked '→ interrupted' instead of being left hanging.",
+      "dependencies": [
+        "feat-023"
+      ],
+      "status": "done",
+      "evidence": "Reported from a live run: answering 'allow run_command pwd?' rendered as message 2. cargo test 19 passed; --self-test OK. Needs a live TUI to confirm the rendering.",
+      "decisions": [
+        "Rewrite the question's line rather than append a second one: the answer belongs to the question, and one line keeps a long permission dialogue from doubling the transcript."
+      ]
+    },
+    {
+      "id": "feat-046",
+      "name": "Shift+Enter inserts a newline",
+      "description": "Enter with SHIFT or ALT inserts '\\n' at the cursor instead of submitting (ALT because some terminals don't report Shift+Enter). The input box is now as tall as the draft: render::input_rows() renders one row per line with continuation rows aligned under the '> ', bottom_rows accounts for the height, and caret_at() puts the terminal cursor in the row that owns it. Up/Down walk the draft's lines while it is multi-line instead of recalling history, which would have discarded it.",
+      "dependencies": [
+        "feat-010",
+        "feat-043"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::shift_enter_drafts_move_the_cursor_by_line_not_through_history covers caret_at at line starts, ends and the last position, and move_line for column keeping, short-line clamping and both edges. cargo test 19 passed; --self-test OK. Needs a live TUI to confirm the terminal reports Shift+Enter at all.",
+      "decisions": [
+        "Up/Down were rebound for multi-line drafts only. Leaving them on history would have made the first Up silently replace a half-written multi-line message."
+      ]
     }
   ]
 }

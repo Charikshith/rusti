@@ -49,9 +49,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let h = rows as usize;
     let inner_w = w.saturating_sub(2); // transcript content width (2-space indent)
 
-    // bottom is pinned: blank spacer, panel (picker or slash menu), input, status
+    // bottom is pinned: blank spacer, panel (picker or slash menu), input, status.
+    // The input is as tall as the draft — Shift+Enter puts newlines in it.
     let panel = panel_rows(app, w);
-    let bottom_rows = 3 + panel.len();
+    let input = input_rows(&app.input, app.cursor, w.saturating_sub(3));
+    let bottom_rows = 2 + input.len() + panel.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
     // (style, row). The style is read from the logical line ONCE and carried to
@@ -106,10 +108,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     frame.extend(panel);
 
-    // input line with a block cursor
-    let avail = w.saturating_sub(3);
-    let (pre, suf) = input_window(&app.input, app.cursor, avail);
-    frame.push(format!("\x1b[36m> \x1b[0m{pre}▌{suf}"));
+    let input_len = input.len();
+    frame.extend(input);
 
     // status line: spinner + hint left, model right
     let spin = SPINNER[app.spinner % SPINNER.len()];
@@ -175,8 +175,12 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     }
 
     // ── position cursor at input ──
-    let input_y = h.saturating_sub(2) as u16; // input is second from bottom (status last)
-    let input_x = (2 + pre.chars().count()).min(w.saturating_sub(1)) as u16; // after "> "
+    // the input block ends just above the status line; the caret sits in the
+    // row holding the cursor, which is not the last one in a multi-line draft
+    let (caret_line, caret_col) = caret_at(&app.input, app.cursor);
+    let input_top = h.saturating_sub(1 + input_len);
+    let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
+    let input_x = (2 + caret_col).min(w.saturating_sub(1)) as u16; // after "> "
     goto(&mut out, input_x, input_y);
 
     out.write_all(SYNC_END.as_bytes())?;
@@ -442,6 +446,40 @@ fn md_row(cs: &[char], runs: &[(usize, usize, &'static str)], a: usize, b: usize
 /// Input window around the cursor for a row that overflows: returns the
 /// visible (before-cursor, after-cursor) slices; the block cursor sits
 /// between them.
+/// (line, column) of the cursor inside a multi-line draft.
+pub fn caret_at(input: &str, cursor: usize) -> (usize, usize) {
+    let mut seen = 0;
+    for (i, line) in input.split('\n').enumerate() {
+        let n = line.chars().count();
+        if cursor <= seen + n {
+            return (i, cursor - seen);
+        }
+        seen += n + 1;
+    }
+    (0, 0)
+}
+
+/// The input box, one screen row per line of the draft. The caret sits in the
+/// row holding the cursor; continuation rows line up under the "> ".
+fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = 0; // chars before this line, the '\n's included
+    for (i, line) in input.split('\n').enumerate() {
+        let n = line.chars().count();
+        let prefix = if i == 0 { "\x1b[36m> \x1b[0m" } else { "  " };
+        // exactly one row owns the cursor: the next line starts at seen + n + 1,
+        // so the ranges [seen, seen+n] never overlap
+        out.push(if cursor >= seen && cursor <= seen + n {
+            let (pre, suf) = input_window(line, cursor - seen, avail);
+            format!("{prefix}{pre}▌{suf}")
+        } else {
+            format!("{prefix}{}", truncate_str(line, avail))
+        });
+        seen += n + 1;
+    }
+    out
+}
+
 fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
     if max == 0 { return (String::new(), String::new()); }
     let chars: Vec<char> = s.chars().collect();

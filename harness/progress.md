@@ -335,3 +335,16 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   type a 'c'. The guard now lets Ctrl+key fall through, and a first Ctrl+C closes the picker.
 - `cargo test` 18 passed. **The exe could not be relinked — the user's TUI still holds it**; they must quit and
   rebuild to see these.
+
+## Session 2026-09-13 (14): feat-045/046 from the second live run
+- **feat-045 the permission answer was a fake message turn.** The Ask-Enter handler did `msg_num += 1` and pushed
+  `2› y`, so answering "allow run_command pwd?" looked like the user's second message — but the answer never enters
+  the session at all. `App.ask_line` now records where the question was drawn and `close_ask()` rewrites that line as
+  `ℹ <question> → <answer>`, reusing the replace-in-place pattern ToolEnd already uses for ToolStart. Esc and Ctrl+C
+  go through the same helper, so an interrupted prompt reads `→ interrupted` rather than being left open.
+- **feat-046 Shift+Enter inserts a newline.** Enter with SHIFT or ALT inserts `\n` (ALT because terminals vary in
+  whether they report Shift+Enter at all). The input box is no longer one row: `input_rows()` draws one row per line,
+  `bottom_rows` accounts for the height, and `caret_at()` puts the terminal cursor in the row that owns it.
+- Trap avoided: Up/Down were history recall, so the first Up in a half-written multi-line draft would have replaced
+  it. They now walk the draft's lines while it contains a newline.
+- `cargo test` 19 passed, `--self-test` OK, binary relinked once the user's TUI released it.
