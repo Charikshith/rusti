@@ -1,7 +1,7 @@
 # rusti
 
 Minimal coding agent in Rust: async core (tokio + reqwest), custom ANSI
-TUI (no ratatui), ~2.6 MB release binary.
+TUI (no ratatui), ~1.9 MB release binary.
 
 ```sh
 cargo build --release
@@ -129,19 +129,21 @@ rather than reflowed.
 
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
-binary small (~4 MB) and the rendering fast — full-screen redraw with
+binary small (~1.9 MB) and the rendering fast — full-screen redraw with
 word wrap, streaming text, and an input box for ask_user questions.
 
-`/reload` rebuilds with the release profile, so that profile is tuned for
-rebuild speed (thin LTO, 16 codegen units — about 6s) over the last ~780 KB of
-size. See the note in `Cargo.toml` for the measurements and how to trade back.
+`/reload` rebuilds with the release profile, so it is tuned to be quick *and*
+small: full LTO with `opt-level = "z"` and reqwest's unused http2/charset
+features dropped gets a 1.87 MB binary in ~14s (from 3.27 MB in 23.5s). See the
+measurement table in `Cargo.toml`.
 
 for non-interactive environments (piped stdin, SSH, CI), it falls back
 automatically to plain stdout/stderr streaming.
 
-slash commands: `/model` (list saved profiles, or `/model <name>` to switch —
-same as `/use <name>`), `/resume` (reload session.json), `/tree` (dump the
-session path), `/reload` (see below).
+slash commands: `/model` (pick a saved profile, or `/model <name>` to switch —
+same as `/use <name>`), `/resume` (list and switch sessions), `/tree` (browse
+the session tree and branch from an entry), `/reload` (see below). Every picker
+filters as you type.
 
 ## session tree
 

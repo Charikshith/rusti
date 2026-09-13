@@ -385,3 +385,18 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   row there is no state to clear between turns. Pipes still get one line per attempt; there is nothing to rewrite.
 - Verified the plain path live against the dead :8080 endpoint: 1.0s/2.0s/4.0s then the error.
 - `cargo test` 19 passed, `--self-test` OK, release build 6.09s.
+
+## Session 2026-09-13 (18): feat-049 revised — under 15s WITHOUT giving up size
+- User rejected the thin-LTO trade: keep `lto = true` / `codegen-units = 1`, just get under 15s.
+- Found the time in `opt-level` instead. "z" is both cheaper to optimize and far smaller than the default 3:
+  3 → 23.5s/3.27MB, 2 → 24.0s/3.13MB, s → 19.0s/2.55MB, **z → 15.7s/2.33MB**.
+- Still 0.7s over, so trimmed reqwest to `default-features = false` + json/stream/native-tls, dropping http2 and
+  charset. Fat LTO's cost scales with how much IR it merges, so less code helps time and size together:
+  **13.7s / 1.87MB** — 42% faster and 43% smaller than where we started.
+- Measurement trap worth remembering: the first build after any profile or dependency change recompiles every
+  dependency and read 16.2s; three steady-state runs were 13.6/13.7/13.8s. Always warm, then time.
+- `incremental = true` measured and discarded — LTO re-merges the whole program regardless.
+- Because the feature trim touches the network stack, re-verified rather than assumed: TLS handshake to
+  https://example.com, live streaming + tool call against the proxy, and web_fetch over https all still work.
+- Reverted the earlier thin-LTO change entirely; readme size claims corrected (2.6MB → 1.9MB) and its stale
+  "/tree dumps the session path" line fixed.

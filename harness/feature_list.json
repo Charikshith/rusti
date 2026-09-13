@@ -17,7 +17,7 @@
     {
       "id": "feat-002",
       "name": "Core Agent Loop",
-      "description": "System prompt \u00e2\u2020\u2019 user task \u00e2\u2020\u2019 LLM tool calls \u00e2\u2020\u2019 tool execution \u00e2\u2020\u2019 feedback loop terminates correctly",
+      "description": "System prompt â†’ user task â†’ LLM tool calls â†’ tool execution â†’ feedback loop terminates correctly",
       "dependencies": [
         "feat-001"
       ],
@@ -42,7 +42,7 @@
         "feat-002"
       ],
       "status": "done",
-      "evidence": "ai_core/tools.rs, the original 5 tools; edit_file enforces a unique match, run_command is platform-aware. Extended by feat-021 (grep/glob/list_dir/multi_edit, ranged reads, timeout) and feat-023 (delete/move, background jobs, todo, delegate, permission gate, root guard) \u00e2\u20ac\u201d 16 tools total"
+      "evidence": "ai_core/tools.rs, the original 5 tools; edit_file enforces a unique match, run_command is platform-aware. Extended by feat-021 (grep/glob/list_dir/multi_edit, ranged reads, timeout) and feat-023 (delete/move, background jobs, todo, delegate, permission gate, root guard) â€” 16 tools total"
     },
     {
       "id": "feat-005",
@@ -99,7 +99,7 @@
     {
       "id": "feat-010",
       "name": "TUI Experience: semantic status + spinner + editing + scrollback + slash commands",
-      "description": "Semantic status symbols/colors (\u00e2\u00a0\u2039 working, \u00e2\u0153\u201c success, \u00e2\u0153\u2014 failure, \u00e2\u0161\u00a0 warn, \u00e2\u201e\u00b9 info, cyan \u00e2\u20ac\u00ba prompt), animated spinner, cursor editing + history recall, PageUp/PageDown scrollback, /use /resume /tree slash commands, input overflow window, user lines flush-left with dim number + cyan caret",
+      "description": "Semantic status symbols/colors (â ‹ working, âœ“ success, âœ— failure, âš  warn, â„¹ info, cyan â€º prompt), animated spinner, cursor editing + history recall, PageUp/PageDown scrollback, /use /resume /tree slash commands, input overflow window, user lines flush-left with dim number + cyan caret",
       "dependencies": [
         "feat-006"
       ],
@@ -109,7 +109,7 @@
     {
       "id": "feat-011",
       "name": "Interrupt Key Model (pi-style)",
-      "description": "Esc interrupts the running agent (cooperative AtomicBool checked between iterations and per stream chunk), Ctrl+C clears input, Ctrl+D exits when input empty; interrupted turns show '\u00e2\u0161\u00a0 interrupted'; quit no longer waits for in-flight turn",
+      "description": "Esc interrupts the running agent (cooperative AtomicBool checked between iterations and per stream chunk), Ctrl+C clears input, Ctrl+D exits when input empty; interrupted turns show 'âš  interrupted'; quit no longer waits for in-flight turn",
       "dependencies": [
         "feat-010"
       ],
@@ -130,12 +130,12 @@
     {
       "id": "feat-013",
       "name": "Tool wall time",
-      "description": "Every finished tool row carries its own wall time (\u00e2\u0153\u201c src/main.rs  450ms); Event::ToolEnd gained an ms field, measured around dispatch in run_agent and around the cargo build in /reload",
+      "description": "Every finished tool row carries its own wall time (âœ“ src/main.rs  450ms); Event::ToolEnd gained an ms field, measured around dispatch in run_agent and around the cargo build in /reload",
       "dependencies": [
         "feat-006"
       ],
       "status": "done",
-      "evidence": "ai_core::took unit-checked in --self-test; visible as '\u00e2\u0153\u201c echo hi  15ms' in --self-test output"
+      "evidence": "ai_core::took unit-checked in --self-test; visible as 'âœ“ echo hi  15ms' in --self-test output"
     },
     {
       "id": "feat-014",
@@ -150,7 +150,7 @@
     {
       "id": "feat-015",
       "name": "Per-turn token/tps/wall stats",
-      "description": "After each turn: '\u00c2\u00b7 142 tok \u00c2\u00b7 38.4 tps \u00c2\u00b7 6.2s', dim. Tokens come from the server's usage.completion_tokens when sent, else a chars/4 estimate marked with '~'; tps is over generation time only (clock starts at the first token) so tool waits don't dilute it",
+      "description": "After each turn: 'Â· 142 tok Â· 38.4 tps Â· 6.2s', dim. Tokens come from the server's usage.completion_tokens when sent, else a chars/4 estimate marked with '~'; tps is over generation time only (clock starts at the first token) so tool waits don't dilute it",
       "dependencies": [
         "feat-006"
       ],
@@ -160,7 +160,7 @@
     {
       "id": "feat-016",
       "name": "reasoning_content thinking block",
-      "description": "Thinking models' reasoning_content (or reasoning) deltas stream into a dim '\u00e2\u201d\u201a ' block that closes when the answer or a tool call starts; never folded into content or sent back to the model. Plain mode writes it to stderr",
+      "description": "Thinking models' reasoning_content (or reasoning) deltas stream into a dim 'â”‚ ' block that closes when the answer or a tool call starts; never folded into content or sent back to the model. Plain mode writes it to stderr",
       "dependencies": [
         "feat-006"
       ],
@@ -170,7 +170,7 @@
     {
       "id": "feat-017",
       "name": "Slash-command menu",
-      "description": "Typing a lone '/word' opens the command menu above the input: 5 rows visible, up/down walks the whole filtered list, Tab completes, Enter runs, Esc dismisses for that text, 'n/total' counter row when it overflows. Queued commands (/undo /commit /plan /test /export) are listed with '\u00c2\u00b7 soon' and print a pointer to harness/open-work.md when run",
+      "description": "Typing a lone '/word' opens the command menu above the input: 5 rows visible, up/down walks the whole filtered list, Tab completes, Enter runs, Esc dismisses for that text, 'n/total' counter row when it overflows. Queued commands (/undo /commit /plan /test /export) are listed with 'Â· soon' and print a pointer to harness/open-work.md when run",
       "dependencies": [
         "feat-006"
       ],
@@ -190,17 +190,17 @@
     {
       "id": "feat-019",
       "name": "Active session name in status line",
-      "description": "The status line's right slot reads '<session> \u00c2\u00b7 <model>' (prototype shows the name in its title bar); seeded from the session file's stem, updated by Event::SessionName on resume and rename",
+      "description": "The status line's right slot reads '<session> Â· <model>' (prototype shows the name in its title bar); seeded from the session file's stem, updated by Event::SessionName on resume and rename",
       "dependencies": [
         "feat-018"
       ],
       "status": "done",
-      "evidence": "cargo build clean; name_of() covered by session::tests; visible as 'two \u00c2\u00b7 Qwen/...' when launched with --session two"
+      "evidence": "cargo build clean; name_of() covered by session::tests; visible as 'two Â· Qwen/...' when launched with --session two"
     },
     {
       "id": "feat-020",
       "name": "/rename <new-name>",
-      "description": "Renames the active session's file to .rusti/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints '\u00e2\u201e\u00b9 renamed old \u00e2\u2020\u2019 new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as '\u00c2\u00b7 soon'",
+      "description": "Renames the active session's file to .rusti/sessions/<name>.json: ASCII letters/digits/._- up to 40 chars, refuses a taken name or the current one, moves the file when it exists (an unsaved session just repoints), prints 'â„¹ renamed old â†’ new'. /reload's relaunch argv now carries the live session name so a rename survives a hot rebuild. /session list|switch listed in the menu as 'Â· soon'",
       "dependencies": [
         "feat-018"
       ],
@@ -250,7 +250,7 @@
     {
       "id": "feat-025",
       "name": "Alternate Screen TUI",
-      "description": "The TUI runs on the terminal's alternate screen buffer (EnterAlternateScreen on start, LeaveAlternateScreen on exit, both quit and /reload paths) instead of the main screen. Launch paints a fresh canvas \u2014 no gap between the shell prompt and the bottom-pinned panel, no leftovers from previous runs; quit restores the primary buffer exactly, so shell history survives and the 'Come back again, boss' farewell lands right under the launch line. The earlier quit-time escape clears (ESC[2J/3J) are gone \u2014 3J was eating the shell scrollback. Transcripts persist via session.json + /resume, not terminal scrollback.",
+      "description": "The TUI runs on the terminal's alternate screen buffer (EnterAlternateScreen on start, LeaveAlternateScreen on exit, both quit and /reload paths) instead of the main screen. Launch paints a fresh canvas — no gap between the shell prompt and the bottom-pinned panel, no leftovers from previous runs; quit restores the primary buffer exactly, so shell history survives and the 'Come back again, boss' farewell lands right under the launch line. The earlier quit-time escape clears (ESC[2J/3J) are gone — 3J was eating the shell scrollback. Transcripts persist via session.json + /resume, not terminal scrollback.",
       "dependencies": [
         "feat-006"
       ],
@@ -525,15 +525,16 @@
     },
     {
       "id": "feat-049",
-      "name": "Release rebuilds under 10s",
-      "description": "/reload rebuilds with the release profile, so its build time is felt inside the TUI. Measured after a one-line edit: fat LTO + codegen-units=1 was 23.5s/3.27MB, thin + 1 was 12.7s/3.66MB, thin + 16 is 6-7s/4.05MB. Took thin LTO with 16 codegen units. The measurements and the one-line revert are recorded in Cargo.toml so nobody re-derives them.",
+      "name": "Release build under 15s and 43% smaller",
+      "description": "/reload rebuilds with the release profile, so its build time is felt in the TUI. Keeping full LTO and codegen-units=1 (the size-optimal pair), the win came from opt-level=\"z\" plus dropping reqwest's unused http2 and charset features: fat LTO's cost scales with how much IR it merges, so less code helps both time and size. 23.5s/3.27MB -> 13.7s/1.87MB. The full measurement table lives in Cargo.toml.",
       "dependencies": [
         "feat-001"
       ],
       "status": "done",
-      "evidence": "Timed three profiles, each warmed first (a profile change rebuilds every dependency) and then timed after `touch src/main.rs`. Final: 6.09s, 4055040 bytes. Only codegen-units=16 clears the 10s target.",
+      "evidence": "Measured each profile warm then timed after `touch src/main.rs`; the first build after any profile or dependency change recompiles the world and was discarded (16.2s vs a 13.6/13.7/13.8s steady state over three runs). opt-level 3/2/s/z = 23.5/24.0/19.0/15.7s. incremental=true measured, no effect. Re-verified after the feature trim: TLS handshake to https://example.com (HTTP 405 back), live streaming + a tool call against the local proxy, and web_fetch over https. cargo test 19 passed; --self-test OK on the release binary.",
       "decisions": [
-        "Traded ~780KB of binary for a 3.4x faster rebuild because the user asked for the wait to go away; the readme's size claim was corrected from 2.6MB to ~4MB."
+        "Kept lto=true and codegen-units=1 as the user asked, and found the time elsewhere — opt-level=\"z\" is both cheaper to optimize and smaller than the default 3.",
+        "Dropped reqwest default features (http2, charset): HTTP/1.1 is universal and .text() assumes UTF-8, which every page we would fetch uses. Verified TLS and streaming still work rather than assuming."
       ]
     },
     {

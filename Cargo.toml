@@ -9,16 +9,21 @@ serde_json = "1"
 crossterm = "0.29.0"
 is-terminal = "0.4"
 tokio = { version = "1", features = ["rt", "sync", "time", "net", "io-util"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls"] }
 futures-util = "0.3"
 bytes = "1"
 
 # /reload rebuilds with this profile, so release build time is felt in the TUI.
-# Measured here after a one-line edit: fat LTO + cgu=1 was 23.5s/3.27MB,
-# thin + cgu=1 was 12.7s/3.66MB, thin + cgu=16 is 7.1s/4.05MB. Trading ~780KB
-# for a 3.4x faster rebuild. Put `lto = true` / `codegen-units = 1` back if the
-# binary size ever matters more than the wait.
+# Measured here after a one-line edit, steady state (ignore the first build
+# after any profile/dependency change — it recompiles the world):
+#   opt-level=3  23.5s / 3.27MB      opt-level=2  24.0s / 3.13MB
+#   opt-level=s  19.0s / 2.55MB      opt-level=z  15.7s / 2.33MB
+#   opt-level=z + trimmed reqwest    13.7s / 1.87MB   <- here
+# "z" is both faster to optimize and much smaller; fat LTO's cost scales with
+# how much IR it merges, so dropping reqwest's unused http2/charset helps twice.
+# `incremental = true` was measured and changed nothing — LTO re-merges anyway.
 [profile.release]
-lto = "thin"
-codegen-units = 16
+lto = true
+codegen-units = 1
 strip = true
+opt-level = "z"
