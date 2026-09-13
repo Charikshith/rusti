@@ -117,7 +117,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         String::new()
     };
     let right = app::footer_right(
-        &app.session, &app.model, &app.branch,
+        crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
         app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(),
     );
     let model = truncate_str(&right, w.saturating_sub(left_plain.chars().count() + 3));

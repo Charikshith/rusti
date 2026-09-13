@@ -40,7 +40,8 @@ run doesn't ask), \"max_iters\", \"context\". Flags and env override them.
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   sessions
   /tree           browse and branch           /undo             revert the last turn's file changes
-  /commit         stage and commit the work   /reload           rebuild and relaunch
+  /plan           propose, change nothing     /commit           stage and commit the work
+  /reload         rebuild and relaunch
   /quit
   !CMD            run a shell command; its output goes to the model too
 ";

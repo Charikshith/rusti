@@ -5,7 +5,7 @@
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
 Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and deliberately skipped — see its entry below.
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
-  3a (small, each removes daily friction): Plan Mode → Web Fetch → /session list|switch → /export (Project Config landed as feat-038)
+  3a (small, each removes daily friction): Web Fetch → /session list|switch → /export (Project Config and Plan Mode landed as feat-038/039)
   3b (worth it once 3a lands): Test Loop, Diff in the Tool Line, Tool Output Expand Toggle, Read-Side Sandbox, Multi-Level Undo
   3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
      OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
@@ -108,10 +108,11 @@ What: `git diff` of the current turn's files in the prompt when the status is sm
 calls entirely when `.git` is absent (today two processes spawn per turn either way)
 Where: ai_core/mod.rs git_context()
 
-### Plan Mode
-When: User wants to approve steps before files are touched
-What: `/plan` toggles a mode where write/edit/run are disabled (tool error "plan mode"); model proposes steps, user approves, mode drops
-Where: ai_core/mod.rs dispatch gate, tui/app.rs command + status marker
+### Plan Mode Follow-ups
+When: feat-039 landed `/plan` as a toggle in the TUI only
+What: a `--plan` flag so one-shot CLI runs can plan too; auto-drop the mode when the user replies "go"/"do it"
+(needs an approval state machine — only worth it if the toggle proves annoying)
+Where: main.rs, tui/app.rs handle_command
 
 ### Test Loop
 When: "Run tests until green" needs babysitting

@@ -265,3 +265,13 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - `decide()` became a pure `Answer` parse with the saving moved into `permitted()`, so `--self-test` can exercise the
   permission logic without writing to the user's real model.json (it would have, the naive way).
 - `cargo test` 15 passed, `--self-test` OK, `--list` verified against a model.json with none of the new keys.
+
+## Session 2026-09-13 (9): feat-039 plan mode
+- `/plan` toggles a PLAN atomic checked at the very top of `permitted()` — before `--yolo` and before the saved
+  allowlist, because turning plan mode on is a more specific and more recent instruction than either.
+- Reuses the existing GATED list, so the set of blocked tools is exactly the set that already needed permission;
+  read/search/list/todo keep working, which is the point.
+- The refusal message tells the model to stop retrying and produce a plan; `system_prompt()` grows a `# Plan mode`
+  section while it is on, and since the prompt is rewritten each turn the toggle takes effect immediately.
+- Toggle rather than the backlog's approve-and-drop flow: no approval state machine to build or explain.
+- `cargo test` 15 passed, `--self-test` OK (blocks every mutating tool, no read tool, prompt section appears/disappears).

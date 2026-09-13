@@ -514,11 +514,13 @@ mod tests {
     #[test]
     fn footer_shows_only_the_parts_that_exist() {
         assert_eq!(
-            app::footer_right("main", "mimo", "master", 4321, 25_000, 100_000),
+            app::footer_right(false, "main", "mimo", "master", 4321, 25_000, 100_000),
             "main · mimo · ⎇ master · 4.3k tok · ctx 25%"
         );
         // fresh session: no name, no branch, nothing counted yet
-        assert_eq!(app::footer_right("", "mimo", "", 0, 0, 100_000), "mimo");
+        assert_eq!(app::footer_right(false, "", "mimo", "", 0, 0, 100_000), "mimo");
+        // plan mode leads, so a narrow terminal cuts it last
+        assert_eq!(app::footer_right(true, "", "mimo", "", 0, 0, 100_000), "plan · mimo");
     }
 
     #[test]

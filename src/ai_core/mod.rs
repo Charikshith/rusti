@@ -178,6 +178,14 @@ fn system_prompt() -> String {
         p.push_str("\n\n");
         p.push_str(&g);
     }
+    if plan_mode() {
+        p.push_str(
+            "\n\n# Plan mode\nThe user has turned plan mode ON. Reading, searching and listing still work, but \
+             every tool that writes a file or runs a command is refused — do not attempt them. Investigate first, \
+             then reply with a concrete plan: which files you would change, what you would change in each, and how \
+             you would verify it. The user turns plan mode off when they approve.",
+        );
+    }
     p
 }
 
@@ -203,7 +211,29 @@ fn git_context() -> Option<String> {
 const GATED: &[&str] = &["write_file", "edit_file", "multi_edit", "run_command", "run_background", "delete_file", "move_file"];
 static ALLOWED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// Plan mode: read and think, change nothing. It outranks --yolo and a saved
+/// "always", because turning it on is the user explicitly asking for hands off.
+static PLAN: AtomicBool = AtomicBool::new(false);
+
+pub fn set_plan(on: bool) {
+    PLAN.store(on, Ordering::Relaxed);
+}
+
+pub fn plan_mode() -> bool {
+    PLAN.load(Ordering::Relaxed)
+}
+
+fn plan_blocks(name: &str) -> bool {
+    plan_mode() && GATED.contains(&name)
+}
+
 async fn permitted(name: &str, summary: &str) -> Result<(), String> {
+    if plan_blocks(name) {
+        return Err(format!(
+            "plan mode is on, so {name} is refused. Do not retry it. Finish investigating with the \
+             read-only tools, then reply with the plan you would carry out."
+        ));
+    }
     if tools::YOLO.load(Ordering::Relaxed) || !GATED.contains(&name) || ALLOWED.lock().unwrap().iter().any(|a| a == name) {
         return Ok(());
     }
@@ -610,6 +640,15 @@ pub fn self_test() {
     // a saved "always" answer is what survives a restart
     allow_from_config(&["run_command".to_string(), "run_command".to_string()]);
     assert_eq!(ALLOWED.lock().unwrap().iter().filter(|a| *a == "run_command").count(), 1);
+
+    // plan mode blocks every mutating tool and nothing else, and says so in the prompt
+    assert!(!plan_blocks("write_file"));
+    set_plan(true);
+    assert!(plan_blocks("write_file") && plan_blocks("run_command") && plan_blocks("delete_file"));
+    assert!(!plan_blocks("read_file") && !plan_blocks("grep") && !plan_blocks("todo"));
+    assert!(system_prompt().contains("# Plan mode"));
+    set_plan(false);
+    assert!(!plan_blocks("write_file") && !system_prompt().contains("# Plan mode"));
 
     // project-root guard (yolo off for this block)
     tools::YOLO.store(false, Ordering::Relaxed);

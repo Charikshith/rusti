@@ -36,7 +36,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/quit", desc: "exit rusti (same as ctrl+c twice)", soon: false },
     Cmd { name: "/undo", desc: "put back the files the last turn changed and rewind to before it", soon: false },
     Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
-    Cmd { name: "/plan", desc: "plan mode: no writes until approved", soon: true },
+    Cmd { name: "/plan", desc: "toggle plan mode: read and propose, change nothing", soon: false },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
     Cmd { name: "/export", desc: "/export [file.md] - write out the transcript", soon: true },
     Cmd { name: "/session", desc: "/session list|switch <name>", soon: true },
@@ -517,6 +517,14 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/tree" => { let _ = job_tx.send(Job::Tree); }
+        "/plan" => {
+            let on = !ai_core::plan_mode();
+            ai_core::set_plan(on);
+            app.lines.push(match on {
+                true => "  ℹ plan mode on — reads and searches only; /plan again to allow changes".into(),
+                false => "  ℹ plan mode off".to_string(),
+            });
+        }
         "/commit" => {
             if !app.done {
                 app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
@@ -568,8 +576,11 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
 }
 
 /// Right of the status line: what this session is, and how full it is.
-pub fn footer_right(session: &str, model: &str, branch: &str, sess_tok: u64, ctx: u64, limit: u64) -> String {
+pub fn footer_right(plan: bool, session: &str, model: &str, branch: &str, sess_tok: u64, ctx: u64, limit: u64) -> String {
     let mut parts = Vec::new();
+    if plan {
+        parts.push("plan".to_string()); // first, so a narrow terminal truncates it last
+    }
     if !session.is_empty() {
         parts.push(session.to_string());
     }

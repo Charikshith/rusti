@@ -394,6 +394,21 @@
       "decisions": [
         "Extended model.json instead of adding .rusti/config.json as the backlog sketched: one file, one loader, and the default-profile half of the feature already lived there. Renaming the file is the cheap fix if the mixed contents grate."
       ]
+    },
+    {
+      "id": "feat-039",
+      "name": "Plan mode (/plan)",
+      "description": "A PLAN atomic checked at the top of permitted(), before --yolo and the saved allowlist, so every GATED tool (write_file, edit_file, multi_edit, run_command, run_background, delete_file, move_file) is refused with a message telling the model to finish investigating and reply with a plan instead of retrying. Read/search/list/todo are untouched. system_prompt() appends a '# Plan mode' section while it is on — and the prompt is rewritten every turn, so toggling takes effect immediately. /plan toggles it, the status line leads with 'plan'.",
+      "dependencies": [
+        "feat-023",
+        "feat-037"
+      ],
+      "status": "done",
+      "evidence": "--self-test asserts plan_blocks() covers every mutating tool and no read tool, and that the '# Plan mode' section appears and disappears with the flag; tui::tests covers the footer's leading 'plan'. cargo test 15 passed; --self-test OK. Not driven against a live model.",
+      "decisions": [
+        "Plan mode outranks --yolo: turning it on is a more specific, more recent instruction than the blanket permission flag.",
+        "Toggle rather than the backlog's approve-and-drop flow: the user turns it off when convinced, which needs no approval state machine. Mid-turn toggles take effect at the next tool call."
+      ]
     }
   ]
 }
