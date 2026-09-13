@@ -192,6 +192,7 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
         let hint = match p.kind {
             app::PickKind::Session => "↑/↓ select · enter resume · esc cancel",
             app::PickKind::Model => "↑/↓ select · enter switch · esc cancel",
+            app::PickKind::Tree => "↑/↓ select · enter branch here · esc cancel",
         };
         let mut out = vec![sel_row(&format!("  {} ({})", p.title, p.rows.len()), false)];
         for (i, (label, _)) in p.rows.iter().enumerate().skip(p.top).take(app::PICK_ROWS) {

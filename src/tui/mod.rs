@@ -43,14 +43,15 @@ pub struct TuiConfig {
 }
 
 /// Jobs the TUI sends to the agent thread: a user task, a model switch,
-/// resuming a saved session file, dumping the current session tree, or
+/// resuming a saved session file, browsing/branching the session tree, or
 /// rebuilding + relaunching the binary in place.
 pub enum Job {
     Task(String),
     Model { url: String, key: String, model: String },
     ResumePath(String), // load this session file and continue it
     Rename(String),     // rename the active session file
-    Tree,
+    Tree,               // send the selectable tree rows for the picker
+    Select(String),     // move the active leaf to this entry (pi-style branch)
     Reload,
 }
 
@@ -272,21 +273,30 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     let _ = event_tx.send(ai_core::Event::Text(msg));
                 }
                 Ok(Job::Tree) => {
-                    let path = session.path();
-                    if path.is_empty() {
+                    let rows: Vec<(String, String)> = crate::tree::rows(&session)
+                        .into_iter()
+                        .filter(|(_, selectable, _)| *selectable)
+                        .map(|(id, _, label)| (label, id))
+                        .collect();
+                    if rows.is_empty() {
                         let _ = event_tx.send(ai_core::Event::Text("  ✗ no session yet".into()));
                     } else {
-                        let mut out = String::new();
-                        for (i, e) in path.iter().enumerate() {
-                            let head = if e.role == "system" {
-                                format!("{i}. system")
-                            } else {
-                                format!("{i}. {}: {}", e.role, one_line(&e.content))
-                            };
-                            out.push_str(&head);
-                            out.push('\n');
+                        let _ = event_tx.send(ai_core::Event::Tree(rows));
+                    }
+                }
+                Ok(Job::Select(id)) => {
+                    let is_user = session.entries.iter().any(|e| e.id == id && e.role == "user");
+                    match session.select(&id) {
+                        None => { let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ no entry {id}"))); }
+                        Some(text) => {
+                            let _ = session.save();
+                            let (lines, history, msg_num) = render_history(&session);
+                            let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
+                            let _ = event_tx.send(ai_core::Event::Text(format!("  ℹ branched at {id}; continuing from here")));
+                            if is_user {
+                                let _ = event_tx.send(ai_core::Event::Prefill(text)); // pi-style: edit and resend
+                            }
                         }
-                        let _ = event_tx.send(ai_core::Event::Text(out.trim_end().to_string()));
                     }
                 }
                 Err(_) => break, // TUI exited
@@ -342,10 +352,6 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
 }
 
 /// First line of an entry, capped — for /tree output.
-fn one_line(s: &str) -> String {
-    s.replace('\n', " ").chars().take(80).collect()
-}
-
 /// Word wrap on byte length. Ponytail: naive — fine for ASCII.
 pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
     if width == 0 { return vec![String::new()]; }
@@ -412,6 +418,29 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(lines, vec!["1› first task".to_string(), "done".to_string(), String::new()]);
         assert_eq!(history, vec!["first task".to_string()]);
+    }
+
+    #[test]
+    fn selecting_a_user_entry_branches_at_its_parent_and_offers_its_text() {
+        let mut s = Session::new("m".into());
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        let u1 = s.add(Entry::new("user", "first".into()), Some(sys));
+        let a1 = s.add(Entry::new("assistant", "ok".into()), Some(u1));
+        let u2 = s.add(Entry::new("user", "second".into()), Some(a1.clone()));
+        s.add(Entry::new("assistant", "bad turn".into()), Some(u2.clone()));
+
+        // only user/assistant rows are offered; the leaf is marked
+        let rows: Vec<_> = crate::tree::rows(&s).into_iter().filter(|r| r.1).collect();
+        assert_eq!(rows.len(), 4);
+        assert!(rows[3].2.ends_with(" ◀"));
+
+        assert_eq!(s.select(&u2), Some("second".into())); // user: leaf moves to its parent
+        let (lines, _, n) = render_history(&s);
+        assert_eq!(n, 1);
+        assert_eq!(lines, vec!["1› first".to_string(), "ok".to_string(), String::new()]);
+
+        assert_eq!(s.select(&a1), Some("ok".into())); // assistant: continue right after it
+        assert_eq!(s.active.as_deref(), Some(a1.as_str()));
     }
 
     #[test]

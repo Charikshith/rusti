@@ -220,7 +220,7 @@ fn browse_tui(session: &mut Session) -> Option<String> {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn rows(session: &Session) -> Vec<(String, bool, String)> {
+pub fn rows(session: &Session) -> Vec<(String, bool, String)> {
     let mut depth: HashMap<String, usize> = HashMap::new();
     let mut out = Vec::new();
     for e in &session.entries {

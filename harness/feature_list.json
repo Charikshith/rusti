@@ -317,6 +317,17 @@
       ],
       "status": "done",
       "evidence": "--self-test asserts fail_tail on empty / CRLF+blank / 10-line inputs; cargo test 13 passed; --self-test OK."
+    },
+    {
+      "id": "feat-032",
+      "name": "/tree picker in the TUI",
+      "description": "/tree opens the same panel picker as /resume and /model over the session's user/assistant entries (indented, active leaf marked ◀, cursor starts there). Enter sends Job::Select: the leaf moves pi-style (user entry -> its parent, text prefilled in the input for editing; assistant entry -> continue right after it), the session is saved, and the transcript is rebuilt via Event::Resumed. Replaces the old text dump. The '/undo' slash-command stub is removed: conversation undo is this; file undo stays in open-work.",
+      "dependencies": [
+        "feat-008",
+        "feat-018"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::selecting_a_user_entry_branches_at_its_parent_and_offers_its_text covers rows filtering, the ◀ mark, and both select semantics through render_history; cargo test 14 passed; --self-test OK. Interactive picker flow not driven by a test."
     }
   ]
 }

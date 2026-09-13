@@ -3,7 +3,7 @@
 ## Suggested Order (2026-09-13 review)
 
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
-Tier 2 — daily-driver quality: Diff Before Edit + Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer
+Tier 2 — daily-driver quality: File Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer (/tree picker landed as feat-032; conversation /undo dropped — the tree covers it)
 Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
 
 ## Priority — Add When Needed
@@ -80,10 +80,12 @@ When: Permission "always" answers live only in process memory (ALLOWED in ai_cor
 What: `.rusti/config.json` with a persistent tool allowlist, default profile, and max_iters; loaded at startup, written when the user answers `always`
 Where: config.rs, ai_core/mod.rs permission gate, main.rs
 
-### Diff Before Edit + Undo
-When: An edit lands wrong and there's no way to see or revert it
-What: Show the unified diff of edit_file/write_file in the tool line (ties into Tool Output Visibility); keep the previous content to support `/undo` of the last file change
-Where: ai_core/tools.rs (capture before-image), tui/render.rs, tui/app.rs command
+### File Undo (+ diff in the tool line)
+When: An edit lands wrong. `/tree` (feat-032) rewinds the *conversation*, but the file on disk stays changed, so the
+model's next read contradicts its history. `git checkout -- <file>` is the manual fallback today.
+What: Keep the before-image of edit_file/write_file/multi_edit/delete_file per turn; `/undo` restores the files the
+last turn touched (and, ideally, branches the tree to before it in one step). Show the unified diff under the tool line.
+Where: ai_core/tools.rs (capture before-image), tui/app.rs command, tui/render.rs
 
 ## Developer Workflow
 
@@ -120,11 +122,6 @@ still needs a restart or a trip through /resume (menu lists it as `· soon`)
 What: `/session list` (names + ages, same rows as the picker) and
 `/session switch NAME`, reusing session::list() and Job::ResumePath
 Where: tui/app.rs handle_command
-
-### /undo Last Turn
-When: A bad turn poisons the context
-What: Move active leaf to the parent of the last user entry (tree already supports it), remove its rendered lines
-Where: session.rs select(), tui/app.rs command
 
 ### Export Transcript
 When: Sharing a session or filing an issue from it
@@ -175,7 +172,6 @@ Where: new ai_core/mcp.rs, config.rs, ai_core/mod.rs tool registry
 ## TUI Experience Low Priority (defer indefinitely)
 - External editor (Ctrl+G), clipboard copy (Ctrl+X), paste image (Alt+V)
 - Thinking-block expand/collapse (Ctrl+T) — only if models emit reasoning
-- Session tree browser/fork — /tree text dump works (named sessions landed)
 - Startup help header, changelog, retry/compaction indicators, taskbar progress
 
 ### Boxed Full-Screen Pickers

@@ -31,10 +31,9 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/use", desc: "/use <name> - switch to a saved profile", soon: false },
     Cmd { name: "/resume", desc: "pick a saved session and continue it", soon: false },
     Cmd { name: "/rename", desc: "/rename <new-name> - rename the active session", soon: false },
-    Cmd { name: "/tree", desc: "dump the current session path", soon: false },
+    Cmd { name: "/tree", desc: "browse the session tree and branch from an earlier entry", soon: false },
     Cmd { name: "/reload", desc: "rebuild rusti from source and relaunch", soon: false },
     Cmd { name: "/quit", desc: "exit rusti (same as ctrl+c twice)", soon: false },
-    Cmd { name: "/undo", desc: "drop the last turn", soon: true },
     Cmd { name: "/commit", desc: "draft a commit message from this session", soon: true },
     Cmd { name: "/plan", desc: "plan mode: no writes until approved", soon: true },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
@@ -72,6 +71,7 @@ pub fn filter_cmds(input: &str) -> Vec<&'static Cmd> {
 pub enum PickKind {
     Session, // resume the chosen session file
     Model,   // switch to the chosen model profile
+    Tree,    // branch the session at the chosen entry
 }
 
 /// An open list picker (/resume with no argument, /model with no argument).
@@ -414,6 +414,16 @@ pub fn ui_loop(
                     app.lines.extend(ai_core::fail_tail(&output)); // "  · " rows render dim like the stats line
                 }
                 ai_core::Event::SessionName(name) => app.session = name,
+                ai_core::Event::Tree(rows) => {
+                    // start on the active leaf (marked ◀ by tree::rows), like /model starts on the active profile
+                    let idx = rows.iter().rposition(|(l, _)| l.ends_with(" ◀")).unwrap_or(rows.len() - 1);
+                    let top = idx.saturating_sub(PICK_ROWS / 2);
+                    app.pick = Some(Pick { kind: PickKind::Tree, title: "session tree".into(), rows, idx, top });
+                }
+                ai_core::Event::Prefill(t) => {
+                    app.cursor = t.chars().count();
+                    app.input = t;
+                }
                 ai_core::Event::Resumed { lines, history, msg_num } => {
                     app.lines = lines;
                     app.history = history;
@@ -539,6 +549,7 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
             match p.kind {
                 PickKind::Session => { let _ = job_tx.send(Job::ResumePath(p.rows[p.idx].1.clone())); }
                 PickKind::Model => switch_model(app, job_tx, &p.rows[p.idx].1),
+                PickKind::Tree => { let _ = job_tx.send(Job::Select(p.rows[p.idx].1.clone())); }
             }
             return;
         }

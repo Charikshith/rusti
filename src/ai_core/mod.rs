@@ -17,6 +17,8 @@ pub enum Event {
     ToolEnd { summary: String, ok: bool, ms: u128, output: String }, // tool finished, with wall time; output only on failure
     Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
     SessionName(String),                       // active session's name, for the status line
+    Tree(Vec<(String, String)>),               // (label, id) rows for the TUI's /tree picker
+    Prefill(String),                           // put this text in the input (branching at a user message)
     Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
     Ask { question: String, reply: tokio::sync::oneshot::Sender<String> },
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
@@ -67,6 +69,7 @@ fn emit(ev: Event) {
             Event::Ask { .. } => {}
             Event::Resumed { .. } => {} // TUI-only: replaces the on-screen transcript
             Event::SessionName(_) => {} // TUI-only: status-line label
+            Event::Tree(_) | Event::Prefill(_) => {} // TUI-only: /tree picker
             Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end
         },

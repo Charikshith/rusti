@@ -216,3 +216,13 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
   style) plus `  · … N more lines` when cut; TUI, plain pipe, and CLI stderr all use it.
 - Deferred: Ctrl+O toggle to expand successful tool output (open-work "Tool Output Expand Toggle").
 - `cargo test` 13 passed, `--self-test` OK. Tier 1 of the 2026-09-13 backlog is complete.
+
+## Session 2026-09-13 (5): feat-032 — /tree picker in the TUI
+- Question from the user: does `/tree` make `/undo` redundant? Answer: for the *conversation*, yes — but the TUI's
+  `/tree` was only a text dump, and the tree cannot restore files on disk.
+- `/tree` now opens the shared panel picker (PickKind::Tree) over `tree::rows()` filtered to user/assistant entries;
+  Enter -> `Job::Select(id)` -> `session.select` + save -> `Event::Resumed` rebuilds the transcript; a user entry also
+  sends `Event::Prefill` so its text lands in the input (pi-style edit-and-resend).
+- `/undo` stub removed from CMDS; `one_line()` deleted (only the dump used it). Backlog: "/undo Last Turn" dropped,
+  "Diff Before Edit + Undo" reframed as "File Undo".
+- `cargo test` 14 passed, `--self-test` OK. The picker itself was not driven interactively this session.
