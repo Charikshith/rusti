@@ -13,8 +13,12 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
 bytes = "1"
 
-# small, fast binary: the whole point of this project
+# /reload rebuilds with this profile, so release build time is felt in the TUI.
+# Measured here after a one-line edit: fat LTO + cgu=1 was 23.5s/3.27MB,
+# thin + cgu=1 was 12.7s/3.66MB, thin + cgu=16 is 7.1s/4.05MB. Trading ~780KB
+# for a 3.4x faster rebuild. Put `lto = true` / `codegen-units = 1` back if the
+# binary size ever matters more than the wait.
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = true

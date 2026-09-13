@@ -372,3 +372,16 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - Also confirmed the user is running a STALE BINARY: exe 2:36pm vs source 2:42pm, so feat-047's replayed tool lines
   were not in the build they tested. cargo build has been blocked all session by their running TUI holding rusti.exe.
 - `cargo test` 19 passed; binary still not relinked.
+
+## Session 2026-09-13 (17): feat-049 build time, feat-050 retry line
+- **feat-049**: user asked for the release build to drop under 10s (23.9s). Measured three profiles, each warmed
+  first (changing a profile rebuilds every dependency, so the first build after a change is not the number that
+  matters) then timed after `touch src/main.rs`:
+  fat LTO+cgu=1 23.5s/3.27MB · thin+cgu=1 12.7s/3.66MB · thin+cgu=16 **6.1s/4.05MB**.
+  Only cgu=16 clears 10s. Took it; the measurements and the revert line live in Cargo.toml. readme's stale
+  "~2.6 MB" claim corrected to ~4 MB.
+- **feat-050**: retries printed one near-identical line per attempt. `Event::Retry { attempt, of, wait_ms, err }`
+  replaces the text line — attempt 1 pushes a row, later attempts rewrite it. Because attempt==1 always starts a new
+  row there is no state to clear between turns. Pipes still get one line per attempt; there is nothing to rewrite.
+- Verified the plain path live against the dead :8080 endpoint: 1.0s/2.0s/4.0s then the error.
+- `cargo test` 19 passed, `--self-test` OK, release build 6.09s.

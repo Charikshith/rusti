@@ -32,6 +32,10 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
             Ok(ai_core::Event::Resumed { .. }) => {} // /resume is a TUI slash command
             Ok(ai_core::Event::SessionName(_)) => {} // TUI status-line label
             Ok(ai_core::Event::Notice(t)) => { writeln!(out, "  ℹ {t}")?; }
+            // a pipe has no line to rewrite, so each attempt gets its own
+            Ok(ai_core::Event::Retry { attempt, of, wait_ms, err }) => {
+                writeln!(out, "  ⚠ {err} — retry {attempt}/{of} in {:.1}s", wait_ms as f64 / 1000.0)?;
+            }
             Ok(ai_core::Event::Tree(_) | ai_core::Event::Prefill(_) | ai_core::Event::Git(_)) => {} // TUI-only
             Ok(ai_core::Event::Usage { .. }) => {} // per-turn stats are a TUI line
             Ok(ai_core::Event::TaskEnd { .. }) => break,

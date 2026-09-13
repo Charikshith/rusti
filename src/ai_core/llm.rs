@@ -71,7 +71,7 @@ impl Client {
             }
             attempt += 1;
             let wait = RETRY_BASE_MS.load(Ordering::Relaxed) << (attempt - 1);
-            emit(Event::Text(format!("  ⚠ {err} — retry {attempt}/{RETRIES} in {:.1}s", wait as f64 / 1000.0)));
+            emit(Event::Retry { attempt, of: RETRIES, wait_ms: wait, err });
             let t0 = Instant::now();
             while (t0.elapsed().as_millis() as u64) < wait {
                 if cancel.load(Ordering::Relaxed) {

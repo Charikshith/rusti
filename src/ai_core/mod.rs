@@ -19,6 +19,9 @@ pub enum Event {
     SessionName(String),                       // active session's name, for the status line
     Git(String),                               // current branch, for the status line
     Notice(String),                            // transient confirmation: status line, not transcript
+    /// One retry of the same request. `attempt == 1` starts a new line, later
+    /// ones rewrite it, so a run of retries stays a single counting row.
+    Retry { attempt: u32, of: u32, wait_ms: u64, err: String },
     Tree(Vec<(String, String)>),               // (label, id) rows for the TUI's /tree picker
     Prefill(String),                           // put this text in the input (branching at a user message)
     Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
@@ -72,6 +75,9 @@ fn emit(ev: Event) {
             Event::Resumed { .. } => {} // TUI-only: replaces the on-screen transcript
             Event::SessionName(_) => {} // TUI-only: status-line label
             Event::Notice(t) => eprintln!("  ℹ {t}"), // no status line here: just print it
+            Event::Retry { attempt, of, wait_ms, err } => {
+                eprintln!("  ⚠ {err} — retry {attempt}/{of} in {:.1}s", wait_ms as f64 / 1000.0)
+            }
             Event::Tree(_) | Event::Prefill(_) | Event::Git(_) => {} // TUI-only
             Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end

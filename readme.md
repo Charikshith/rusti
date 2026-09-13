@@ -129,8 +129,12 @@ rather than reflowed.
 
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
-binary small (~2.6 MB) and the rendering fast — full-screen redraw with
+binary small (~4 MB) and the rendering fast — full-screen redraw with
 word wrap, streaming text, and an input box for ask_user questions.
+
+`/reload` rebuilds with the release profile, so that profile is tuned for
+rebuild speed (thin LTO, 16 codegen units — about 6s) over the last ~780 KB of
+size. See the note in `Cargo.toml` for the measurements and how to trade back.
 
 for non-interactive environments (piped stdin, SSH, CI), it falls back
 automatically to plain stdout/stderr streaming.

@@ -512,6 +512,39 @@
         "Stored `ok` rather than guessing the outcome from the result text: 'user denied …' and 'error …' are heuristics that would mislabel a tool whose legitimate output mentions an error.",
         "Durations are not replayed. They were never stored, and a wall time from a previous run is noise in a resumed transcript."
       ]
+    },
+    {
+      "id": "feat-048",
+      "name": "Session bookkeeping is status, not transcript",
+      "description": "Event::Notice carries transient confirmations — resumed, branched at, exported to, renamed, plan mode on/off — to App.notice with a timestamp. The status line shows them for 3s and the 50ms render loop then stops drawing them, so nothing has to clear state. They no longer take a transcript line. Failures still go to the transcript, since a message you must read cannot vanish on a timer. Plain and CLI modes print notices normally.",
+      "dependencies": [
+        "feat-018"
+      ],
+      "status": "done",
+      "evidence": "Reported: 'resumed session.json (7 entries…)' sat in the chat. Confirmed removed from the transcript by dumping render_history against the real session.json — the replay contains only the user line, the assistant prose and four tool lines. cargo test 19 passed."
+    },
+    {
+      "id": "feat-049",
+      "name": "Release rebuilds under 10s",
+      "description": "/reload rebuilds with the release profile, so its build time is felt inside the TUI. Measured after a one-line edit: fat LTO + codegen-units=1 was 23.5s/3.27MB, thin + 1 was 12.7s/3.66MB, thin + 16 is 6-7s/4.05MB. Took thin LTO with 16 codegen units. The measurements and the one-line revert are recorded in Cargo.toml so nobody re-derives them.",
+      "dependencies": [
+        "feat-001"
+      ],
+      "status": "done",
+      "evidence": "Timed three profiles, each warmed first (a profile change rebuilds every dependency) and then timed after `touch src/main.rs`. Final: 6.09s, 4055040 bytes. Only codegen-units=16 clears the 10s target.",
+      "decisions": [
+        "Traded ~780KB of binary for a 3.4x faster rebuild because the user asked for the wait to go away; the readme's size claim was corrected from 2.6MB to ~4MB."
+      ]
+    },
+    {
+      "id": "feat-050",
+      "name": "Retries count on one line",
+      "description": "Event::Retry { attempt, of, wait_ms, err } replaces the plain text line the retry path used to emit. attempt == 1 pushes a new row and later attempts rewrite it, so three retries are one counting line instead of three near-identical ones. Because attempt == 1 always starts fresh, no state needs clearing between turns. Piped and CLI output still prints one line per attempt — there is nothing to rewrite in a pipe.",
+      "dependencies": [
+        "feat-030"
+      ],
+      "status": "done",
+      "evidence": "Plain path verified live against the dead :8080 endpoint: three attempts at 1.0s/2.0s/4.0s then the error. --self-test still exercises the 503 retry. cargo test 19 passed. The in-place rewrite itself needs a live TUI."
     }
   ]
 }

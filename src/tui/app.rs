@@ -125,6 +125,7 @@ pub struct App {
     pub hist_idx: Option<usize>,
     pub tool_line: Option<usize>, // index of the active "⠋" tool line
     pub ask_line: Option<usize>,  // index of the pending question's line
+    pub retry_line: Option<usize>, // index of the counting "⚠ … retry n/3" line
     /// Transient confirmation shown on the status line. Session bookkeeping
     /// ("resumed …", "exported …") is not part of the conversation, so it does
     /// not belong in the transcript.
@@ -230,7 +231,8 @@ pub fn ui_loop(
         lines: seed_lines, current: String::new(),
         ask: None, input: String::new(), cursor: 0, done: true, model, session,
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
-        history: seed_history, hist_idx: None, tool_line: None, ask_line: None, notice: None, exit_armed: None,
+        history: seed_history, hist_idx: None, tool_line: None, ask_line: None, retry_line: None,
+        notice: None, exit_armed: None,
         turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
         sess_tok: 0, branch: String::new(),
         thinking: false,
@@ -474,6 +476,18 @@ pub fn ui_loop(
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,
                 ai_core::Event::Notice(t) => app.notice = Some((t, std::time::Instant::now())),
+                ai_core::Event::Retry { attempt, of, wait_ms, err } => {
+                    let line = format!("  ⚠ {err} — retry {attempt}/{of} in {:.1}s", wait_ms as f64 / 1000.0);
+                    // one row that counts up, rather than a new line per attempt
+                    match app.retry_line {
+                        Some(i) if attempt > 1 && i < app.lines.len() => app.lines[i] = line,
+                        _ => {
+                            app.flush();
+                            app.lines.push(line);
+                            app.retry_line = Some(app.lines.len() - 1);
+                        }
+                    }
+                }
                 ai_core::Event::Tree(rows) => {
                     // start on the active leaf (marked ◀ by tree::rows), like /model starts on the active profile
                     let idx = rows.iter().rposition(|(l, _)| l.ends_with(" ◀")).unwrap_or(rows.len() - 1);
