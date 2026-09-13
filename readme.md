@@ -58,7 +58,8 @@ main.rs      CLI
 └── ai_core  agent loop, LLM client, tool dispatch, event system
     ├── llm    reqwest SSE streaming client
     └── tools  read/write/edit/multi_edit/delete/move file, grep/glob/list_dir, run command (timeout),
-    │          background jobs, todo, delegate (sub-agent), ask user; permission gate + project-root guard
+    │          background jobs, todo, delegate (sub-agent), ask user, web_fetch;
+    │          permission gate + project-root guard
 
 mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 ```
@@ -74,20 +75,23 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui.rs | ~190 | custom ANSI TUI renderer: scrolling transcript, streaming text, ask_user input |
 | ai_core/mod.rs | ~160 | run_agent loop, event system (SINK), tool dispatch, self-test |
 | ai_core/llm.rs | ~80 | reqwest SSE streaming client, tool-call argument accumulation |
-| ai_core/tools.rs | ~470 | 16 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user; project-root guard |
+| ai_core/tools.rs | ~470 | 17 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user, web_fetch (tags stripped); project-root guard |
 
 **Total application code: ~1,015 lines**
 
 ## safety
 
 Every tool that changes state (`write_file`, `edit_file`, `multi_edit`, `delete_file`,
-`move_file`, `run_command`, `run_background`) asks before running:
+`move_file`, `run_command`, `run_background`) or reaches the network (`web_fetch`)
+asks before running:
 
 ```
-ℹ allow run_command cargo test? [y]es / [n]o / [a]lways for run_command
+ℹ allow run_command cargo test? [y]es / [n]o / [a]lways (saved)
 ```
 
-`a` allows that tool for the rest of the process. A denial is returned to the model
+`a` allows that tool from now on — it is saved to `model.json`, so later runs don't ask
+again. `/plan` refuses all of them outright, whatever the saved answers say, until you
+toggle it back off. A denial is returned to the model
 as a tool error so it can explain or ask instead of retrying. With piped stdin there
 is nobody to answer, so everything is denied — pass `--yolo` for scripted runs.
 

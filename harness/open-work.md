@@ -5,7 +5,7 @@
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
 Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and deliberately skipped — see its entry below.
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
-  3a (small, each removes daily friction): Web Fetch → /session list|switch → /export (Project Config and Plan Mode landed as feat-038/039)
+  3a (small, each removes daily friction): /session list|switch → /export (Project Config, Plan Mode, Web Fetch landed as feat-038/039/040)
   3b (worth it once 3a lands): Test Loop, Diff in the Tool Line, Tool Output Expand Toggle, Read-Side Sandbox, Multi-Level Undo
   3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
      OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
@@ -162,10 +162,11 @@ Where: ai_core/llm.rs handle_event emit, tui/app.rs ToolStart
 
 ## Tools / Ecosystem
 
-### Web Fetch Tool
-When: Model needs to read docs, a changelog, or an error page it was given a URL for
-What: `web_fetch(url)` via the existing reqwest client, HTML stripped to text, capped at MAX_RESULT; skip if staying small matters more
-Where: ai_core/tools.rs, dispatch in ai_core/mod.rs
+### Web Fetch Follow-ups
+When: feat-040 fetches and strips a page; it has no idea about redirects-to-elsewhere, robots, or search
+What: block private/loopback addresses behind a flag if rusti is ever run somewhere untrusted (today the agent can
+already `run_command curl`, so it changes nothing); a `web_search` tool needs an API key and is a bigger call
+Where: ai_core/tools.rs web_fetch
 
 ### MCP Client
 When: Users want tools rusti doesn't ship (databases, browsers, issue trackers)

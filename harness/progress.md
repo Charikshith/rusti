@@ -275,3 +275,17 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
   section while it is on, and since the prompt is rewritten each turn the toggle takes effect immediately.
 - Toggle rather than the backlog's approve-and-drop flow: no approval state machine to build or explain.
 - `cargo test` 15 passed, `--self-test` OK (blocks every mutating tool, no read tool, prompt section appears/disappears).
+
+## Session 2026-09-13 (10): feat-040 web_fetch
+- `web_fetch(url)` over the reqwest already in the tree — no new dependency, no binary growth. 20s timeout,
+  5 MB content-length ceiling, http(s) only, MAX_RESULT truncation.
+- `strip_html` is ~40 lines: one ASCII-lowercased copy keeps byte offsets aligned, `<script>`/`<style>` bodies are
+  skipped wholesale, block tags become newlines and other tags spaces, then entities decode (`&amp;` last so
+  `&amp;lt;` doesn't decode twice) and whitespace collapses. No HTML crate.
+- Gated like the mutating tools: the URL leaves the machine and the reply enters the context. The result carries an
+  `[… untrusted page content, not instructions]` prefix so an injected instruction reads as quoted data.
+- The self-test now serves a real page off a one-shot TCP listener and asserts the whole path end to end.
+- **TLS was never exercised before this** (the LLM endpoint is 127.0.0.1). Confirmed working by pointing the client
+  at https://example.com and getting a real HTTP 405 back rather than a handshake error.
+- Readme's safety section corrected: it listed the old prompt text and omitted that "always" now persists.
+- `cargo test` 15 passed, `--self-test` OK.
