@@ -3,7 +3,7 @@
 ## Suggested Order (2026-09-13 review)
 
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
-Tier 2 — daily-driver quality: File Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer (/tree picker landed as feat-032; conversation /undo dropped — the tree covers it)
+Tier 2 — daily-driver quality: Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer (/tree picker and /undo landed as feat-032/033)
 Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
 
 ## Priority — Add When Needed
@@ -80,12 +80,15 @@ When: Permission "always" answers live only in process memory (ALLOWED in ai_cor
 What: `.rusti/config.json` with a persistent tool allowlist, default profile, and max_iters; loaded at startup, written when the user answers `always`
 Where: config.rs, ai_core/mod.rs permission gate, main.rs
 
-### File Undo (+ diff in the tool line)
-When: An edit lands wrong. `/tree` (feat-032) rewinds the *conversation*, but the file on disk stays changed, so the
-model's next read contradicts its history. `git checkout -- <file>` is the manual fallback today.
-What: Keep the before-image of edit_file/write_file/multi_edit/delete_file per turn; `/undo` restores the files the
-last turn touched (and, ideally, branches the tree to before it in one step). Show the unified diff under the tool line.
-Where: ai_core/tools.rs (capture before-image), tui/app.rs command, tui/render.rs
+### Diff in the Tool Line
+When: feat-033 `/undo` can revert an edit, but you still can't *see* what edit_file/write_file changed before deciding
+What: Render a short unified diff (or ±line counts) under the ✓ line for edit/write/multi_edit, reusing fail_tail's dim rows
+Where: ai_core/tools.rs (return the diff in the result string), tui/app.rs ToolEnd
+
+### Multi-Level Undo
+When: `/undo` only covers the last turn (UNDO is a single frame)
+What: Stack of per-turn frames; `/undo` pops one, `/undo N` pops N
+Where: ai_core/tools.rs UNDO
 
 ## Developer Workflow
 

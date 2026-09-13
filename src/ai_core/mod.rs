@@ -235,6 +235,9 @@ pub async fn run_agent(
     }
     let tools = tool_schemas();
     let mut last_prompt = 0u64;
+    if DEPTH.load(Ordering::Relaxed) == 0 {
+        tools::undo_begin_turn(); // a delegate sub-run is part of the same turn
+    }
 
     for _ in 0..MAX_ITERS.load(Ordering::Relaxed) {
         if cancel.load(Ordering::Relaxed) {
@@ -608,6 +611,19 @@ pub fn self_test() {
     assert!(tools::glob("*.toml", ".").1.contains("Cargo.toml"));
     assert!(tools::grep("fn run_agent", "src", "*.rs").1.contains("mod.rs"));
     assert!(tools::grep("no_such_token_xyz", "src", "").1.contains("no matches"));
+
+    // undo: edited files come back, files created this turn go away, first before-image wins
+    tools::undo_begin_turn();
+    std::fs::write("_undo_a.txt", "one").unwrap();
+    assert!(tools::edit_file("_undo_a.txt", "one", "two").0);
+    assert!(tools::edit_file("_undo_a.txt", "two", "three").0);
+    assert!(tools::write_file("_undo_b.txt", "new").0);
+    let undone = tools::undo_turn();
+    assert_eq!(undone, vec!["removed _undo_b.txt", "restored _undo_a.txt"]);
+    assert_eq!(std::fs::read_to_string("_undo_a.txt").unwrap(), "one");
+    assert!(!std::path::Path::new("_undo_b.txt").exists());
+    assert!(tools::undo_turn().is_empty()); // one level only
+    std::fs::remove_file("_undo_a.txt").ok();
 
     // config roundtrip
     let mut c = crate::config::Config::load_from("_test_model.json");

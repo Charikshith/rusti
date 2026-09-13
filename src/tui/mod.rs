@@ -52,6 +52,7 @@ pub enum Job {
     Rename(String),     // rename the active session file
     Tree,               // send the selectable tree rows for the picker
     Select(String),     // move the active leaf to this entry (pi-style branch)
+    Undo,               // put back the files the last turn changed, then rewind to before it
     Reload,
 }
 
@@ -175,6 +176,25 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
     (lines, history, n)
 }
 
+/// Move the leaf to `id` pi-style and rebuild the transcript: a user entry
+/// rewinds to its parent and offers its text for editing, an assistant entry
+/// continues right after it.
+fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::Event>) {
+    let is_user = session.entries.iter().any(|e| e.id == id && e.role == "user");
+    match session.select(id) {
+        None => { let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ no entry {id}"))); }
+        Some(text) => {
+            let _ = session.save();
+            let (lines, history, msg_num) = render_history(session);
+            let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
+            let _ = event_tx.send(ai_core::Event::Text(format!("  ℹ branched at {id}; continuing from here")));
+            if is_user {
+                let _ = event_tx.send(ai_core::Event::Prefill(text));
+            }
+        }
+    }
+}
+
 /// Entry point: spawns agent in background thread, renders TUI or plain stream.
 pub fn run(cfg: TuiConfig) -> io::Result<()> {
     let TuiConfig { client, session, model, cli_args } = cfg;
@@ -284,19 +304,15 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                         let _ = event_tx.send(ai_core::Event::Tree(rows));
                     }
                 }
-                Ok(Job::Select(id)) => {
-                    let is_user = session.entries.iter().any(|e| e.id == id && e.role == "user");
-                    match session.select(&id) {
-                        None => { let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ no entry {id}"))); }
-                        Some(text) => {
-                            let _ = session.save();
-                            let (lines, history, msg_num) = render_history(&session);
-                            let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
-                            let _ = event_tx.send(ai_core::Event::Text(format!("  ℹ branched at {id}; continuing from here")));
-                            if is_user {
-                                let _ = event_tx.send(ai_core::Event::Prefill(text)); // pi-style: edit and resend
-                            }
-                        }
+                Ok(Job::Select(id)) => branch_at(&mut session, &id, &event_tx),
+                Ok(Job::Undo) => {
+                    for l in ai_core::tools::undo_turn() {
+                        let _ = event_tx.send(ai_core::Event::Text(format!("  ↶ {l}")));
+                    }
+                    let last_user = session.path().iter().rev().find(|e| e.role == "user").map(|e| e.id.clone());
+                    match last_user {
+                        Some(id) => branch_at(&mut session, &id, &event_tx),
+                        None => { let _ = event_tx.send(ai_core::Event::Text("  ✗ nothing to undo".into())); }
                     }
                 }
                 Err(_) => break, // TUI exited

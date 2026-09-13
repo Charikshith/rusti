@@ -226,3 +226,12 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - `/undo` stub removed from CMDS; `one_line()` deleted (only the dump used it). Backlog: "/undo Last Turn" dropped,
   "Diff Before Edit + Undo" reframed as "File Undo".
 - `cargo test` 14 passed, `--self-test` OK. The picker itself was not driven interactively this session.
+
+## Session 2026-09-13 (6): feat-033 — /undo puts files back and rewinds the turn
+- `tools.rs`: `UNDO` frame of `(path, Option<bytes>)`; `snapshot()` runs after `guard()` in write/edit/multi_edit/
+  delete/move (both ends of a move), first before-image per path wins, unreadable files are skipped rather than risk
+  deleting them on undo. `undo_turn()` restores in reverse and reports one line per file.
+- `run_agent` clears the frame only at DEPTH 0, so a `delegate` sub-run's edits belong to the parent turn.
+- TUI: `/undo` -> `Job::Undo` -> restore files (`↶ restored …`), then `branch_at(last user entry)` — the same helper
+  the `/tree` picker uses — so the conversation rewinds and the message is prefilled for editing.
+- `cargo test` 14 passed, `--self-test` OK (undo round-trip asserted). `/undo` not driven interactively.

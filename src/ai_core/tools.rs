@@ -34,10 +34,54 @@ pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
     }
 }
 
+// ---- undo ------------------------------------------------------------------
+// ponytail: one level — the files the *last turn* touched. A stack of frames if
+// multi-turn undo is ever wanted.
+
+/// Before-images for the current turn, oldest first. None = the file did not exist.
+static UNDO: Mutex<Vec<(String, Option<Vec<u8>>)>> = Mutex::new(Vec::new());
+
+pub fn undo_begin_turn() {
+    UNDO.lock().unwrap().clear();
+}
+
+/// Remember `path` as it is right now, once per turn (the first before-image wins).
+fn snapshot(path: &str) {
+    let mut u = UNDO.lock().unwrap();
+    if u.iter().any(|(p, _)| p == path) {
+        return;
+    }
+    let before = if Path::new(path).exists() {
+        match std::fs::read(path) {
+            Ok(b) => Some(b),
+            Err(_) => return, // unreadable: better no undo than deleting it on undo
+        }
+    } else {
+        None
+    };
+    u.push((path.to_string(), before));
+}
+
+/// Put every file the last turn touched back; returns one line per file.
+pub fn undo_turn() -> Vec<String> {
+    let snaps = std::mem::take(&mut *UNDO.lock().unwrap());
+    let mut out = Vec::new();
+    for (path, before) in snaps.into_iter().rev() {
+        let r = match &before {
+            Some(b) => std::fs::write(&path, b).map(|_| format!("restored {path}")),
+            None if Path::new(&path).exists() => std::fs::remove_file(&path).map(|_| format!("removed {path}")),
+            None => continue,
+        };
+        out.push(r.unwrap_or_else(|e| format!("could not undo {path}: {e}")));
+    }
+    out
+}
+
 pub fn write_file(path: &str, content: &str) -> (bool, String) {
     if let Err(e) = guard(path) {
         return (false, e);
     }
+    snapshot(path);
     match std::fs::write(path, content) {
         Ok(()) => (true, format!("wrote {} bytes to {path}", content.len())),
         Err(e) => (false, format!("error writing {path}: {e}")),
@@ -91,6 +135,7 @@ pub fn multi_edit(path: &str, edits: &[(String, String)]) -> (bool, String) {
     if let Err(e) = guard(path) {
         return (false, e);
     }
+    snapshot(path);
     let mut content = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => return (false, format!("error reading {path}: {e}")),
@@ -298,6 +343,7 @@ pub fn delete_file(path: &str) -> (bool, String) {
     if let Err(e) = guard(path) {
         return (false, e);
     }
+    snapshot(path);
     match std::fs::remove_file(path) {
         Ok(()) => (true, format!("deleted {path}")),
         Err(e) => (false, format!("error deleting {path}: {e}")),
@@ -311,6 +357,8 @@ pub fn move_file(from: &str, to: &str) -> (bool, String) {
     if Path::new(to).exists() {
         return (false, format!("move failed: {to} already exists"));
     }
+    snapshot(from);
+    snapshot(to);
     match std::fs::rename(from, to) {
         Ok(()) => (true, format!("moved {from} -> {to}")),
         Err(e) => (false, format!("error moving {from} -> {to}: {e}")),

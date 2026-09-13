@@ -328,6 +328,17 @@
       ],
       "status": "done",
       "evidence": "tui::tests::selecting_a_user_entry_branches_at_its_parent_and_offers_its_text covers rows filtering, the ◀ mark, and both select semantics through render_history; cargo test 14 passed; --self-test OK. Interactive picker flow not driven by a test."
+    },
+    {
+      "id": "feat-033",
+      "name": "File Undo (/undo)",
+      "description": "write_file/edit_file/multi_edit/delete_file/move_file snapshot each path's bytes (or absence) once per turn before touching it; run_agent clears the frame at depth 0 so a delegate sub-run belongs to the same turn. /undo restores those files in reverse order ('↶ restored X' / '↶ removed Y'), then rewinds the conversation to before the last user message via branch_at (shared with the /tree picker), prefilling that message for editing. One level only; refused while a task is running.",
+      "dependencies": [
+        "feat-032",
+        "feat-021"
+      ],
+      "status": "done",
+      "evidence": "--self-test: two edits + one new file in a turn, undo_turn() returns ['removed _undo_b.txt', 'restored _undo_a.txt'], original bytes back, second undo empty. cargo test 14 passed; --self-test OK. /undo not driven interactively."
     }
   ]
 }

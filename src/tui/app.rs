@@ -34,6 +34,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/tree", desc: "browse the session tree and branch from an earlier entry", soon: false },
     Cmd { name: "/reload", desc: "rebuild rusti from source and relaunch", soon: false },
     Cmd { name: "/quit", desc: "exit rusti (same as ctrl+c twice)", soon: false },
+    Cmd { name: "/undo", desc: "put back the files the last turn changed and rewind to before it", soon: false },
     Cmd { name: "/commit", desc: "draft a commit message from this session", soon: true },
     Cmd { name: "/plan", desc: "plan mode: no writes until approved", soon: true },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
@@ -503,6 +504,13 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/tree" => { let _ = job_tx.send(Job::Tree); }
+        "/undo" => {
+            if !app.done {
+                app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
+            } else {
+                let _ = job_tx.send(Job::Undo);
+            }
+        }
         "/reload" => {
             if !app.done {
                 app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
