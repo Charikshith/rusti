@@ -17,7 +17,7 @@ pub enum Event {
     ToolEnd { summary: String, ok: bool, ms: u128 }, // tool finished, with wall time
     Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
     SessionName(String),                       // active session's name, for the status line
-    Usage { tokens: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting
+    Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
     Ask { question: String, reply: tokio::sync::oneshot::Sender<String> },
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
     Reload { exe: String, args: Vec<String> },   // TUI /reload: new binary built, ready to relaunch
@@ -387,7 +387,7 @@ pub fn self_test() {
         assert_eq!(session.path().len(), 1);
         // reload from disk keeps the tree
         let s2 = crate::session::Session::load_from("_test_session.json");
-        assert_eq!(s2.entries.len(), 5);
+        assert_eq!(s2.entries.len(), 6);
         std::fs::remove_file("_test_session.json").ok();
 
         // interrupt: a pre-set flag cancels before any network call

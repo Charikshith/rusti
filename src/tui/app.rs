@@ -110,6 +110,7 @@ pub struct App {
     pub turn_t0: std::time::Instant,
     pub turn_tok: u64,
     pub turn_gen_ms: u128,
+    pub turn_ctx: u64,  // prompt tokens of the last LLM call = current context size
     pub turn_est: bool, // tokens were estimated, not reported by the server
     pub thinking: bool, // currently accumulating a "  │ " reasoning block
     // slash-command menu
@@ -133,7 +134,7 @@ impl App {
     /// The per-turn stats row: tokens, tokens/sec over generation time only
     /// (tool waits don't dilute it), and wall clock for the whole turn.
     pub fn turn_stats(&self) -> Option<String> {
-        stats_row(self.turn_tok, self.turn_est, self.turn_gen_ms, self.turn_t0.elapsed().as_secs_f64())
+        stats_row(self.turn_tok, self.turn_ctx, self.turn_est, self.turn_gen_ms, self.turn_t0.elapsed().as_secs_f64())
     }
 
     /// Reset the selection when the filter text changed, then keep the
@@ -164,15 +165,18 @@ impl App {
     }
 }
 
-pub fn stats_row(tok: u64, est: bool, gen_ms: u128, wall_s: f64) -> Option<String> {
+pub fn stats_row(tok: u64, ctx: u64, est: bool, gen_ms: u128, wall_s: f64) -> Option<String> {
     if tok == 0 {
         return None;
     }
     let tps = if gen_ms > 0 { tok as f64 * 1000.0 / gen_ms as f64 } else { 0.0 };
-    Some(format!(
-        "  · {}{tok} tok · {tps:.1} tps · {wall_s:.1}s",
-        if est { "~" } else { "" }
-    ))
+    let e = if est { "~" } else { "" };
+    Some(format!("  · {e}{tok} tok · {tps:.1} tps · {wall_s:.1}s · ctx {e}{}", kilo(ctx)))
+}
+
+/// 1234 -> "1.2k", 950 -> "950".
+pub fn kilo(n: u64) -> String {
+    if n < 1000 { n.to_string() } else { format!("{:.1}k", n as f64 / 1000.0) }
 }
 
 pub fn ui_loop(
@@ -190,7 +194,7 @@ pub fn ui_loop(
         ask: None, input: String::new(), cursor: 0, done: true, model, session,
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
         history: seed_history, hist_idx: None, tool_line: None, exit_armed: None,
-        turn_t0: std::time::Instant::now(), turn_tok: 0, turn_gen_ms: 0, turn_est: false,
+        turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
         thinking: false,
         menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
         pick: None,
@@ -308,6 +312,7 @@ pub fn ui_loop(
                                 app.done = false;
                                 app.turn_t0 = std::time::Instant::now();
                                 app.turn_tok = 0;
+                                app.turn_ctx = 0;
                                 app.turn_gen_ms = 0;
                                 app.turn_est = false;
                                 if app.history.last().map(|h| h != &raw).unwrap_or(true) {
@@ -416,8 +421,9 @@ pub fn ui_loop(
                     app.msg_num = msg_num;
                     app.scroll_up = 0;
                 }
-                ai_core::Event::Usage { tokens, est, gen_ms } => {
+                ai_core::Event::Usage { tokens, prompt, est, gen_ms } => {
                     app.turn_tok += tokens;
+                    app.turn_ctx = prompt;
                     app.turn_gen_ms += gen_ms;
                     app.turn_est |= est;
                 }

@@ -1,18 +1,19 @@
 # Open Work
 
+## Suggested Order (2026-09-13 review)
+
+Tier 1 — bites on the first real long task: Context Compaction → Retry with Backoff → Tool Output Visibility (Prompt-Token Tracking landed as feat-028)
+Tier 2 — daily-driver quality: Diff Before Edit + Undo, Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer
+Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
+
 ## Priority — Add When Needed
 
 ### ★ Context Compaction
 When: Long conversations hit token limits — now the most likely first failure: feat-022 raised the round cap
 from 10 to 50 and feat-021 added output-heavy search tools, so a real task fills the window long before it
 runs out of rounds
-What: Summarize older messages, keep recent context
+What: Summarize older messages, keep recent context; trigger on Event::Usage.prompt (feat-028) crossing a per-profile window size
 Where: ai_core/mod.rs run_agent loop
-
-### TLS Support
-When: User needs https:// LLM endpoint
-What: Enable reqwest `default-tls` or `rustls-tls` feature
-Where: Cargo.toml, ai_core/llm.rs
 
 ### unicode-width Word Wrap
 When: CJK or emoji output garbles the TUI
@@ -75,6 +76,11 @@ Where: ai_core/mod.rs run_agent tool loop
 When: Model reads/lists/greps paths outside the project (../, absolute, ~) — writes are already guarded
 What: Extend `tools::guard` to read_file/list_dir/grep/glob behind an `--allow-outside` flag; today reads are deliberately open so the model can look at dependency sources
 Where: ai_core/tools.rs guard()
+
+### Project Config File
+When: Permission "always" answers live only in process memory (ALLOWED in ai_core/mod.rs) and vanish on exit; default model / max-iters must be re-passed per run
+What: `.rusti/config.json` with a persistent tool allowlist, default profile, and max_iters; loaded at startup, written when the user answers `always`
+Where: config.rs, ai_core/mod.rs permission gate, main.rs
 
 ### Diff Before Edit + Undo
 When: An edit lands wrong and there's no way to see or revert it
@@ -155,6 +161,18 @@ Where: ai_core/llm.rs, config.rs
 When: A long write_file looks frozen while arguments stream
 What: Show the tool name as soon as it's known and a byte counter while raw_arguments accumulate
 Where: ai_core/llm.rs handle_event emit, tui/app.rs ToolStart
+
+## Tools / Ecosystem
+
+### Web Fetch Tool
+When: Model needs to read docs, a changelog, or an error page it was given a URL for
+What: `web_fetch(url)` via the existing reqwest client, HTML stripped to text, capped at MAX_RESULT; skip if staying small matters more
+Where: ai_core/tools.rs, dispatch in ai_core/mod.rs
+
+### MCP Client
+When: Users want tools rusti doesn't ship (databases, browsers, issue trackers)
+What: Connect to stdio MCP servers listed in the project config, merge their tool schemas into the tool list, proxy calls; heavy — defer until Tier 1/2 land
+Where: new ai_core/mcp.rs, config.rs, ai_core/mod.rs tool registry
 
 ## TUI Experience Low Priority (defer indefinitely)
 - External editor (Ctrl+G), clipboard copy (Ctrl+X), paste image (Alt+V)

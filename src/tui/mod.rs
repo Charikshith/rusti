@@ -448,9 +448,9 @@ mod tests {
     #[test]
     fn turn_stats_row_reports_tps_over_generation_time_only() {
         // 120 tokens generated in 3s, turn took 8s wall (5s of it tool waits)
-        assert_eq!(app::stats_row(120, false, 3000, 8.0).unwrap(), "  · 120 tok · 40.0 tps · 8.0s");
-        assert_eq!(app::stats_row(9, true, 0, 1.0).unwrap(), "  · ~9 tok · 0.0 tps · 1.0s");
-        assert!(app::stats_row(0, false, 100, 1.0).is_none());
+        assert_eq!(app::stats_row(120, 4321, false, 3000, 8.0).unwrap(), "  · 120 tok · 40.0 tps · 8.0s · ctx 4.3k");
+        assert_eq!(app::stats_row(9, 950, true, 0, 1.0).unwrap(), "  · ~9 tok · 0.0 tps · 1.0s · ctx ~950");
+        assert!(app::stats_row(0, 0, false, 100, 1.0).is_none());
     }
 
     #[test]

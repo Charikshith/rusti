@@ -56,6 +56,7 @@ impl Client {
         // processing (TTFT) doesn't dilute the tokens/sec figure
         let mut first: Option<Instant> = None;
         let mut usage: Option<u64> = None;
+        let mut prompt: Option<u64> = None;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err("interrupted".into());
@@ -64,7 +65,7 @@ impl Client {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
                     for ev in take_sse_events(&mut buf) {
-                        handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage)?;
+                        handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt)?;
                     }
                 }
                 Some(Err(e)) => return Err(format!("stream error: {e}")),
@@ -74,7 +75,7 @@ impl Client {
         if !buf.is_empty() {
             // server closed without a trailing blank line
             let ev = String::from_utf8_lossy(&buf).into_owned();
-            handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage)?;
+            handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt)?;
         }
 
         // usage when the server volunteers it (many OpenAI-compatible ones
@@ -82,7 +83,8 @@ impl Client {
         // flagged as an estimate in the UI
         emit(Event::Usage {
             tokens: usage.unwrap_or((content.chars().count() as u64 + 3) / 4),
-            est: usage.is_none(),
+            prompt: prompt.unwrap_or((body.to_string().len() as u64 + 3) / 4),
+            est: usage.is_none() || prompt.is_none(),
             gen_ms: first.map(|t| t.elapsed().as_millis()).unwrap_or(0),
         });
 
@@ -128,6 +130,7 @@ fn handle_event(
     finish: &mut Option<String>,
     first: &mut Option<Instant>,
     usage: &mut Option<u64>,
+    prompt: &mut Option<u64>,
 ) -> Result<(), String> {
     for line in ev.lines() {
         let data = match line.trim_start().strip_prefix("data:") {
@@ -143,6 +146,9 @@ fn handle_event(
         }
         if let Some(t) = v.pointer("/usage/completion_tokens").and_then(|x| x.as_u64()) {
             *usage = Some(t);
+        }
+        if let Some(p) = v.pointer("/usage/prompt_tokens").and_then(|x| x.as_u64()) {
+            *prompt = Some(p);
         }
         let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else { continue };
         if let Some(delta) = choice.get("delta") {

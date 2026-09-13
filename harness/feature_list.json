@@ -276,6 +276,16 @@
       ],
       "status": "done",
       "evidence": "Removed the Event::Text(\"  model switched to {model}\") from the Job::Model arm in tui/mod.rs; the status line updates immediately via app.model (set synchronously in switch_model). cargo check clean, cargo test 13 passed."
+    },
+    {
+      "id": "feat-028",
+      "name": "Prompt-Token Tracking",
+      "description": "Event::Usage carries prompt (context size sent) alongside completion tokens; read from usage.prompt_tokens, estimated from the request body length when the server omits it (est flag set). The per-turn stats row ends with '· ctx 4.3k' (last call's prompt size). Prerequisite for context compaction, cost tracking, and a context-% footer.",
+      "dependencies": [
+        "feat-015"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::turn_stats_row_reports_tps_over_generation_time_only asserts the ctx suffix and ~ estimate marker; cargo test 13 passed; --self-test OK (also fixed its stale 5-entries-on-disk assertion left over from feat-026)."
     }
   ]
 }

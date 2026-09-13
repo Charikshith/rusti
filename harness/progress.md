@@ -184,3 +184,11 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - `/use` / `/model` used to append the line `  ✓ model switched to <model>` to the transcript, but the bottom status line already shows `<session> · <model>` (tui/render.rs), so the note was redundant.
 - Dropped the `Event::Text` in the `Job::Model` arm (tui/mod.rs); the status line updates immediately because `switch_model` sets `app.model` synchronously.
 - Verification: `cargo check` clean, `cargo test` 13 passed. Release build was blocked by the Windows exe lock (a rusti TUI running) — unrelated to the change.
+
+## Session 2026-09-13: feat-028 — prompt-token tracking
+- `Event::Usage` now carries `prompt` (context size sent to the model) next to completion `tokens`; read from
+  `usage.prompt_tokens`, estimated from the serialized request body (÷4) when the server omits it, `est` set either way.
+- TUI stats row ends with `· ctx 4.3k` — the last call's prompt size, so it reads as "current context", not a sum.
+- Fixed a stale `--self-test` assertion (5 → 6 entries on disk) that feat-026 left behind; self-test was failing on HEAD.
+- Backlog: open-work.md gained a tiered Suggested Order, Project Config File, Web Fetch Tool, MCP Client; stale TLS entry removed.
+- Verification: `cargo test` 13 passed, `--self-test` OK.
