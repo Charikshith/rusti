@@ -129,22 +129,35 @@ rather than reflowed.
 
 ## MCP servers
 
-`model.json` can list MCP servers. They start with rusti, and their tools join the
-built-in ones under `mcp__<server>__<tool>`:
+An MCP server is **any executable** that speaks JSON-RPC 2.0 on stdin/stdout. rusti
+spawns `command` with `args` and nothing else — there is no package manager, runtime,
+or ecosystem in that path. Servers you write yourself are the first-class case:
 
 ```json
 "mcp": {
-  "everything": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-everything"],
-    "enabled": true
-  },
-  "github": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-github"],
-    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." },
-    "enabled": false
-  }
+  "mine":   { "command": "./target/release/my-mcp-server" },
+  "pyserv": { "command": "python", "args": ["tools/server.py"] },
+  "docker": { "command": "docker", "args": ["run", "-i", "--rm", "ghcr.io/acme/mcp"] }
+}
+```
+
+`tests/fake_mcp_server.py` in this repo is a complete working server in ~70 lines, and
+it is what the client is tested against. Read it if you are writing one.
+
+Third-party servers are a different matter: most published ones happen to ship on npm
+or PyPI, so their documented command is `npx -y @scope/server` or `uvx some-server`.
+That is *their* packaging, not a rusti requirement — but it does mean reaching for the
+off-the-shelf ecosystem pulls Node or Python onto your machine, which this project
+otherwise avoids. Prefer installing such a server once and pointing `command` at the
+resulting binary: `npx -y` re-resolves the package from the registry on every launch,
+so you pay network latency at startup and accept whatever the registry serves that day.
+
+```json
+"github": {
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-github"],
+  "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." },
+  "enabled": false
 }
 ```
 
@@ -153,9 +166,9 @@ connects it there and then, turning one off kills the child process. The choice 
 written back to `model.json`, so it survives a restart.
 
 Transport is stdio with JSON-RPC 2.0, implemented directly against `std::process`
-and serde_json — no MCP SDK, no extra dependency. On Windows the command is run
-through `cmd /C`, because `npx` and `uvx` are `.cmd` shims that `CreateProcess`
-cannot execute directly.
+and serde_json — **no MCP SDK and no added dependency**; rusti's own side stays pure
+Rust. On Windows the command is run through `cmd /C`, because `npx` and `uvx` are
+`.cmd` shims that `CreateProcess` cannot execute directly.
 
 MCP tools are **always permission-gated** and always refused in plan mode. rusti
 cannot read a third-party tool's effects off its name, so it treats every one of
