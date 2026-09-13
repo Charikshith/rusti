@@ -5,8 +5,9 @@
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
 Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and deliberately skipped — see its entry below.
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
-  3a (small, each removes daily friction): /session list|switch → /export (Project Config, Plan Mode, Web Fetch landed as feat-038/039/040)
-  3b (worth it once 3a lands): Test Loop, Diff in the Tool Line, Tool Output Expand Toggle, Read-Side Sandbox, Multi-Level Undo
+  3a — done (feat-038/039/040/041: project config, plan mode, web fetch, /export; /session dropped as redundant
+     with /resume, see feat-042)
+  3b (next): Test Loop, Diff in the Tool Line, Tool Output Expand Toggle, Read-Side Sandbox, Multi-Level Undo
   3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
      OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
 
@@ -126,17 +127,11 @@ Where: main.rs, tui/plain.rs
 
 ## Sessions
 
-### /session list|switch
-When: `--session NAME`, `/rename` and the `/resume` picker exist; switching
-still needs a restart or a trip through /resume (menu lists it as `· soon`)
-What: `/session list` (names + ages, same rows as the picker) and
-`/session switch NAME`, reusing session::list() and Job::ResumePath
-Where: tui/app.rs handle_command
-
-### Export Transcript
-When: Sharing a session or filing an issue from it
-What: `/export [file.md]` writes the active path as markdown (user/assistant/tool blocks)
-Where: tui/app.rs command, session.rs path()
+### New Session Without Restarting
+When: `/resume` switches between *existing* sessions and `/rename` names the current one, but starting a fresh
+empty session still means quitting and relaunching with `--session NAME`
+What: `/new [name]` — save the current session, start an empty one, replace the transcript via Event::Resumed
+Where: tui/app.rs handle_command, tui/mod.rs Job
 
 ## Model / API
 

@@ -38,10 +38,10 @@ model.json also carries project settings: \"allow\" (tools answered [a]lways, so
 run doesn't ask), \"max_iters\", \"context\". Flags and env override them.
 
 slash commands (--tui)
-  /model /use     switch model profile        /resume /rename   sessions
+  /model /use     switch model profile        /resume /rename   list, switch and name sessions
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
-  /reload         rebuild and relaunch
+  /export         transcript to markdown      /reload           rebuild and relaunch
   /quit
   !CMD            run a shell command; its output goes to the model too
 ";

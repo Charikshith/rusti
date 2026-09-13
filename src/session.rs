@@ -218,6 +218,33 @@ impl Session {
         self.path().iter().map(|e| e.to_message()).collect()
     }
 
+    /// The active path as markdown, for sharing a session or filing an issue
+    /// from it. Tool results are clipped — the point is a readable transcript,
+    /// not a faithful dump; session.json is still the full record.
+    pub fn export_markdown(&self) -> String {
+        let mut out = format!("# rusti session: {}\n\nmodel: `{}`\n", name_of(&self.path), self.model);
+        let mut n = 0;
+        for e in self.path() {
+            match e.role.as_str() {
+                "user" => {
+                    n += 1;
+                    out.push_str(&format!("\n## {n} · user\n\n{}\n", e.content.trim()));
+                }
+                "assistant" => {
+                    if !e.content.trim().is_empty() {
+                        out.push_str(&format!("\n### assistant\n\n{}\n", e.content.trim()));
+                    }
+                    for (name, args) in tool_calls_of(e) {
+                        out.push_str(&format!("\n- **{name}** `{args}`\n"));
+                    }
+                }
+                "tool" => out.push_str(&format!("\n```\n{}\n```\n", clip(e.content.trim(), 500))),
+                _ => {} // the system prompt is boilerplate, not transcript
+            }
+        }
+        out
+    }
+
     /// Branch from the given entry, pi-style: selecting a user message moves
     /// the leaf to its parent (its text is offered back for editing, which
     /// then forks a new branch); selecting an assistant message continues
@@ -227,6 +254,27 @@ impl Session {
         let text = e.content.clone();
         self.active = if e.role == "user" { e.parent.clone() } else { Some(e.id.clone()) };
         Some(text)
+    }
+}
+
+/// (name, one-line arguments) for each call on an assistant entry.
+fn tool_calls_of(e: &Entry) -> Vec<(String, String)> {
+    let Some(calls) = e.tool_calls.as_ref().and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    calls
+        .iter()
+        .map(|c| {
+            let args = c["function"]["arguments"].as_str().unwrap_or("").replace('\n', " ");
+            (c["function"]["name"].as_str().unwrap_or("?").to_string(), clip(&args, 160))
+        })
+        .collect()
+}
+
+fn clip(s: &str, n: usize) -> String {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
     }
 }
 
@@ -259,5 +307,30 @@ second".into()), Some(sys));
         assert_eq!(ago(600), "10m ago");
         assert_eq!(ago(7200), "2h ago");
         assert_eq!(ago(200_000), "2d ago");
+    }
+
+    #[test]
+    fn export_renders_the_active_path_and_leaves_the_system_prompt_out() {
+        let mut s = Session::with_path("m1".into(), "notes.json");
+        let sys = s.add(Entry::new("system", "you are a coding agent".into()), None);
+        let u = s.add(Entry::new("user", "read main.rs".into()), Some(sys));
+        let mut a = Entry::new("assistant", String::new()); // a tool-call turn carries no prose
+        a.tool_calls = Some(json!([{"function": {"name": "read_file", "arguments": "{\"path\":\n\"src/main.rs\"}"}}]));
+        let a = s.add(a, Some(u));
+        let t = s.add(Entry::new("tool", "fn main() {}".into()), Some(a));
+        s.add(Entry::new("assistant", "It prints nothing.".into()), Some(t));
+
+        let md = s.export_markdown();
+        assert!(md.starts_with("# rusti session: notes\n\nmodel: `m1`\n"));
+        assert!(md.contains("## 1 · user\n\nread main.rs"));
+        assert!(md.contains("- **read_file** `{\"path\": \"src/main.rs\"}`")); // newline flattened
+        assert!(md.contains("```\nfn main() {}\n```"));
+        assert!(md.contains("### assistant\n\nIt prints nothing."));
+        assert!(!md.contains("you are a coding agent"), "the system prompt is boilerplate");
+        assert!(!md.contains("### assistant\n\n\n"), "an empty assistant turn gets no heading");
+
+        assert_eq!(clip("abcdef", 3), "abc…");
+        assert_eq!(clip("abc", 3), "abc");
+        assert_eq!(clip("héllo wörld", 4), "héll…"); // clips on chars, not bytes
     }
 }

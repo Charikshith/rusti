@@ -32,9 +32,11 @@ cargo build --release
 
 In the TUI: `/plan` toggles plan mode (the agent reads and proposes but every write and
 command is refused), `/tree` browses and branches the session, `/undo` puts back the files
-the last turn changed, `/commit` stages and commits the work, and `!cargo test` runs a
-shell command whose output the model sees on the next turn. The status line carries plan
-mode, the session, model, git branch, tokens used and how full the context is.
+the last turn changed, `/commit` stages and commits the work, `/export` writes the
+transcript out as markdown, and `!cargo test` runs a shell command whose output the model
+sees on the next turn. `/resume` with no argument lists saved sessions and switches to the
+one you pick; with a name or number it switches straight to it. The status line carries
+plan mode, the session, model, git branch, tokens used and how full the context is.
 
 `model.json` example:
 ```json

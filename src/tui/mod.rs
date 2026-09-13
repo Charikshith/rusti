@@ -54,6 +54,7 @@ pub enum Job {
     Select(String),     // move the active leaf to this entry (pi-style branch)
     Undo,               // put back the files the last turn changed, then rewind to before it
     Bash(String),       // "!cmd": run it here, show the output, and let the model see it
+    Export(Option<String>), // write the active path out as markdown
     Reload,
 }
 
@@ -310,6 +311,14 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     }
                 }
                 Ok(Job::Select(id)) => branch_at(&mut session, &id, &event_tx),
+                Ok(Job::Export(to)) => {
+                    let file = to.unwrap_or_else(|| format!("{}.md", crate::session::name_of(&session.path)));
+                    let ev = match std::fs::write(&file, session.export_markdown()) {
+                        Ok(()) => ai_core::Event::Text(format!("  ℹ exported to {file}")),
+                        Err(e) => ai_core::Event::Text(format!("  ✗ could not write {file}: {e}")),
+                    };
+                    let _ = event_tx.send(ev);
+                }
                 Ok(Job::Bash(cmd)) => {
                     let summary = format!("$ {cmd}");
                     let _ = event_tx.send(ai_core::Event::ToolStart(summary.clone()));

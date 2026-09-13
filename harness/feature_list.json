@@ -423,6 +423,29 @@
       "decisions": [
         "Gated like the mutating tools rather than left open: the URL leaves the machine and the reply enters the model's context. run_command could already curl, but that asks too."
       ]
+    },
+    {
+      "id": "feat-041",
+      "name": "/export transcript as markdown",
+      "description": "Session::export_markdown renders the active path: numbered user turns, assistant prose, tool calls as '- **name** `args`' (arguments flattened to one line and clipped), tool results as fenced blocks clipped to 500 chars. The system prompt is left out as boilerplate and an empty assistant turn gets no heading. /export [file.md] writes it through Job::Export, defaulting to <session-name>.md in the working directory.",
+      "dependencies": [
+        "feat-008"
+      ],
+      "status": "done",
+      "evidence": "session::tests::export_renders_the_active_path_and_leaves_the_system_prompt_out covers headings, the flattened tool-call arguments, fenced results, the omitted system prompt and the empty-assistant case, plus clip() on char (not byte) boundaries. cargo test 16 passed; --self-test OK. Not driven interactively.",
+      "decisions": [
+        "Tool results are clipped to 500 chars: the export is for reading and issue-filing, and session.json remains the faithful record."
+      ]
+    },
+    {
+      "id": "feat-042",
+      "name": "/session list|switch — dropped as redundant",
+      "description": "The backlog item and its '· soon' menu stub are removed rather than implemented. /resume with no argument already opens a picker listing every saved session (names, entry counts, ages, last message) and switches to the chosen one; /resume <name> and /resume <n> already switch directly. /session would have been a second name for the same three behaviours. The /resume menu description now says so, so the capability is discoverable without a duplicate command.",
+      "dependencies": [
+        "feat-018"
+      ],
+      "status": "done",
+      "evidence": "Verified by reading tui/app.rs resume(): the arg branch resolves an index or a name to a path and sends Job::ResumePath; the no-arg branch builds the Session picker. Nothing was missing. cargo test 16 passed."
     }
   ]
 }

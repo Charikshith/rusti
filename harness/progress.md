@@ -289,3 +289,16 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
   at https://example.com and getting a real HTTP 405 back rather than a handshake error.
 - Readme's safety section corrected: it listed the old prompt text and omitted that "always" now persists.
 - `cargo test` 15 passed, `--self-test` OK.
+
+## Session 2026-09-13 (11): feat-041 /export, feat-042 /session dropped
+- **feat-042 first, because it changed the work**: `/session list|switch` turned out to be redundant. `/resume` with
+  no argument already lists every saved session in a picker and switches to the choice; `/resume <name>` and
+  `/resume <n>` already switch directly. Building `/session` would have been a second name for the same three
+  behaviours. Removed the `· soon` stub and rewrote `/resume`'s menu description so the capability is discoverable.
+- **feat-041 `/export [file.md]`**: `Session::export_markdown` renders the active path — numbered user turns,
+  assistant prose, tool calls as `- **name** \`args\`` with arguments flattened to one line, tool results as fenced
+  blocks clipped to 500 chars. The system prompt is left out (boilerplate) and an empty assistant turn gets no
+  heading. Defaults to `<session-name>.md`.
+- Real gap found while checking the above: there is still no way to start a *fresh* session without relaunching.
+  Filed as "New Session Without Restarting".
+- `cargo test` 16 passed, `--self-test` OK.

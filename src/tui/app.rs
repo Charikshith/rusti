@@ -29,7 +29,7 @@ pub struct Cmd {
 pub const CMDS: &[Cmd] = &[
     Cmd { name: "/model", desc: "pick from saved profiles, or /model <name> to switch", soon: false },
     Cmd { name: "/use", desc: "/use <name> - switch to a saved profile", soon: false },
-    Cmd { name: "/resume", desc: "pick a saved session and continue it", soon: false },
+    Cmd { name: "/resume", desc: "list sessions and switch: /resume, /resume <name>, /resume <n>", soon: false },
     Cmd { name: "/rename", desc: "/rename <new-name> - rename the active session", soon: false },
     Cmd { name: "/tree", desc: "browse the session tree and branch from an earlier entry", soon: false },
     Cmd { name: "/reload", desc: "rebuild rusti from source and relaunch", soon: false },
@@ -38,8 +38,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
     Cmd { name: "/plan", desc: "toggle plan mode: read and propose, change nothing", soon: false },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
-    Cmd { name: "/export", desc: "/export [file.md] - write out the transcript", soon: true },
-    Cmd { name: "/session", desc: "/session list|switch <name>", soon: true },
+    Cmd { name: "/export", desc: "/export [file.md] - write the transcript out as markdown", soon: false },
 ];
 
 /// Menu rows visible at once; up/down walks the whole filtered list.
@@ -517,6 +516,10 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/tree" => { let _ = job_tx.send(Job::Tree); }
+        "/export" => {
+            let to = (!arg.is_empty()).then(|| arg.to_string());
+            let _ = job_tx.send(Job::Export(to));
+        }
         "/plan" => {
             let on = !ai_core::plan_mode();
             ai_core::set_plan(on);
