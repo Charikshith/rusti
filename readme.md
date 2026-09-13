@@ -27,7 +27,13 @@ cargo build --release
 ./target/release/rusti --context 60000 "task"   # compact history once the prompt exceeds N tokens (default 100000, env RUSTI_CONTEXT)
 ./target/release/rusti --yolo "task"            # no permission prompts, no project-root guard (env RUSTI_YOLO=1)
 ./target/release/rusti --self-test       # offline check, fake server
+./target/release/rusti --help            # all flags and slash commands
 ```
+
+In the TUI: `/tree` browses and branches the session, `/undo` puts back the files the
+last turn changed, `/commit` stages and commits the work, and `!cargo test` runs a shell
+command whose output the model sees on the next turn. The status line carries the
+session, model, git branch, tokens used and how full the context is.
 
 `model.json` example:
 ```json

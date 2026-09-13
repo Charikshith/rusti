@@ -53,6 +53,7 @@ pub enum Job {
     Tree,               // send the selectable tree rows for the picker
     Select(String),     // move the active leaf to this entry (pi-style branch)
     Undo,               // put back the files the last turn changed, then rewind to before it
+    Bash(String),       // "!cmd": run it here, show the output, and let the model see it
     Reload,
 }
 
@@ -210,6 +211,10 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let mut session = session;
         let mut client = client;
+        let branch = |tx: &mpsc::Sender<ai_core::Event>| {
+            let _ = tx.send(ai_core::Event::Git(ai_core::git_branch().unwrap_or_default()));
+        };
+        branch(&event_tx); // queued before the first frame
         loop {
             match job_rx.recv() {
                 Ok(Job::Task(task)) => {
@@ -305,6 +310,21 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     }
                 }
                 Ok(Job::Select(id)) => branch_at(&mut session, &id, &event_tx),
+                Ok(Job::Bash(cmd)) => {
+                    let summary = format!("$ {cmd}");
+                    let _ = event_tx.send(ai_core::Event::ToolStart(summary.clone()));
+                    let t0 = std::time::Instant::now();
+                    let (ok, out) = ai_core::tools::run_command(&cmd, 0);
+                    // output on success too: seeing it is the whole point of "!"
+                    let _ = event_tx.send(ai_core::Event::ToolEnd {
+                        summary, ok, ms: t0.elapsed().as_millis(), output: out.clone(),
+                    });
+                    if !session.is_empty() {
+                        session.add(crate::session::Entry::new("user", format!("I ran `{cmd}` myself:\n{out}")), session.active.clone());
+                        let _ = session.save();
+                    }
+                    let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
+                }
                 Ok(Job::Undo) => {
                     for l in ai_core::tools::undo_turn() {
                         let _ = event_tx.send(ai_core::Event::Text(format!("  ↶ {l}")));
@@ -317,6 +337,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                 }
                 Err(_) => break, // TUI exited
             }
+            branch(&event_tx); // a turn (or a !command) may have switched or committed
         }
     })));
 
@@ -488,6 +509,16 @@ mod tests {
         assert!(app::filter_cmds("/use x").is_empty()); // args started
         assert!(app::filter_cmds("hello").is_empty());
         assert!(app::filter_cmds("/zz").is_empty());
+    }
+
+    #[test]
+    fn footer_shows_only_the_parts_that_exist() {
+        assert_eq!(
+            app::footer_right("main", "mimo", "master", 4321, 25_000, 100_000),
+            "main · mimo · ⎇ master · 4.3k tok · ctx 25%"
+        );
+        // fresh session: no name, no branch, nothing counted yet
+        assert_eq!(app::footer_right("", "mimo", "", 0, 0, 100_000), "mimo");
     }
 
     #[test]

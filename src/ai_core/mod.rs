@@ -17,6 +17,7 @@ pub enum Event {
     ToolEnd { summary: String, ok: bool, ms: u128, output: String }, // tool finished, with wall time; output only on failure
     Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
     SessionName(String),                       // active session's name, for the status line
+    Git(String),                               // current branch, for the status line
     Tree(Vec<(String, String)>),               // (label, id) rows for the TUI's /tree picker
     Prefill(String),                           // put this text in the input (branching at a user message)
     Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
@@ -69,7 +70,7 @@ fn emit(ev: Event) {
             Event::Ask { .. } => {}
             Event::Resumed { .. } => {} // TUI-only: replaces the on-screen transcript
             Event::SessionName(_) => {} // TUI-only: status-line label
-            Event::Tree(_) | Event::Prefill(_) => {} // TUI-only: /tree picker
+            Event::Tree(_) | Event::Prefill(_) | Event::Git(_) => {} // TUI-only
             Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end
         },
@@ -98,6 +99,10 @@ static CONTEXT_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 
 pub fn set_context_limit(n: u64) {
     CONTEXT_LIMIT.store(n.max(1000), Ordering::Relaxed);
+}
+
+pub fn context_limit() -> u64 {
+    CONTEXT_LIMIT.load(Ordering::Relaxed)
 }
 
 /// Entries kept verbatim after compaction (the current task's recent steps).
@@ -163,10 +168,35 @@ fn instructions_from(dir: &std::path::Path) -> Option<(String, String)> {
 }
 
 fn system_prompt() -> String {
-    match instructions_from(std::path::Path::new(".")) {
+    let mut p = match instructions_from(std::path::Path::new(".")) {
         Some((name, body)) => format!("{SYSTEM_PROMPT}\n\n# Project instructions (from {name} in the working directory)\n{body}"),
         None => SYSTEM_PROMPT.to_string(),
+    };
+    // refreshed every turn (run_agent rewrites the system entry), so the model
+    // always sees the tree as it is now rather than as it was at session start
+    if let Some(g) = git_context() {
+        p.push_str("\n\n");
+        p.push_str(&g);
     }
+    p
+}
+
+fn git(args: &[&str]) -> Option<String> {
+    let o = std::process::Command::new("git").args(args).output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Current branch, or None outside a git work tree.
+pub fn git_branch() -> Option<String> {
+    git(&["rev-parse", "--abbrev-ref", "HEAD"]).filter(|s| !s.is_empty())
+}
+
+/// Branch + uncommitted changes, so the model knows what it's working on top of.
+fn git_context() -> Option<String> {
+    let branch = git_branch()?;
+    let status = git(&["status", "--short"]).unwrap_or_default();
+    let body = if status.is_empty() { "working tree clean".into() } else { tools::truncate(&status, 2000) };
+    Some(format!("# Git\nbranch: {branch}\n{body}"))
 }
 
 /// Tools that change state or run code; each call asks the user unless --yolo or "always" was given.
@@ -530,6 +560,11 @@ pub fn self_test() {
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();
     assert!(system_prompt().starts_with(SYSTEM_PROMPT));
+    // git context rides along with the prompt, and only inside a work tree
+    assert_eq!(git_context().is_some(), git_branch().is_some());
+    if git_branch().is_some() {
+        assert!(system_prompt().contains("# Git\nbranch: "));
+    }
 
     // permission decisions
     assert!(decide("write_file", "y") && decide("write_file", " Yes "));

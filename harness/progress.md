@@ -235,3 +235,20 @@ Verification: `cargo test` 7 passed, `--self-test` OK, `./init.sh` clean, live r
 - TUI: `/undo` -> `Job::Undo` -> restore files (`↶ restored …`), then `branch_at(last user entry)` — the same helper
   the `/tree` picker uses — so the conversation rewinds and the message is prefilled for editing.
 - `cargo test` 14 passed, `--self-test` OK (undo round-trip asserted). `/undo` not driven interactively.
+
+## Session 2026-09-13 (7): Tier 2 — feat-034/035/036/037
+- **feat-034 --help/--version**: checked before every other argument so they work with no model configured.
+  `--json` NDJSON stays in open-work.
+- **feat-035 git awareness**: `system_prompt()` appends `# Git` (branch + `git status --short`, 2k cap). It is rewritten
+  each turn, so the model always sees the tree as it is now. `Event::Git` carries the branch to the status line
+  (emitted before the first frame and after every job, so a `!git checkout` refreshes it). `/commit` is a prompt macro —
+  review, stage, commit with a reasoned message, no push.
+- **feat-036 `!cmd`**: runs on the agent thread via `tools::run_command`, renders as a `$ cmd` tool line with output
+  shown on success too, and appends the result to the session as a user entry so the model sees it next turn.
+- **feat-037 footer**: `app::footer_right` composes `session · model · ⎇ branch · N tok · ctx N%` from the parts that
+  exist. Session totals reset on /resume.
+- **Parallel tool calls: examined and skipped.** The runtime is current-thread and every tool but `delegate` blocks, so
+  `join_all` would overlap nothing; real concurrency needs a multi-thread runtime plus spawn_blocking, which puts the
+  `Mutex` statics and the interactive permission prompt under contention. Reasoning recorded in open-work.
+- `start_task()` extracted from the Enter handler so /commit reuses the same turn setup.
+- `cargo test` 15 passed, `--self-test` OK, `--help`/`--version` checked by hand. TUI paths not driven interactively.

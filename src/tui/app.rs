@@ -35,7 +35,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/reload", desc: "rebuild rusti from source and relaunch", soon: false },
     Cmd { name: "/quit", desc: "exit rusti (same as ctrl+c twice)", soon: false },
     Cmd { name: "/undo", desc: "put back the files the last turn changed and rewind to before it", soon: false },
-    Cmd { name: "/commit", desc: "draft a commit message from this session", soon: true },
+    Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
     Cmd { name: "/plan", desc: "plan mode: no writes until approved", soon: true },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
     Cmd { name: "/export", desc: "/export [file.md] - write out the transcript", soon: true },
@@ -44,6 +44,12 @@ pub const CMDS: &[Cmd] = &[
 
 /// Menu rows visible at once; up/down walks the whole filtered list.
 pub const MENU_ROWS: usize = 5;
+
+/// /commit is a prompt macro — the model already has git and the tools; the
+/// system prompt already carries `git status --short`.
+const COMMIT_TASK: &str = "Review the working tree with git status and git diff, then stage the files \
+belonging to the work we just did and create one commit. Write a concise message saying why the change \
+was made, not just what changed. Do not push.";
 
 /// Picker rows visible at once; up/down scrolls the window for long lists.
 pub const PICK_ROWS: usize = 8;
@@ -112,6 +118,8 @@ pub struct App {
     pub turn_tok: u64,
     pub turn_gen_ms: u128,
     pub turn_ctx: u64,  // prompt tokens of the last LLM call = current context size
+    pub sess_tok: u64,  // tokens generated across the whole session
+    pub branch: String, // current git branch, refreshed after every job
     pub turn_est: bool, // tokens were estimated, not reported by the server
     pub thinking: bool, // currently accumulating a "  │ " reasoning block
     // slash-command menu
@@ -196,6 +204,7 @@ pub fn ui_loop(
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
         history: seed_history, hist_idx: None, tool_line: None, exit_armed: None,
         turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
+        sess_tok: 0, branch: String::new(),
         thinking: false,
         menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
         pick: None,
@@ -304,22 +313,23 @@ pub fn ui_loop(
                                     }
                                     return Ok(Exit::Quit);
                                 }
-                            } else {
-                                app.flush();
-                                app.msg_num += 1;
-                                app.lines.push(format!("{}› {raw}", app.msg_num));
-                                app.current.clear();
-                                app.scroll_up = 0;
-                                app.done = false;
-                                app.turn_t0 = std::time::Instant::now();
-                                app.turn_tok = 0;
-                                app.turn_ctx = 0;
-                                app.turn_gen_ms = 0;
-                                app.turn_est = false;
-                                if app.history.last().map(|h| h != &raw).unwrap_or(true) {
-                                    app.history.push(raw.clone());
+                            } else if let Some(cmd) = raw.strip_prefix('!') {
+                                let cmd = cmd.trim().to_string();
+                                if cmd.is_empty() {
+                                    app.lines.push("  ✗ usage: !<shell command>".into());
+                                } else if !app.done {
+                                    app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
+                                } else {
+                                    app.flush();
+                                    app.scroll_up = 0;
+                                    app.done = false;
+                                    if app.history.last().map(|h| h != &raw).unwrap_or(true) {
+                                        app.history.push(raw.clone());
+                                    }
+                                    let _ = job_tx.send(Job::Bash(cmd));
                                 }
-                                let _ = job_tx.send(Job::Task(raw));
+                            } else {
+                                start_task(&mut app, job_tx, raw);
                             }
                         }
 
@@ -415,6 +425,7 @@ pub fn ui_loop(
                     app.lines.extend(ai_core::fail_tail(&output)); // "  · " rows render dim like the stats line
                 }
                 ai_core::Event::SessionName(name) => app.session = name,
+                ai_core::Event::Git(b) => app.branch = b,
                 ai_core::Event::Tree(rows) => {
                     // start on the active leaf (marked ◀ by tree::rows), like /model starts on the active profile
                     let idx = rows.iter().rposition(|(l, _)| l.ends_with(" ◀")).unwrap_or(rows.len() - 1);
@@ -432,9 +443,11 @@ pub fn ui_loop(
                     app.hist_idx = None;
                     app.msg_num = msg_num;
                     app.scroll_up = 0;
+                    app.sess_tok = 0; // a different session's totals aren't ours
                 }
                 ai_core::Event::Usage { tokens, prompt, est, gen_ms } => {
                     app.turn_tok += tokens;
+                    app.sess_tok += tokens;
                     app.turn_ctx = prompt;
                     app.turn_gen_ms += gen_ms;
                     app.turn_est |= est;
@@ -504,6 +517,13 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/tree" => { let _ = job_tx.send(Job::Tree); }
+        "/commit" => {
+            if !app.done {
+                app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
+            } else {
+                start_task(app, job_tx, COMMIT_TASK.into());
+            }
+        }
         "/undo" => {
             if !app.done {
                 app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
@@ -526,6 +546,44 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         _ => app.lines.push(format!("  ✗ unknown command: {cmd}")),
     }
     false
+}
+
+/// Show the message, reset the per-turn counters, hand it to the agent thread.
+fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
+    app.flush();
+    app.msg_num += 1;
+    app.lines.push(format!("{}› {raw}", app.msg_num));
+    app.current.clear();
+    app.scroll_up = 0;
+    app.done = false;
+    app.turn_t0 = std::time::Instant::now();
+    app.turn_tok = 0;
+    app.turn_ctx = 0;
+    app.turn_gen_ms = 0;
+    app.turn_est = false;
+    if app.history.last().map(|h| h != &raw).unwrap_or(true) {
+        app.history.push(raw.clone());
+    }
+    let _ = job_tx.send(Job::Task(raw));
+}
+
+/// Right of the status line: what this session is, and how full it is.
+pub fn footer_right(session: &str, model: &str, branch: &str, sess_tok: u64, ctx: u64, limit: u64) -> String {
+    let mut parts = Vec::new();
+    if !session.is_empty() {
+        parts.push(session.to_string());
+    }
+    parts.push(model.to_string());
+    if !branch.is_empty() {
+        parts.push(format!("⎇ {branch}"));
+    }
+    if sess_tok > 0 {
+        parts.push(format!("{} tok", kilo(sess_tok)));
+    }
+    if ctx > 0 {
+        parts.push(format!("ctx {}%", ctx * 100 / limit.max(1)));
+    }
+    parts.join(" · ")
 }
 
 /// Move a picker selection by delta and keep it inside the visible window.

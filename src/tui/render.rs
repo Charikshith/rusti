@@ -116,11 +116,10 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     } else {
         String::new()
     };
-    let right = if app.session.is_empty() {
-        app.model.clone()
-    } else {
-        format!("{} · {}", app.session, app.model)
-    };
+    let right = app::footer_right(
+        &app.session, &app.model, &app.branch,
+        app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(),
+    );
     let model = truncate_str(&right, w.saturating_sub(left_plain.chars().count() + 3));
     let used = left_plain.chars().count() + 1 + model.chars().count();
     let mut srow = if app.done {

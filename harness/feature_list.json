@@ -339,6 +339,47 @@
       ],
       "status": "done",
       "evidence": "--self-test: two edits + one new file in a turn, undo_turn() returns ['removed _undo_b.txt', 'restored _undo_a.txt'], original bytes back, second undo empty. cargo test 14 passed; --self-test OK. /undo not driven interactively."
+    },
+    {
+      "id": "feat-034",
+      "name": "CLI --help and --version",
+      "description": "--help / -h prints a one-screen reference (flags, env vars, slash commands, ! prefix) and exits; --version / -V prints CARGO_PKG_VERSION. Both are checked before every other argument so they work without a configured model. --json NDJSON output stays in open-work.",
+      "dependencies": [
+        "feat-005"
+      ],
+      "status": "done",
+      "evidence": "`rusti --version` prints 'rusti 0.1.0'; `rusti --help` prints the reference. cargo test 15 passed; --self-test OK."
+    },
+    {
+      "id": "feat-035",
+      "name": "Git awareness and /commit",
+      "description": "system_prompt() appends a '# Git' section (branch + `git status --short`, truncated to 2k, 'working tree clean' when empty) and is rewritten every turn, so the model always sees the current tree. Event::Git carries the branch to the TUI status line, emitted before the first frame and after every job. /commit is a prompt macro that tells the model to review, stage and commit with a reasoned message (no push); it is refused while a task runs.",
+      "dependencies": [
+        "feat-022"
+      ],
+      "status": "done",
+      "evidence": "--self-test asserts git_context().is_some() == git_branch().is_some() and that the prompt carries '# Git\\nbranch: ' inside a work tree. cargo test 15 passed. /commit not driven against a live model."
+    },
+    {
+      "id": "feat-036",
+      "name": "Bash mode (! prefix)",
+      "description": "'!cmd' in the TUI runs cmd through tools::run_command on the agent thread and renders it as a tool line ('$ cmd') with its output shown on success as well as failure; the result is appended to the session as a user entry ('I ran `cmd` myself: …') so the model sees it next turn. Refused while a task is running; the raw '!cmd' goes into input history.",
+      "dependencies": [
+        "feat-031"
+      ],
+      "status": "done",
+      "evidence": "Compiles and routes through the existing ToolStart/ToolEnd path; cargo test 15 passed; --self-test OK. Not driven interactively."
+    },
+    {
+      "id": "feat-037",
+      "name": "Context and token footer",
+      "description": "app::footer_right composes the status line's right side from the parts that exist: session · model · ⎇ branch · N tok (session total) · ctx N% (last prompt size against the --context limit). Session totals reset when /resume loads another session.",
+      "dependencies": [
+        "feat-028",
+        "feat-035"
+      ],
+      "status": "done",
+      "evidence": "tui::tests::footer_shows_only_the_parts_that_exist covers the full line and the fresh-session case; cargo test 15 passed."
     }
   ]
 }

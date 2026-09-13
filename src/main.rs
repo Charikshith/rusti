@@ -12,8 +12,46 @@ mod session;
 mod tree;
 mod tui;
 
+const HELP: &str = "\
+rusti — minimal coding agent
+
+usage: rusti [flags] [task]
+       rusti --tui [flags]        interactive terminal UI
+
+flags
+  --tui                  interactive UI (falls back to a plain stream when stdin is piped)
+  --session NAME         use .rusti/sessions/NAME.json instead of ./session.json
+  --resume               continue the session from its active leaf
+  --tree                 browse the session tree and branch from an earlier entry
+  --url U --key K --model M   override the saved profile for this run
+  --use NAME             make a saved profile the default, then exit
+  --list                 list saved profiles      --add   add one interactively
+  --max-iters N          tool rounds per task (default 50)
+  --context N            compact the history once the prompt passes N tokens (default 100000)
+  --yolo                 no permission prompts, no project-root guard
+  --self-test            offline check against a fake server
+  --help, --version
+
+env: LLM_URL LLM_KEY LLM_MODEL RUSTI_SESSION RUSTI_MAX_ITERS RUSTI_CONTEXT RUSTI_YOLO
+
+slash commands (--tui)
+  /model /use     switch model profile        /resume /rename   sessions
+  /tree           browse and branch           /undo             revert the last turn's file changes
+  /commit         stage and commit the work   /reload           rebuild and relaunch
+  /quit
+  !CMD            run a shell command; its output goes to the model too
+";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{HELP}");
+        return;
+    }
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("rusti {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.iter().any(|a| a == "--self-test") {
         ai_core::self_test();
         return;

@@ -3,7 +3,7 @@
 ## Suggested Order (2026-09-13 review)
 
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
-Tier 2 — daily-driver quality: Git Integration, CLI Polish (--help/--version), Bash Mode, Parallel Tool Calls, Context/Token Footer (/tree picker and /undo landed as feat-032/033)
+Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and deliberately skipped — see its entry below.
 Tier 3 — reach: Plan Mode, Native Anthropic/Gemini, Image Input, Prompt Caching, /export, /session switch, Project Config, Web Fetch, MCP Client
 
 ## Priority — Add When Needed
@@ -32,24 +32,24 @@ Where: tui/app.rs input handling (fd/fuzzy lib or lazy prefix match)
 
 ### Slash-Menu Follow-ups (prototype parity landed 2026-09-09)
 When: The menu exists (`/` opens it) but only completes command names
-What: Extend the same panel to saved model names and file paths; the queued
-commands it lists (/undo /commit /plan /test /export) are the items below
+What: Extend the same panel to saved model names and file paths; the commands
+it still lists as `· soon` (/plan /test /export /session) are the items below
 Where: tui/app.rs filter_cmds/menu_items, tui/render.rs panel_rows
 
-### Bash Mode (`!` prefix)
-When: User wants to run own shell command and see output inline
-What: `!` prefix runs command, streams output into transcript (pi: `!` = bash with context, `!!` = without)
-Where: tui/app.rs Enter handler
+### Bash Mode Follow-ups
+When: feat-036 landed `!cmd` (always with context — the output becomes a user entry)
+What: pi's `!!` variant that runs without adding to the conversation; stream output live instead of after exit
+Where: tui/app.rs Enter handler, tui/mod.rs Job::Bash
 
 ### In-Place Model Switching
 When: `/use` requires typing profile names from memory
 What: Ctrl+P cycle next / Ctrl+Shift+P previous / Ctrl+L picker, model change without leaving input
 Where: tui/app.rs key handlers + tui/mod.rs Job::Model (already exists)
 
-### Context/Token Footer
-When: User wants to see cost/token burn and context %
-What: Footer with ↑/↓ token counts, cache R/W, context % of window, git branch, session name
-Where: tui/render.rs status line
+### Cost in the Footer
+When: feat-037 shows session tokens and context %, but not money
+What: price-per-token on the model profile, multiplied into a session cost figure; needs prompt/completion split kept separately
+Where: config.rs profile, tui/app.rs footer_right
 
 ### Follow-Up Queue
 When: User wants to type next message while agent streams
@@ -63,10 +63,14 @@ When: feat-030 retries connect/status failures only
 What: honor `Retry-After` on 429; retry a `stream error` that arrives before the first token (today it fails the turn)
 Where: ai_core/llm.rs chat_stream
 
-### Parallel Tool Calls
+### Parallel Tool Calls — examined 2026-09-13, deliberately not done
 When: Model emits several independent tool calls in one turn; they run one by one
-What: Execute the batch concurrently (tokio::join_all or spawn_blocking for sync tools); preserve result order by tool_call_id
-Where: ai_core/mod.rs run_agent tool loop
+Why not: the agent runs on `new_current_thread`, and every tool but `delegate` is blocking (fs, Command::output),
+so `join_all` would not overlap anything. Real concurrency needs a multi-thread runtime + spawn_blocking, which puts
+the shared `Mutex` statics (UNDO, ALLOWED, JOBS) and the interactive permission prompt under contention, and the TUI's
+single `tool_line` would need per-call tracking. The win is milliseconds on fs calls; two long commands are already
+served by run_background/job_output.
+Revisit if: profiling shows tool time actually dominates a turn.
 
 ## Safety
 
@@ -92,10 +96,11 @@ Where: ai_core/tools.rs UNDO
 
 ## Developer Workflow
 
-### Git Integration
-When: Agent has no idea what's already changed; commits are manual
-What: `git status --short` + branch injected at turn start (cheap), `/commit` that drafts a message from the session path, branch name in footer
-Where: ai_core/mod.rs run_agent (context), tui/app.rs command, tui/render.rs status
+### Git Follow-ups
+When: feat-035 injects branch + `git status --short` and adds /commit
+What: `git diff` of the current turn's files in the prompt when the status is small; `/commit --amend`; skip the git
+calls entirely when `.git` is absent (today two processes spawn per turn either way)
+Where: ai_core/mod.rs git_context()
 
 ### Plan Mode
 When: User wants to approve steps before files are touched
@@ -107,15 +112,10 @@ When: "Run tests until green" needs babysitting
 What: `/test <cmd>` runs cmd, feeds failure output back as the next user turn, repeats until exit 0 or N attempts
 Where: tui/app.rs command → Job::Task loop, or a run_agent wrapper
 
-### CLI Polish: --version, --help, JSON output
-When: Scripting/CI use of the one-shot CLI; discoverability of flags
-What: `--version` from CARGO_PKG_VERSION, `--help` listing flags/slash commands, `--json` streaming NDJSON events for the plain (piped) path
+### --json NDJSON Output
+When: Scripting/CI use of the one-shot CLI (--help/--version landed as feat-034)
+What: `--json` streams the Event enum as NDJSON on the plain (piped) path instead of prose
 Where: main.rs, tui/plain.rs
-
-### session.json in .gitignore
-When: Every run shows session.json as modified (it's runtime state like model.json)
-What: Add it to .gitignore; `git rm --cached session.json`
-Where: .gitignore
 
 ## Sessions
 
@@ -132,13 +132,6 @@ What: `/export [file.md]` writes the active path as markdown (user/assistant/too
 Where: tui/app.rs command, session.rs path()
 
 ## Model / API
-
-### Cost & Token Tracking
-When: Per-turn stats land (`· tok · tps · s`) but nothing accumulates across a
-session, and there's no cost or context-% figure
-What: Accumulate Event::Usage into the session, add price-per-token to the
-profile, show session totals + context % in the footer
-Where: session.rs, config.rs profile, tui/render.rs (Event::Usage exists)
 
 ### Prompt Caching Headers
 When: Long system prompt + history re-sent every turn on providers that support caching
