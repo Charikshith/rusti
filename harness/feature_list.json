@@ -750,6 +750,24 @@
         "A failed paste sets a status notice rather than doing nothing: a silent key reads as a broken key.",
         "The live clipboard test is opt-in behind RUSTI_CLIPBOARD_TEST=1. It overwrites the clipboard, which no one wants from a routine cargo test, and a headless machine has none."
       ]
+    },
+    {
+      "id": "feat-063",
+      "name": "The turn stats line reads worked 4m 32s and done 11:03 PM",
+      "description": "The per-turn row showed a bare 9.1s, which stops being readable the moment a turn runs past a minute, and nothing said WHEN it finished - so a turn you walked away from gave no way to tell how long ago it landed. human_dur() prints tenths under a minute, m/s under an hour and h/m above it; clock() renders a 12-hour local finish time from a unix timestamp and an offset. std has no local time, so utc_offset_min() derives it once per process by diffing echo %TIME% (or date +%H:%M) against the same instant in UTC, snapped to a quarter hour.",
+      "dependencies": [
+        "feat-037"
+      ],
+      "status": "done",
+      "evidence": "cargo test 34 passed. New assertions cover human_dur across the three ranges and the exact boundaries, clock() at both ends of the 12-hour day plus offsets that wrap past midnight in either direction, and parse_hm against an AutoRun banner. Derivation checked against this machine: utc epoch %86400 = 17:37, cmd echo %TIME% = 23:07, diff 330 min, snapped 330 (+5:30), and clock() renders 11:07 PM - the real local time. --self-test OK.",
+      "decisions": [
+        "No chrono or time crate for two format strings. One cheap spawn per PROCESS, cached in a OnceLock, then pure arithmetic on the time of day - no dates, so no month lengths or leap years to get wrong.",
+        "parse_hm takes the LAST non-empty line, not the whole output: a machine with a cmd AutoRun banner would otherwise parse junk, return offset 0, and silently print every finish time in UTC.",
+        "The offset snaps to 15 minutes because the two clocks are read milliseconds apart and the raw difference can be a minute off; quarter-hour granularity covers every real zone including the :30 and :45 ones.",
+        "ponytail: a session running across a DST change keeps the offset it started with. Named in the code, re-read per turn if anyone ever notices.",
+        "Seconds keep a decimal and minutes do not - at 4m 32s the tenths are noise, at 9.1s they are the interesting part.",
+        "The test matches the head of the row with starts_with: the finish time is wall-clock and cannot be asserted exactly without injecting a clock, which is more plumbing than the line is worth."
+      ]
     }
   ]
 }

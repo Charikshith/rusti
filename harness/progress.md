@@ -676,3 +676,22 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - **Unverifiable here**: the keystroke itself. The TUI needs a tty; the user tests whether their terminal
   delivers ctrl+v, with alt+v as the guaranteed path.
 - `cargo test` 34 passed · `--self-test` OK · release 4.5s.
+
+## Session 2026-09-14 (9): feat-063 — "worked 4m 32s · done 11:03 PM"
+
+- The turn row showed a bare `9.1s`, which stops reading as a duration the moment a turn passes a minute,
+  and nothing said *when* it finished — so a turn you walked away from gave no clue how long ago it landed.
+- `human_dur()` keeps tenths under a minute (where they are the interesting part), switches to `4m 32s`
+  under an hour and `2h 10m` above it. `clock()` renders a 12-hour local finish time.
+- **std has no local time**, and two format strings do not justify chrono. `utc_offset_min()` derives it
+  once per process by diffing `echo %TIME%` (or `date +%H:%M`) against the same instant in UTC, then it is
+  pure arithmetic on the time of day forever after — no dates, so no month lengths or leap years to get
+  wrong. Snapped to a quarter hour because the two clocks are read milliseconds apart and the raw diff can
+  be a minute out; 15-minute granularity still covers the :30 and :45 zones.
+- **The trap, and why `parse_hm` exists**: a machine with a `cmd` AutoRun script prints a banner before the
+  time. Parsing the whole output would fail, return offset 0, and print every finish time in UTC without a
+  word. It takes the last non-empty line, and the test feeds it a banner to prove it.
+- Checked against this machine rather than assumed: utc epoch %86400 = 17:37, `echo %TIME%` = 23:07,
+  diff 330 min → +5:30, and `clock()` renders **11:07 PM** — the real local time.
+- ponytail: a session running across a DST change keeps the offset it started with. Named in the code.
+- `cargo test` 34 passed · `--self-test` OK · release 4.4s.

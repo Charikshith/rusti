@@ -217,13 +217,81 @@ impl App {
     }
 }
 
+/// A turn's wall time, read at a glance: seconds keep a decimal because a
+/// short turn's tenths are the interesting part, minutes drop it because
+/// "4m 32.4s" is noise once you are counting minutes.
+pub fn human_dur(secs: f64) -> String {
+    let s = secs.max(0.0);
+    if s < 60.0 {
+        return format!("{s:.1}s");
+    }
+    let (m, rest) = ((s / 60.0) as u64, (s % 60.0) as u64);
+    if m < 60 {
+        format!("{m}m {rest:02}s")
+    } else {
+        format!("{}h {:02}m", m / 60, m % 60)
+    }
+}
+
+/// Local wall-clock "11:03 PM" from a unix timestamp and an offset in minutes.
+/// Pure arithmetic on the time of day: no date, so no month lengths, no leap
+/// years, nothing to get wrong beyond the offset itself.
+pub fn clock(epoch_secs: u64, offset_min: i64) -> String {
+    let local = epoch_secs as i64 + offset_min * 60;
+    let day = local.rem_euclid(86_400);
+    let (h24, min) = ((day / 3600) as u32, (day % 3600 / 60) as u32);
+    let ampm = if h24 < 12 { "AM" } else { "PM" };
+    let h12 = match h24 % 12 { 0 => 12, h => h };
+    format!("{h12}:{min:02} {ampm}")
+}
+
+/// Hours and minutes out of a clock line. The LAST non-empty line, not the
+/// whole output: a machine with a cmd AutoRun script prints a banner first, and
+/// parsing that would silently answer "UTC" on a box that is nowhere near it.
+pub fn parse_hm(text: &str) -> Option<(i64, i64)> {
+    let line = text.lines().rev().find(|l| !l.trim().is_empty())?;
+    let mut parts = line.trim().split(':');
+    let h = parts.next()?.trim().parse::<i64>().ok()?;
+    let m = parts.next()?;
+    let m = m.get(..2)?.parse::<i64>().ok()?;
+    (h < 24 && m < 60).then_some((h, m))
+}
+
+/// Minutes east of UTC, asked once per process. std has no local time and this
+/// is not worth a dependency: one cheap `echo %TIME%` / `date +%H:%M`, diffed
+/// against the same instant in UTC, gives the offset for the whole session.
+/// ponytail: a session running across a DST change keeps the old offset —
+/// re-read it per turn if anyone ever notices.
+pub fn utc_offset_min() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        let out = if cfg!(windows) {
+            std::process::Command::new("cmd").args(["/C", "echo %TIME%"]).output()
+        } else {
+            std::process::Command::new("date").args(["+%H:%M"]).output()
+        };
+        let Ok(out) = out else { return 0 };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let Some((h, m)) = parse_hm(&text) else { return 0 };
+        let utc = (crate::session::epoch_secs() % 86_400) as i64;
+        let diff = (h * 60 + m) - utc / 60;
+        // wrap to (-12h, +14h] and snap to a quarter hour: the two clocks are
+        // read a few ms apart, so the raw difference is off by a minute at most
+        let wrapped = (diff + 720).rem_euclid(1440) - 720;
+        (wrapped as f64 / 15.0).round() as i64 * 15
+    })
+}
+
 pub fn stats_row(tok: u64, ctx: u64, est: bool, gen_ms: u128, wall_s: f64) -> Option<String> {
     if tok == 0 {
         return None;
     }
     let tps = if gen_ms > 0 { tok as f64 * 1000.0 / gen_ms as f64 } else { 0.0 };
     let e = if est { "~" } else { "" };
-    Some(format!("  · {e}{tok} tok · {tps:.1} tps · {wall_s:.1}s · ctx {e}{}", kilo(ctx)))
+    let done = clock(crate::session::epoch_secs(), utc_offset_min());
+    Some(format!(
+        "  · {e}{tok} tok · {tps:.1} tps · worked {} · ctx {e}{} · done {done}",
+        human_dur(wall_s), kilo(ctx)))
 }
 
 /// 1234 -> "1.2k", 950 -> "950".

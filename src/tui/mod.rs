@@ -758,9 +758,44 @@ mod tests {
     #[test]
     fn turn_stats_row_reports_tps_over_generation_time_only() {
         // 120 tokens generated in 3s, turn took 8s wall (5s of it tool waits)
-        assert_eq!(app::stats_row(120, 4321, false, 3000, 8.0).unwrap(), "  · 120 tok · 40.0 tps · 8.0s · ctx 4.3k");
-        assert_eq!(app::stats_row(9, 950, true, 0, 1.0).unwrap(), "  · ~9 tok · 0.0 tps · 1.0s · ctx ~950");
+        // the trailing "· done <clock>" is wall-clock and untestable, so match the head
+        let row = app::stats_row(120, 4321, false, 3000, 8.0).unwrap();
+        assert!(row.starts_with("  · 120 tok · 40.0 tps · worked 8.0s · ctx 4.3k · done "), "{row}");
+        let est = app::stats_row(9, 950, true, 0, 1.0).unwrap();
+        assert!(est.starts_with("  · ~9 tok · 0.0 tps · worked 1.0s · ctx ~950 · done "), "{est}");
         assert!(app::stats_row(0, 0, false, 100, 1.0).is_none());
+
+        // seconds keep tenths, minutes drop them, hours roll over
+        assert_eq!(app::human_dur(9.14), "9.1s");
+        assert_eq!(app::human_dur(59.99), "60.0s", "still sub-minute by the clock that matters");
+        assert_eq!(app::human_dur(272.4), "4m 32s");
+        assert_eq!(app::human_dur(600.0), "10m 00s");
+        assert_eq!(app::human_dur(3600.0), "1h 00m");
+        assert_eq!(app::human_dur(7830.0), "2h 10m");
+
+        // 12-hour clock: the two ends of the day are where this goes wrong
+        assert_eq!(app::clock(0, 0), "12:00 AM");
+        assert_eq!(app::clock(12 * 3600, 0), "12:00 PM");
+        assert_eq!(app::clock(23 * 3600 + 3 * 60, 0), "11:03 PM");
+        assert_eq!(app::clock(13 * 3600 + 5 * 60, 0), "1:05 PM");
+        // an offset may push past midnight in either direction and must wrap
+        assert_eq!(app::clock(23 * 3600, 330), "4:30 AM", "+5:30 rolls into the next day");
+        assert_eq!(app::clock(30 * 60, -60), "11:30 PM", "-1h rolls back into the previous one");
+
+        // the clock line is read off `echo %TIME%` / `date`, and a machine with
+        // a cmd AutoRun banner prints junk first: take the last line, or the
+        // offset silently comes back 0 and every finish time reads as UTC
+        assert_eq!(app::parse_hm("23:07:14.92
+"), Some((23, 7)));
+        assert_eq!(app::parse_hm("Microsoft Windows [Version 10.0]
+
+23:07:14.92
+"), Some((23, 7)));
+        assert_eq!(app::parse_hm(" 9:05
+"), Some((9, 5)));
+        assert_eq!(app::parse_hm("no clock here"), None);
+        assert_eq!(app::parse_hm("99:99"), None);
+        assert_eq!(app::parse_hm(""), None);
     }
 
     #[test]
