@@ -784,6 +784,21 @@
         "Status goes between the panel and the input, not above the panel: a picker and the input belong together at the bottom, and the status is what separates them from each other rather than from the transcript.",
         "bottom_rows is unchanged at 2 + input + panel - the same two fixed rows, in the other order - so the transcript height and its bottom-resting pad (feat-043) need no adjustment."
       ]
+    },
+    {
+      "id": "feat-065",
+      "name": "A model that cannot see an attached image must say so",
+      "description": "First real use of feat-061 produced a confident, invented description of a screenshot. session.json shows rusti did its part - two read_file calls, two user entries each carrying a 13198-char data URL - and the :20128 proxy stripped both, leaving the model with only the text note. It then described the picture from the filename and the surrounding conversation, and even reasoned from the KB figure in the note (\"quite small (9 KB) so hard to read the details\"), which is meaningless for pixels it never received. The attached entry now carries an explicit instruction to say so rather than guess, and the system prompt extends its no-inventing rule from file contents and command output to what an image shows.",
+      "dependencies": [
+        "feat-061"
+      ],
+      "status": "done",
+      "evidence": "Diagnosed from the live session file rather than guessed: 42 entries, 2 carrying image parts, both for that screenshot, each 13198 chars of data URL - so the attach worked and the provider dropped it. Matches the earlier raw-curl finding that this proxy strips image parts on three different models. cargo test 34 passed, --self-test OK. The guard cannot be proven here for the same reason the feature cannot: no vision endpoint to answer either way.",
+      "decisions": [
+        "The instruction rides on the attached user entry, not only in the system prompt: it is the message the picture is supposed to be in, so it is the message a model reads when the picture is missing.",
+        "The KB figure stays in the tool note. It was misused as evidence about content, but it is genuinely useful for spotting a truncated or empty file - the instruction is the fix, not removing information.",
+        "No attempt to detect provider support. Nothing in an OpenAI-compatible response says whether image parts survived, so the only honest lever is telling the model what to do when they did not."
+      ]
     }
   ]
 }

@@ -95,7 +95,7 @@ Prefer grep, glob and list_dir over shell commands for finding code; use read_fi
 Use todo to plan and track multi-step tasks. Writes and commands may need the user's approval; a denial is final \
 for that call: explain or ask_user, do not retry it. Use run_background for servers and watchers, and job_stop \
 what you started before finishing. Use delegate for a self-contained subtask whose details you do not need. \
-Never invent file contents or command output — use tools to verify. \
+Never invent file contents, command output, or what an image shows — use tools to verify, and say when you cannot see something. \
 When the task is done, reply with a concise summary of what you changed.";
 
 /// Tool-call rounds per task. 50 fits a real read/edit/test/fix cycle; --max-iters overrides.
@@ -411,7 +411,12 @@ pub async fn run_agent(
         // ride on a tool message, and a user entry in the middle of the results
         // would orphan the calls that follow it (feat-026).
         if let Some((path, url)) = tools::take_pending_image() {
-            let mut ie = Entry::new("user", format!("image: {path}"));
+            // the instruction is the point: a provider that strips image parts
+            // leaves only this text, and a model with no picture will happily
+            // describe one from the filename and the conversation around it
+            let mut ie = Entry::new("user", format!(
+                "image: {path}
+This message carries that file as an image part.                  If you cannot actually see it, say so — do not describe it from                  the path, the file size, or the conversation."));
             ie.image = Some(url);
             session.add(ie, Some(parent));
         }

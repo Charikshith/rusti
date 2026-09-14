@@ -718,3 +718,23 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   together at the bottom.
 - `cargo test` 34 passed · `--self-test` OK. The composition is inside `draw()`, which needs a terminal, so
   the row order is confirmed by reading and by the user's run.
+
+## Session 2026-09-14 (12): feat-065 — a model that cannot see an image must say so
+
+- First real use of feat-061: the user asked what was in a screenshot and got a confident, **invented**
+  description of rusti's own TUI — plausible because the conversation was about rusti, and wrong.
+- **Diagnosed from `session.json`, not guessed**: 42 entries, two of them carrying image parts, both for
+  that screenshot, each a 13198-char data URL. So the read, the attach and the request were all correct and
+  the :20128 proxy stripped the picture — the same behaviour raw curl proved on three models earlier today.
+  The model then described the image from the filename and the conversation, and leaned on the size in the
+  note ("quite small (9 KB) so hard to read the details"), which is meaningless for pixels it never got.
+  The doubled `read_file` in the transcript is the model retrying because it saw nothing.
+- The attached entry now says, in the message the picture is supposed to be in: *if you cannot actually see
+  it, say so — do not describe it from the path, the file size, or the conversation.* The system prompt's
+  no-inventing rule extends from file contents and command output to what an image shows.
+- Deliberately kept: the KB figure in the tool note. It was misused as evidence about content, but it is
+  what catches a truncated or empty file — the instruction is the fix, not removing information.
+- No attempt to detect provider support: nothing in an OpenAI-compatible response says whether image parts
+  survived, so telling the model what to do when they did not is the only honest lever.
+- `cargo test` 34 passed · `--self-test` OK. The guard cannot be proven here for the same reason the
+  feature cannot — there is no vision endpoint to answer either way.
