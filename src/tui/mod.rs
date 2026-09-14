@@ -758,11 +758,13 @@ mod tests {
     #[test]
     fn turn_stats_row_reports_tps_over_generation_time_only() {
         // 120 tokens generated in 3s, turn took 8s wall (5s of it tool waits)
-        // the trailing "· done <clock>" is wall-clock and untestable, so match the head
+        // "done <clock>" is wall-clock, so pin the two halves around it instead
         let row = app::stats_row(120, 4321, false, 3000, 8.0).unwrap();
-        assert!(row.starts_with("  · 120 tok · 40.0 tps · worked 8.0s · ctx 4.3k · done "), "{row}");
+        assert!(row.starts_with("  · worked 8.0s · done "), "{row}");
+        assert!(row.ends_with(" · 120 tok · 40.0 tps · ctx 4.3k"), "{row}");
         let est = app::stats_row(9, 950, true, 0, 1.0).unwrap();
-        assert!(est.starts_with("  · ~9 tok · 0.0 tps · worked 1.0s · ctx ~950 · done "), "{est}");
+        assert!(est.starts_with("  · worked 1.0s · done "), "{est}");
+        assert!(est.ends_with(" · ~9 tok · 0.0 tps · ctx ~950"), "{est}");
         assert!(app::stats_row(0, 0, false, 100, 1.0).is_none());
 
         // seconds keep tenths, minutes drop them, hours roll over

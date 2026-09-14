@@ -695,3 +695,12 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   diff 330 min → +5:30, and `clock()` renders **11:07 PM** — the real local time.
 - ponytail: a session running across a DST change keeps the offset it started with. Named in the code.
 - `cargo test` 34 passed · `--self-test` OK · release 4.4s.
+
+## Session 2026-09-14 (10): stats row order
+
+- Reordered on request to lead with both times: `· worked 4m 32s · done 11:24 PM · 1240 tok · 41.0 tps ·
+  ctx 9.3k`. The two questions after a turn are how long it took and when it landed; the accounting reads
+  second.
+- The test now pins the head and the tail around the wall-clock middle (`starts_with` + `ends_with`)
+  instead of matching one prefix — the clock is the only part that cannot be asserted exactly.
+- `cargo test` 34 passed · `--self-test` OK.

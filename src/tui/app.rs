@@ -290,7 +290,7 @@ pub fn stats_row(tok: u64, ctx: u64, est: bool, gen_ms: u128, wall_s: f64) -> Op
     let e = if est { "~" } else { "" };
     let done = clock(crate::session::epoch_secs(), utc_offset_min());
     Some(format!(
-        "  · {e}{tok} tok · {tps:.1} tps · worked {} · ctx {e}{} · done {done}",
+        "  · worked {} · done {done} · {e}{tok} tok · {tps:.1} tps · ctx {e}{}",
         human_dur(wall_s), kilo(ctx)))
 }
 
