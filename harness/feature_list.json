@@ -793,11 +793,28 @@
         "feat-061"
       ],
       "status": "done",
-      "evidence": "Diagnosed from the live session file rather than guessed: 42 entries, 2 carrying image parts, both for that screenshot, each 13198 chars of data URL - so the attach worked and the provider dropped it. Matches the earlier raw-curl finding that this proxy strips image parts on three different models. cargo test 34 passed, --self-test OK. The guard cannot be proven here for the same reason the feature cannot: no vision endpoint to answer either way.",
+      "evidence": "Diagnosed from the live session file rather than guessed: 42 entries, 2 carrying image parts, both for that screenshot, each 13198 chars of data URL - so the attach worked and the provider dropped it. Matches the earlier raw-curl finding that this proxy strips image parts on three different models. cargo test 34 passed, --self-test OK. Then PROVEN live with the same screenshot: the model answered \"I cannot actually see the contents of the image\" and offered alternatives, where the identical question had previously produced an invented description of rusti's TUI. Its reasoning also exposed the provider marker - the proxy substitutes the literal text \"[image omitted]\" for the image part, which is the first direct evidence of where the picture is dropped.",
       "decisions": [
         "The instruction rides on the attached user entry, not only in the system prompt: it is the message the picture is supposed to be in, so it is the message a model reads when the picture is missing.",
         "The KB figure stays in the tool note. It was misused as evidence about content, but it is genuinely useful for spotting a truncated or empty file - the instruction is the fix, not removing information.",
-        "No attempt to detect provider support. Nothing in an OpenAI-compatible response says whether image parts survived, so the only honest lever is telling the model what to do when they did not."
+        "No attempt to detect provider support. Nothing in an OpenAI-compatible response says whether image parts survived, so the only honest lever is telling the model what to do when they did not.",
+        "The proxy substitutes \"[image omitted]\" text for the image part - found in the model's own reasoning during the guard test. That string is the provider's, not rusti's, and is the clearest proof yet that the request is accepted and the picture discarded downstream."
+      ]
+    },
+    {
+      "id": "feat-066",
+      "name": "The mouse wheel scrolls the transcript instead of walking input history",
+      "description": "Reported as \"the scroll wheel goes to an earlier user message and I cannot scroll up through the session\". Without mouse capture a terminal converts wheel movement into Up/Down key presses on the alternate screen, and this TUI binds Up/Down to input-history recall - so every wheel notch recalled an older message instead of scrolling. The TUI now enables mouse capture and maps ScrollUp/ScrollDown to the transcript scroll, 3 rows a notch. Separately, scroll_up was unbounded: PageUp added 10 forever while the renderer clamped what it drew, so after a few extra presses the view sat pinned at the top and every scroll back down was silently eaten until the count unwound. RenderState now records max_scroll each frame and both the wheel and PageUp clamp to it.",
+      "dependencies": [
+        "feat-043"
+      ],
+      "status": "done",
+      "evidence": "cargo test 34 passed, --self-test OK, release build clean. The wheel itself needs a terminal, so the user confirms; the two causes were identified from the code - Up/Down are bound to history recall at the key handler, and scroll_up had no upper bound at its only two call sites.",
+      "decisions": [
+        "Mouse capture is the fix rather than treating Up/Down as scroll when the input is empty: the terminal stops synthesising arrows once an app captures the mouse, so the wheel and the keyboard stop fighting over the same event.",
+        "The cost is stated rather than worked around: with capture on, click-drag text selection needs Shift held in most terminals. That is the usual trade for wheel support and is one line to revert.",
+        "max_scroll lives on RenderState because only the renderer knows it - it depends on the wrapped row count and the terminal height, neither of which the key handler can see.",
+        "DisableMouseCapture goes in restore_terminal, so the panic hook (feat-057) undoes it too - a terminal left in mouse-reporting mode prints escape junk on every click."
       ]
     }
   ]

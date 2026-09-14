@@ -45,11 +45,16 @@ pub fn visible(lines: &[String], expand: bool) -> impl Iterator<Item = &str> {
 pub struct RenderState {
     prev_lines: Vec<String>,
     prev_rows: usize,
+    /// Rows the transcript can still scroll up by, as of the last frame. Only
+    /// the renderer knows it — it depends on the wrapped line count and the
+    /// terminal height — and the scroll keys need it, or scroll_up runs away
+    /// past the top and every scroll back down is silently eaten.
+    pub max_scroll: usize,
 }
 
 impl RenderState {
     pub fn new() -> Self {
-        Self { prev_lines: Vec::new(), prev_rows: 0 }
+        Self { prev_lines: Vec::new(), prev_rows: 0, max_scroll: 0 }
     }
 }
 
@@ -107,6 +112,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     if !app.current.is_empty() {
         push_wrapped(&app.current.clone(), &mut all);
     }
+    state.max_scroll = all.len().saturating_sub(transcript_h);
     let (pad, start, end) = transcript_window(all.len(), transcript_h, app.scroll_up);
 
     // ── compose frame: one string per screen row ──

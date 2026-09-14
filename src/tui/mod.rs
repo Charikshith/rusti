@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 
-use crossterm::{cursor, execute, terminal};
+use crossterm::{cursor, event, execute, terminal};
 
 use crate::ai_core::{self, llm};
 use crate::session::Session;
@@ -25,7 +25,7 @@ pub fn goto(f: &mut impl Write, x: u16, y: u16) { let _ = execute!(f, cursor::Mo
 /// panic hook, and idempotent: leaving an alternate screen you are not on and
 /// disabling raw mode that is already off are both no-ops.
 pub fn restore_terminal() {
-    let _ = execute!(stdout(), cursor::Show, terminal::LeaveAlternateScreen);
+    let _ = execute!(stdout(), event::DisableMouseCapture, cursor::Show, terminal::LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
 }
 
@@ -468,7 +468,10 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         // transcript from the previous one), and leaving restores the shell's
         // primary buffer exactly — history intact, no gap, no leftovers.
         // Transcripts persist via session.json + /resume, not the scrollback.
-        execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
+        // Mouse capture is what makes the wheel scroll the transcript: without
+        // it the terminal converts the wheel into arrow keys. The cost is that
+        // click-drag selection now needs Shift held, the usual trade.
+        execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide, event::EnableMouseCapture)?;
         let res = app::ui_loop(&job_tx, event_rx, model, seed_name, &cancel, seed_lines, seed_history, seed_msg_num);
         restore_terminal();
         // job_tx must drop before the join — the agent thread blocks in

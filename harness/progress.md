@@ -738,3 +738,28 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   survived, so telling the model what to do when they did not is the only honest lever.
 - `cargo test` 34 passed · `--self-test` OK. The guard cannot be proven here for the same reason the
   feature cannot — there is no vision endpoint to answer either way.
+
+## Session 2026-09-14 (13): feat-065 proven live, feat-066 — wheel scrolls the transcript
+
+**The image guard works.** Same screenshot, same question, new binary: the model answered *"I cannot
+actually see the contents of the image"* and offered alternatives, where before it invented a description
+of rusti's own TUI. Its reasoning also handed us the missing piece — the proxy substitutes the literal text
+**`[image omitted]`** for the image part. That string is the provider's, not rusti's: the request is
+accepted and the picture is discarded downstream, exactly as the raw-curl test suggested.
+
+**feat-066 — two causes behind one report** ("scroll wheel goes to an earlier user message; can't scroll up
+through the session"):
+1. **No mouse capture.** A terminal with no app capturing the mouse converts wheel movement into Up/Down
+   key presses on the alternate screen, and this TUI binds Up/Down to input-history recall. Every notch
+   recalled an older message. Capture is the fix, not special-casing Up/Down when the input is empty: once
+   an app captures the mouse the terminal stops synthesising arrows, so wheel and keyboard stop fighting
+   over one event. Wheel is 3 rows a notch.
+2. **`scroll_up` was unbounded.** PageUp added 10 forever while the renderer clamped only what it *drew*,
+   so a few extra presses left the count far past the top and every scroll back down was silently eaten
+   until it unwound. `RenderState.max_scroll` is recorded each frame and both inputs clamp to it — only the
+   renderer can know it, since it depends on the wrapped row count and the terminal height.
+- `DisableMouseCapture` went into `restore_terminal`, so the panic hook (feat-057) undoes it too; a
+  terminal left in mouse-reporting mode spits escape junk on every click.
+- **Cost, stated not hidden**: with capture on, click-drag text selection needs Shift held in most
+  terminals. Usual trade for wheel support, one line to revert.
+- `cargo test` 34 passed · `--self-test` OK · release 4.5s.

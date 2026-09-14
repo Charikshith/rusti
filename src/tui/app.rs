@@ -337,7 +337,24 @@ pub fn ui_loop(
         app.spinner = app.spinner.wrapping_add(1);
 
         if event::poll(Duration::from_millis(50))? {
-            if let CEvent::Key(k) = event::read()? {
+            let ev = event::read()?;
+            // The wheel only arrives as a Mouse event because the TUI captures
+            // the mouse. Without capture the terminal turns it into Up/Down key
+            // presses in the alternate screen, which this app reads as input
+            // history — that is the "scrolling jumps to an old message" bug.
+            if let CEvent::Mouse(m) = ev {
+                match m.kind {
+                    event::MouseEventKind::ScrollUp => {
+                        app.scroll_up = (app.scroll_up + 3).min(state.max_scroll);
+                    }
+                    event::MouseEventKind::ScrollDown => {
+                        app.scroll_up = app.scroll_up.saturating_sub(3);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            if let CEvent::Key(k) = ev {
                 if k.kind == KeyEventKind::Press {
                     // any key other than a second ctrl+c disarms the exit prompt
                     if !matches!((k.code, k.modifiers), (KeyCode::Char('c'), KeyModifiers::CONTROL)) {
@@ -550,7 +567,10 @@ pub fn ui_loop(
                         }
 
                         // transcript scrollback (0 = follow bottom)
-                        (KeyCode::PageUp, _) => { app.scroll_up += 10; }
+                        // clamped to what the last frame could actually show:
+                        // an unbounded scroll_up would sit far past the top and
+                        // eat every scroll back down until it unwound
+                        (KeyCode::PageUp, _) => { app.scroll_up = (app.scroll_up + 10).min(state.max_scroll); }
                         (KeyCode::PageDown, _) => { app.scroll_up = app.scroll_up.saturating_sub(10); }
                         _ => {}
                     }
