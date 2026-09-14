@@ -802,7 +802,9 @@ pub fn self_test() {
     assert!(tools::undo_turn().is_empty()); // one level only
     std::fs::remove_file("_undo_a.txt").ok();
 
-    // config roundtrip
+    // config roundtrip. Clear first: a failed run panics before its cleanup,
+    // and the leftover file would fail the next run at a different assert
+    std::fs::remove_file("_test_model.json").ok();
     let mut c = crate::config::Config::load_from("_test_model.json");
     assert!(c.resolve().is_none());
     c.add(crate::config::ModelProfile {
@@ -816,8 +818,11 @@ pub fn self_test() {
     let c2 = crate::config::Config::load_from("_test_model.json");
     assert_eq!(c2.resolve().map(|m| m.model.as_str()), Some("gpt-x"));
     // project settings round-trip, and stay out of the file until they're set
-    let written = std::fs::read_to_string("_test_model.json").unwrap();
-    assert!(!written.contains("allow") && !written.contains("max_iters") && !written.contains("context"));
+    // top-level keys, not a substring search: footer has its own "context"
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("_test_model.json").unwrap()).unwrap();
+    let top = written.as_object().unwrap();
+    assert!(!top.contains_key("allow") && !top.contains_key("max_iters") && !top.contains_key("context"));
     c.allow.push("run_command".into());
     c.max_iters = Some(7);
     c.context = Some(2000);

@@ -546,18 +546,101 @@
       ],
       "status": "done",
       "evidence": "Plain path verified live against the dead :8080 endpoint: three attempts at 1.0s/2.0s/4.0s then the error. --self-test still exercises the 503 retry. cargo test 19 passed. The in-place rewrite itself needs a live TUI."
+    },
+    {
+      "id": "feat-051",
+      "name": "Release build 4.2s via thin LTO at cgu=4",
+      "description": "feat-049 landed on thin LTO once and was reverted to protect binary size. User asked for under 10s, so the full lto x codegen-units matrix was measured: fat = 12.8s/1.87MB (cgu=1), 11.7s/1.97MB (cgu=4), 12.1s/2.02MB (cgu=16); thin = 6.9s/2.02MB, 4.2s/2.16MB, 4.1s/2.28MB. Fat cannot reach 10s at ANY codegen-units because it merges the whole program into one module and optimizes that serially - cgu only splits front-end codegen. Settled on thin + cgu=4: 12.8s -> 4.2s for 290KB.",
+      "dependencies": [
+        "feat-049"
+      ],
+      "status": "done",
+      "evidence": "Each profile warmed with a full build, then timed after `touch src/tui/render.rs`; six configurations measured. cgu=1 under thin LTO cost 2.7s of the 6.9s - thin optimizes units in parallel and a one-line edit recompiles the one large rusti crate, so a single unit serialized the dominant work. fat/cgu=16 is strictly dominated: same 2.02MB as thin/cgu=1 for 5s more. cargo test 21 passed; release binary --help OK.",
+      "decisions": [
+        "Reversed the feat-049 decision to keep fat LTO, but only after showing fat's floor is 11.7s - the earlier 'keep fat, find time elsewhere' option no longer exists under a 10s target.",
+        "panic=\"abort\" left OFF despite the time it would save: tools.rs joins reader threads with join().unwrap_or_default() to survive a panicked reader, and abort turns that into a dead TUI."
+      ]
+    },
+    {
+      "id": "feat-052",
+      "name": "Picker filter types at the prompt; user and tool lines get distinct weight",
+      "description": "Typed picker filter rendered in the picker header next to the row count instead of at the input line. Now the filter IS the draft while a picker is open, shown at the > prompt with the block cursor; the real draft is hidden until Esc. Separately, transcript weight was flat: user queries, model prose and tool output all drew at full brightness. User lines now carry a cyan N-caret marker with bright text, tool output is 256-colour 245, and the status line moved from right-aligned to left.",
+      "dependencies": [
+        "feat-043"
+      ],
+      "status": "done",
+      "evidence": "colorize_row output captured byte-for-byte and checked: user = ESC[36m7>ESC[0m + bright, tool = coloured glyph + ESC[38;5;245m, thinking = ESC[3;38;5;249m, stats = ESC[2m. cargo test 21 passed.",
+      "decisions": [
+        "Split user lines out of style b'k' into b'u'. They shared a style with tool rows, so dimming the tool fallthrough would have dimmed every WRAPPED row of a long query while its first row stayed bright. A test wraps an 80-column query to pin this.",
+        "Used 256-colour 245 rather than ESC[2m for tool text, for the reason already recorded on THINK: Windows Terminal renders ESC[2m as barely-darker."
+      ]
+    },
+    {
+      "id": "feat-053",
+      "name": "/settings toggles status-line segments; context % always shown",
+      "description": "ctx% existed in footer_right but was gated on ctx > 0, and turn_ctx resets to 0 at the start of every turn - so the reading vanished exactly while you were watching it fill. Gate removed. Added /settings, which reuses the existing picker with a new PickKind::Settings whose Enter toggles instead of closing, persisting to model.json via the existing Config.",
+      "dependencies": [
+        "feat-048",
+        "feat-038"
+      ],
+      "status": "done",
+      "evidence": "Round-trip test writes a model.json with default/models/allow and no footer key, confirms it loads all-on, flips one segment, saves, and reloads with the other keys intact. Tests also pin that plan mode survives every segment being off. cargo test 21 passed.",
+      "decisions": [
+        "Plan mode is deliberately NOT toggleable: it is the reason writes get refused, so hiding it would hide why.",
+        "Reused the picker instead of adding a menu system; the only behavioural difference is that Enter does not close, since you usually flip more than one row.",
+        "Dropped the on-marker from settings rows - the picker already draws a cursor caret, so a second caret for 'enabled' read as two cursors."
+      ]
+    },
+    {
+      "id": "feat-054",
+      "name": "Running tools show a turning spinner in bold",
+      "description": "ToolStart wrote a LITERAL braille frame, so a running command looked identical to a stalled one, and its text was dim - the same weight as finished output. The live spinner frame is now substituted at draw time from app.spinner (which already ticks every 50ms for the status line) and the running row is bold. ToolEnd's swap to the check/cross glyph is what un-bolds it.",
+      "dependencies": [
+        "feat-047"
+      ],
+      "status": "done",
+      "evidence": "Test asserts a running row renders the PASSED spinner frame (not the stored one) and is bold-and-not-dim, while a finished row is dim-and-not-bold. cargo test 21 passed. The animation itself needs a live TUI.",
+      "decisions": [
+        "Substituted at render time rather than storing the animation: storing it would mean rewriting app.lines every 50ms tick just to move one character, which fights the differential renderer."
+      ]
+    },
+    {
+      "id": "feat-055",
+      "name": "MCP client with per-server on/off",
+      "description": "Tier-3c backlog item. stdio transport, JSON-RPC 2.0, written directly against std::process and serde_json - no MCP SDK and no new dependency. Servers are declared in model.json under \"mcp\" (command, args, env, enabled); enabled ones are spawned before the first frame, handshaken (initialize -> notifications/initialized -> tools/list), and their tools merged into tool_schemas() as mcp__<server>__<tool>. dispatch() routes by prefix rather than gaining an arm per server. /mcp lists servers with live state and toggles them, connecting or killing on the spot and persisting the choice.",
+      "dependencies": [
+        "feat-038",
+        "feat-053"
+      ],
+      "status": "done",
+      "evidence": "Verified three ways. (1) tests/fake_mcp_server.py - a real stdio server - proves the wire format end to end: tools/list, tools/call, isError, and an unknown name refused client-side. (2) The same test exercises the Windows cmd /C path, since cfg!(windows) is true on this machine. (3) Ran the real npx @modelcontextprotocol/server-everything through the actual Rust client: 13 tools discovered, mcp__everything__echo called, 'Echo: hello from rusti' returned. cargo test 24 passed.",
+      "decisions": [
+        "MCP tools are ALWAYS permission-gated and always plan-blocked. GATED is a fixed list of built-ins; a third-party tool's effects cannot be read off its name, so gated() treats every MCP tool as mutating even when it only reads. This is the one place the feature is deliberately not lazy.",
+        "Advertised name is stored beside the original rather than parsed back off at call time: slug() is lossy ('a.b' and 'a_b' both become 'a_b'), so reversing the prefix would mis-route.",
+        "On Windows the command goes through cmd /C: npx/uvx are .cmd shims and CreateProcess cannot run them directly - the single most common reason MCP servers 'are not found' on Windows.",
+        "Reader THREADS per pipe, not blocking reads: recv_timeout can give up on a hung server, a blocking pipe read cannot. stderr is drained (not nulled) both to keep a full pipe buffer from looking like a hang, and so a failure can report why.",
+        "Tools whose prefixed name exceeds 64 chars are dropped with a warning - the OpenAI-compatible API rejects the whole request otherwise, which would break every tool, not just the long one.",
+        "BTreeMap for the server map so the tool list order is stable across runs and stays prompt-cacheable."
+      ]
+    },
+    {
+      "id": "feat-056",
+      "name": "A malformed model.json is reported, and never overwritten",
+      "description": "Config::load_from collapsed three outcomes into one: no file, unreadable file, and unparseable file all returned Config::default() with both errors dropped by .ok(). Since /settings and /mcp do load -> flip -> save, a single typo in model.json silently became an empty config AND was then overwritten with those defaults on the next toggle, taking models, the allow list and the MCP server block with it. load_from now returns the defaults only for a genuinely missing file; an existing file that will not read or parse keeps the defaults so the process still runs but records the reason in Config.err (serde(skip)), and save_to refuses while err is set. The warning is surfaced on stderr for the one-shot and --list/--use paths, and pushed into the TUI transcript because stderr is invisible under the alternate screen.",
+      "dependencies": [
+        "feat-038",
+        "feat-053",
+        "feat-055"
+      ],
+      "status": "done",
+      "evidence": "cargo test 25 passed (new: config::tests::a_malformed_file_is_reported_and_never_overwritten, which asserts err is set, that save_to errors, that the file is byte-identical afterwards, and that a missing file still saves normally). Live against a real malformed model.json: --list prints the serde message with line/column then the usual empty-model line; --use exits 1 without writing; the one-shot path prints the warning and runs on defaults; the file was byte-identical in every case.",
+      "decisions": [
+        "One choke point in save_to rather than a guard at each of the three call sites (/settings, /mcp, --use/--add): every present and future writer is covered by the same check.",
+        "Config.err is serde(skip) so the flag never round-trips into the file it describes.",
+        "A missing file stays a silent first run - that is the normal bootstrap path, not an error.",
+        "An existing file that fails to read for any other reason (permissions, lock) is treated exactly like a parse failure; only ErrorKind::NotFound means first run.",
+        "The TUI puts the warning in the transcript, not the 3s status-line notice: a warning you must act on must not expire."
+      ]
     }
-  ,
-
-{ "id": "feat-051", "name": "Release build 4.2s via thin LTO at cgu=4", "description": "feat-049 landed on thin LTO once and was reverted to protect binary size. User asked for under 10s, so the full lto x codegen-units matrix was measured: fat = 12.8s/1.87MB (cgu=1), 11.7s/1.97MB (cgu=4), 12.1s/2.02MB (cgu=16); thin = 6.9s/2.02MB, 4.2s/2.16MB, 4.1s/2.28MB. Fat cannot reach 10s at ANY codegen-units because it merges the whole program into one module and optimizes that serially - cgu only splits front-end codegen. Settled on thin + cgu=4: 12.8s -> 4.2s for 290KB.", "dependencies": [ "feat-049" ], "status": "done", "evidence": "Each profile warmed with a full build, then timed after `touch src/tui/render.rs`; six configurations measured. cgu=1 under thin LTO cost 2.7s of the 6.9s - thin optimizes units in parallel and a one-line edit recompiles the one large rusti crate, so a single unit serialized the dominant work. fat/cgu=16 is strictly dominated: same 2.02MB as thin/cgu=1 for 5s more. cargo test 21 passed; release binary --help OK.", "decisions": [ "Reversed the feat-049 decision to keep fat LTO, but only after showing fat's floor is 11.7s - the earlier 'keep fat, find time elsewhere' option no longer exists under a 10s target.", "panic=\"abort\" left OFF despite the time it would save: tools.rs joins reader threads with join().unwrap_or_default() to survive a panicked reader, and abort turns that into a dead TUI." ] },
-
-{ "id": "feat-052", "name": "Picker filter types at the prompt; user and tool lines get distinct weight", "description": "Typed picker filter rendered in the picker header next to the row count instead of at the input line. Now the filter IS the draft while a picker is open, shown at the > prompt with the block cursor; the real draft is hidden until Esc. Separately, transcript weight was flat: user queries, model prose and tool output all drew at full brightness. User lines now carry a cyan N-caret marker with bright text, tool output is 256-colour 245, and the status line moved from right-aligned to left.", "dependencies": [ "feat-043" ], "status": "done", "evidence": "colorize_row output captured byte-for-byte and checked: user = ESC[36m7>ESC[0m + bright, tool = coloured glyph + ESC[38;5;245m, thinking = ESC[3;38;5;249m, stats = ESC[2m. cargo test 21 passed.", "decisions": [ "Split user lines out of style b'k' into b'u'. They shared a style with tool rows, so dimming the tool fallthrough would have dimmed every WRAPPED row of a long query while its first row stayed bright. A test wraps an 80-column query to pin this.", "Used 256-colour 245 rather than ESC[2m for tool text, for the reason already recorded on THINK: Windows Terminal renders ESC[2m as barely-darker." ] },
-
-{ "id": "feat-053", "name": "/settings toggles status-line segments; context % always shown", "description": "ctx% existed in footer_right but was gated on ctx > 0, and turn_ctx resets to 0 at the start of every turn - so the reading vanished exactly while you were watching it fill. Gate removed. Added /settings, which reuses the existing picker with a new PickKind::Settings whose Enter toggles instead of closing, persisting to model.json via the existing Config.", "dependencies": [ "feat-048", "feat-038" ], "status": "done", "evidence": "Round-trip test writes a model.json with default/models/allow and no footer key, confirms it loads all-on, flips one segment, saves, and reloads with the other keys intact. Tests also pin that plan mode survives every segment being off. cargo test 21 passed.", "decisions": [ "Plan mode is deliberately NOT toggleable: it is the reason writes get refused, so hiding it would hide why.", "Reused the picker instead of adding a menu system; the only behavioural difference is that Enter does not close, since you usually flip more than one row.", "Dropped the on-marker from settings rows - the picker already draws a cursor caret, so a second caret for 'enabled' read as two cursors." ] },
-
-{ "id": "feat-054", "name": "Running tools show a turning spinner in bold", "description": "ToolStart wrote a LITERAL braille frame, so a running command looked identical to a stalled one, and its text was dim - the same weight as finished output. The live spinner frame is now substituted at draw time from app.spinner (which already ticks every 50ms for the status line) and the running row is bold. ToolEnd's swap to the check/cross glyph is what un-bolds it.", "dependencies": [ "feat-047" ], "status": "done", "evidence": "Test asserts a running row renders the PASSED spinner frame (not the stored one) and is bold-and-not-dim, while a finished row is dim-and-not-bold. cargo test 21 passed. The animation itself needs a live TUI.", "decisions": [ "Substituted at render time rather than storing the animation: storing it would mean rewriting app.lines every 50ms tick just to move one character, which fights the differential renderer." ] }
-,
-
-{ "id": "feat-055", "name": "MCP client with per-server on/off", "description": "Tier-3c backlog item. stdio transport, JSON-RPC 2.0, written directly against std::process and serde_json - no MCP SDK and no new dependency. Servers are declared in model.json under \"mcp\" (command, args, env, enabled); enabled ones are spawned before the first frame, handshaken (initialize -> notifications/initialized -> tools/list), and their tools merged into tool_schemas() as mcp__<server>__<tool>. dispatch() routes by prefix rather than gaining an arm per server. /mcp lists servers with live state and toggles them, connecting or killing on the spot and persisting the choice.", "dependencies": [ "feat-038", "feat-053" ], "status": "done", "evidence": "Verified three ways. (1) tests/fake_mcp_server.py - a real stdio server - proves the wire format end to end: tools/list, tools/call, isError, and an unknown name refused client-side. (2) The same test exercises the Windows cmd /C path, since cfg!(windows) is true on this machine. (3) Ran the real npx @modelcontextprotocol/server-everything through the actual Rust client: 13 tools discovered, mcp__everything__echo called, 'Echo: hello from rusti' returned. cargo test 24 passed.", "decisions": [ "MCP tools are ALWAYS permission-gated and always plan-blocked. GATED is a fixed list of built-ins; a third-party tool's effects cannot be read off its name, so gated() treats every MCP tool as mutating even when it only reads. This is the one place the feature is deliberately not lazy.", "Advertised name is stored beside the original rather than parsed back off at call time: slug() is lossy ('a.b' and 'a_b' both become 'a_b'), so reversing the prefix would mis-route.", "On Windows the command goes through cmd /C: npx/uvx are .cmd shims and CreateProcess cannot run them directly - the single most common reason MCP servers 'are not found' on Windows.", "Reader THREADS per pipe, not blocking reads: recv_timeout can give up on a hung server, a blocking pipe read cannot. stderr is drained (not nulled) both to keep a full pipe buffer from looking like a hang, and so a failure can report why.", "Tools whose prefixed name exceeds 64 chars are dropped with a warning - the OpenAI-compatible API rejects the whole request otherwise, which would break every tool, not just the long one.", "BTreeMap for the server map so the tool list order is stable across runs and stays prompt-cacheable." ] }
-]
+  ]
 }

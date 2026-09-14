@@ -71,22 +71,37 @@ pub struct Config {
     pub max_iters: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<u64>,
+    /// Set when the file exists but could not be read or parsed. Save refuses
+    /// while it is set: /settings and /mcp do load -> flip -> save, so without
+    /// this a typo in model.json would be overwritten by these defaults and
+    /// take the models, allow list and MCP servers with it.
+    #[serde(skip)]
+    pub err: Option<String>,
 }
 
 impl Config {
     pub fn load() -> Config {
         Self::load_from(PATH)
     }
+    /// No file is a first run and loads the defaults. A file that exists but
+    /// does not read or parse is an error, not an empty config: it keeps the
+    /// defaults so the process still runs, but records why so nothing saves.
     pub fn load_from(path: &str) -> Config {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let s = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
+            Err(e) => return Config { err: Some(format!("{path}: {e}")), ..Default::default() },
+        };
+        serde_json::from_str(&s)
+            .unwrap_or_else(|e| Config { err: Some(format!("{path}: {e}")), ..Default::default() })
     }
     pub fn save(&self) -> Result<(), String> {
         self.save_to(PATH)
     }
     pub fn save_to(&self, path: &str) -> Result<(), String> {
+        if let Some(e) = &self.err {
+            return Err(format!("{e} — not overwriting it, fix the file by hand"));
+        }
         std::fs::write(path, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?)
             .map_err(|e| format!("writing {path}: {e}"))
     }
@@ -168,6 +183,31 @@ mod tests {
         assert_eq!(back.default.as_deref(), Some("mimo"), "default must survive");
         assert_eq!(back.models.len(), 1, "models must survive");
         assert_eq!(back.allow, vec!["read"], "allow must survive");
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// A hand-edit typo ("base" for "url") fails the whole parse. It must not
+    /// read as "no config", and the next /settings or /mcp toggle must not
+    /// write defaults over it.
+    #[test]
+    fn a_malformed_file_is_reported_and_never_overwritten() {
+        let p = std::env::temp_dir().join("rusti_bad_config_test.json");
+        let p = p.to_str().unwrap();
+        let raw = r#"{"default":"mimo","models":[{"name":"mimo","base":"u"}],"allow":["read"]}"#;
+        std::fs::write(p, raw).unwrap();
+
+        let mut cfg = Config::load_from(p);
+        assert!(cfg.err.is_some(), "a malformed file must report, not default silently");
+
+        cfg.footer.context = false;
+        assert!(cfg.save_to(p).is_err(), "save must refuse while the file is unreadable");
+        assert_eq!(std::fs::read_to_string(p).unwrap(), raw, "the file must be byte-identical");
+
+        // a missing file is a first run, not an error: it saves normally
+        let _ = std::fs::remove_file(p);
+        let fresh = Config::load_from(p);
+        assert!(fresh.err.is_none(), "no file is a first run, not a failure");
+        fresh.save_to(p).unwrap();
         let _ = std::fs::remove_file(p);
     }
 }

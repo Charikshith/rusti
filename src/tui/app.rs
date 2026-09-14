@@ -233,19 +233,26 @@ pub fn ui_loop(
     seed_history: Vec<String>,
     seed_msg_num: usize,
 ) -> io::Result<Exit> {
+    let cfg = crate::config::Config::load();
     let mut app = App {
         lines: seed_lines, current: String::new(),
         ask: None, input: String::new(), cursor: 0, done: true, model, session,
         msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
         history: seed_history, hist_idx: None, tool_line: None, ask_line: None, retry_line: None,
         notice: None, exit_armed: None,
-        footer: crate::config::Config::load().footer,
+        footer: cfg.footer.clone(),
         turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
         sess_tok: 0, branch: String::new(),
         thinking: false,
         menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
         pick: None,
     };
+    // stderr is invisible under the alternate screen, so this goes in the
+    // transcript — and stays there, a warning you must act on can't expire
+    if let Some(e) = &cfg.err {
+        app.lines.push(format!("  ⚠ {e}"));
+        app.lines.push("  ⚠ no saved models, permissions or MCP servers loaded; saving is off".into());
+    }
     let mut state = RenderState::new();
 
     loop {

@@ -38,6 +38,7 @@ This file holds only what was **learned**.
 - [RTK filters command output](rtk-filters-command-output.md) — a filtered grep cannot prove a symbol is absent; use `rtk proxy` first.
 - [Alternate screen beats escape hacks](alternate-screen-vs-escape-hacks.md) — a bottom-pinned main-screen TUI always leaves a gap; switch the buffer model, don't tune the sequences.
 - [Parent-chain walk drops fan-out siblings](session-tree-path-drops-siblings.md) — several entries under one parent look fine in session.json but the single-parent path walk omits the non-active ones; chain, don't fan out.
+- [A silent default that is later saved destroys the file](silent-default-then-save-destroys.md) — a forgiving loader plus any settings toggle equals a delete command with a delay.
 
 ## Retired
 

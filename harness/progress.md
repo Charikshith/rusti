@@ -476,3 +476,34 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - Servers are connected once at startup; a crashed server stays dead until `/mcp` toggles it off and on.
 - `Config::load_from` still swallows a malformed model.json silently (config.rs:60) — now worse, since a
   bad hand-edit of the new `"mcp"` block resets models, allow AND the server list with no message.
+
+## Session 2026-09-14: feat-056 — a malformed model.json is reported, and never overwritten
+
+- Took the "found, not fixed" item from session 19, which session 20 flagged as worse after `/mcp` started
+  writing to the same file. `Config::load_from` merged three outcomes into one with two `.ok()` calls:
+  no file, unreadable file, and unparseable file all returned `Config::default()` with no message.
+- The damage is not the silent read, it is the write that follows it. `/settings`, `/mcp` and `--use/--add`
+  all do load → mutate → save, so one typo produced an empty config and then **serialized those defaults
+  over the user's real file**, losing 37 profiles, the `allow` list and the MCP block at once.
+- Fix: `load_from` returns defaults only for `ErrorKind::NotFound` (a genuine first run). Any other read
+  error, or a parse error, keeps the defaults so the process still runs but records the reason in
+  `Config.err` (`#[serde(skip)]`). `save_to` refuses while `err` is set — **one choke point, not a guard at
+  each call site**, so every present and future writer is covered.
+- Surfacing: stderr on the one-shot path and on `--list` / `--use`; the TUI pushes it into the transcript
+  instead, because stderr is invisible under the alternate screen and a warning you must act on must not
+  expire the way a 3s status notice does.
+- Live: `--list` prints `model.json: missing field 'url' at line 1 column 61` then the usual empty line;
+  `--use` exits 1 writing nothing; the one-shot path warns and runs on defaults; file byte-identical every time.
+
+### Found while verifying: `--self-test` had been failing since feat-053
+- Not my change — confirmed by stashing and rebuilding. `assert!(!written.contains("context"))` was a
+  substring search over the whole saved file, and feat-053's `footer` block writes `"context": true`.
+  The check's intent is that project settings stay out of the file until set, so it now parses the JSON
+  and tests **top-level keys**; `footer.context` is nested and no longer matches.
+- The panic also left `_test_model.json` behind, which failed the *next* run at a different assert
+  (`resolve().is_none()`) and sent me chasing the wrong bug. The round-trip now deletes the file first,
+  so the self-test is idempotent. Ran it twice in a row to prove it.
+- Lesson worth keeping: a verification gate that no one ran for two sessions is not a gate. `cargo test`
+  was green the whole time.
+
+- `cargo test` 25 passed · `--self-test` OK (twice) · release build 4.3s.

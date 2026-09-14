@@ -67,6 +67,9 @@ fn main() {
     }
     if args.iter().any(|a| a == "--list") {
         let cfg = config::Config::load();
+        if let Some(e) = &cfg.err {
+            eprintln!("⚠ {e}");
+        }
         if cfg.models.is_empty() {
             println!("no saved models (launch with a task to add one, or --add)");
             return;
@@ -81,6 +84,9 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--use") {
         let name = args.get(i + 1).cloned().unwrap_or_default();
         let mut cfg = config::Config::load();
+        if let Some(e) = &cfg.err {
+            eprintln!("⚠ {e}");
+        }
         if !cfg.models.iter().any(|m| m.name == name) {
             eprintln!("no saved model named '{name}' (see --list)");
             std::process::exit(1);
@@ -106,6 +112,9 @@ fn main() {
 
     // project settings first, so flags and env below still override them
     let saved = config::Config::load();
+    if let Some(e) = &saved.err {
+        eprintln!("⚠ {e}\n  running with defaults: no saved models, permissions or MCP servers, and saving is off");
+    }
     ai_core::allow_from_config(&saved.allow);
     if let Some(n) = saved.max_iters {
         ai_core::set_max_iters(n);
