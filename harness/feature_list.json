@@ -674,6 +674,25 @@
         "No move when the process is already a staged copy (the 2nd and later reloads): cargo can overwrite target/release/rusti freely then.",
         "target/reload is now dead and can be deleted by hand; not deleted from code, since a tool should not remove 1.1GB it did not create this run."
       ]
+    },
+    {
+      "id": "feat-059",
+      "name": "Ctrl+O reveals successful tool output",
+      "description": "feat-031 showed the tail of failed tool output only, so a successful cargo test or grep left you watching a green tick that told you nothing. The output was thrown away at the emit site (output was set to an empty string when ok). It is now always carried, and the TUI pushes a successful tools tail into the transcript behind a HIDDEN marker prefix; Ctrl+O flips App.expand and the renderer draws those rows. render_history does the same for a resumed session, so the toggle works on replayed turns too. Failures are unchanged and always visible.",
+      "dependencies": [
+        "feat-031",
+        "feat-047"
+      ],
+      "status": "done",
+      "evidence": "cargo test 28 passed, including a new render::tests::hidden_rows_appear_only_when_expanded (folded output omits hidden rows, expanded shows them with the marker stripped) and the feat-047 replay test updated to expect the carried tails. --self-test OK. Live on the piped path against mimo-v2.5-pro: a successful read_file still prints just its tick and no tail, confirming the pipe behaviour did not change now that output is always carried.",
+      "decisions": [
+        "A marker prefix on the row (HIDDEN = U+0001) rather than a parallel Vec<bool> or a struct per line: app.lines is pushed to from a dozen places and two containers that must stay in step is the bug. Nothing else in the TUI has to know hidden rows exist.",
+        "One filter point - render::visible() - so tool_line/ask_line/retry_line indices into app.lines keep working untouched, and the marker is stripped before drawing so it can never reach the terminal as a control character.",
+        "Failures stay visible always: a message you must read cannot sit behind a keystroke. Same rule as feat-048 kept failures out of the 3s notice.",
+        "An entry whose ok was never recorded (older sessions) hides like a success: an unknown outcome is not a failure and does not get to push its tail on screen unasked.",
+        "The piped path still prints tails only on failure - a pipe has no keyboard to press Ctrl+O with.",
+        "Ctrl+O also sets a status-line notice, so the key confirms itself even when nothing on screen changes (no tool output yet)."
+      ]
     }
   ]
 }

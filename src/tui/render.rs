@@ -30,6 +30,17 @@ pub fn transcript_window(total: usize, height: usize, scroll_up: usize) -> (usiz
     (height - (end - start), start, end)
 }
 
+/// The rows to draw: a row marked HIDDEN (a successful tool's output) is only
+/// drawn once Ctrl+O is on, and the marker is stripped either way — it must
+/// never reach the terminal. One filter point, so nothing else in the TUI has
+/// to know hidden rows exist.
+pub fn visible(lines: &[String], expand: bool) -> impl Iterator<Item = &str> {
+    lines.iter().filter_map(move |l| match l.strip_prefix(app::HIDDEN) {
+        Some(body) => expand.then_some(body),
+        None => Some(l.as_str()),
+    })
+}
+
 /// State carried between frames for differential rendering.
 pub struct RenderState {
     prev_lines: Vec<String>,
@@ -90,7 +101,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
             }
         }
     };
-    for l in &app.lines {
+    for l in visible(&app.lines, app.expand) {
         push_wrapped(l, &mut all);
     }
     if !app.current.is_empty() {
@@ -625,5 +636,25 @@ mod tests {
         let st = line_style(two);
         assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(THINK)));
     }
-}
 
+    /// Ctrl+O reveals a successful tool's output. The rows are always in
+    /// app.lines; only their visibility changes — and the marker itself must
+    /// never reach the terminal, where it would print as a control character.
+    #[test]
+    fn hidden_rows_appear_only_when_expanded() {
+        let lines = vec![
+            "  ✓ cargo test".to_string(),
+            format!("{}  · 27 passed", app::HIDDEN),
+            "  ✗ cargo build".to_string(),
+            "  · error: no main".to_string(), // a failure tail is never hidden
+        ];
+
+        let folded: Vec<&str> = visible(&lines, false).collect();
+        assert_eq!(folded, vec!["  ✓ cargo test", "  ✗ cargo build", "  · error: no main"]);
+
+        let open: Vec<&str> = visible(&lines, true).collect();
+        assert_eq!(open.len(), 4);
+        assert_eq!(open[1], "  · 27 passed", "the marker must be stripped, not drawn");
+        assert!(!open.iter().any(|r| r.contains(app::HIDDEN)));
+    }
+}

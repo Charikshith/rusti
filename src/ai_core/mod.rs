@@ -15,7 +15,7 @@ pub enum Event {
     ReasoningDelta(String),                    // a chunk of reasoning_content (thinking models)
     Text(String),                              // a complete line of text
     ToolStart(String),                         // tool about to run (short summary)
-    ToolEnd { summary: String, ok: bool, ms: u128, output: String }, // tool finished, with wall time; output only on failure
+    ToolEnd { summary: String, ok: bool, ms: u128, output: String }, // tool finished, with wall time and its output
     Resumed { lines: Vec<String>, history: Vec<String>, msg_num: usize }, // session switched: transcript replaced
     SessionName(String),                       // active session's name, for the status line
     Git(String),                               // current branch, for the status line
@@ -59,8 +59,11 @@ pub(crate) fn emit(ev: Event) {
             Event::ToolStart(t) => eprintln!("  ⠋ {t}"),
             Event::ToolEnd { summary, ok, ms, output } => {
                 eprintln!("  {} {summary}  {}", if ok { "✓" } else { "✗" }, took(ms));
-                for l in fail_tail(&output) {
-                    eprintln!("{l}");
+                if !ok {
+                    // a pipe has no keyboard, so success output stays hidden here
+                    for l in fail_tail(&output) {
+                        eprintln!("{l}");
+                    }
                 }
             }
             Event::TaskEnd { ok, error } => {
@@ -389,7 +392,9 @@ pub async fn run_agent(
                 Ok(()) => dispatch(client, &tc.name, &tc.arguments, cancel).await,
                 Err(e) => (false, e),
             };
-            let output = if ok { String::new() } else { result.clone() };
+            // carried on success too: the TUI hides it behind Ctrl+O rather
+            // than throwing it away. fail_tail caps what is kept at 8 lines
+            let output = result.clone();
             emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());

@@ -153,7 +153,15 @@ pub struct App {
     pub menu_off: Option<String>, // input Esc dismissed the menu for
     pub fresh: bool, // nothing submitted yet this run — show the quit hint
     pub pick: Option<Pick>, // open session picker; owns the keyboard while set
+    /// Ctrl+O: show the tail of successful tool output too. Failures are
+    /// always shown — a message you must read can't sit behind a keystroke.
+    pub expand: bool,
 }
+
+/// Prefix on a transcript row that is present but not drawn until Ctrl+O.
+/// A marker char beats a parallel Vec<bool>: app.lines is pushed to from a
+/// dozen places, and two vectors that must stay in step is the bug.
+pub const HIDDEN: &str = "\u{1}";
 
 /// How long a first Ctrl+C stays armed for the second one.
 const ARM_WINDOW: Duration = Duration::from_secs(2);
@@ -245,7 +253,7 @@ pub fn ui_loop(
         sess_tok: 0, branch: String::new(),
         thinking: false,
         menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
-        pick: None,
+        pick: None, expand: false,
     };
     // stderr is invisible under the alternate screen, so this goes in the
     // transcript — and stays there, a warning you must act on can't expire
@@ -325,6 +333,14 @@ pub fn ui_loop(
                                 }
                             }
                             app.exit_armed = Some(std::time::Instant::now());
+                        }
+                        // Ctrl+O reveals the output of tools that SUCCEEDED; failures
+                        // are on screen already. The rows sit in app.lines the whole
+                        // time, marked hidden, so this is a redraw and not a rebuild.
+                        (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                            app.expand = !app.expand;
+                            let what = if app.expand { "shown" } else { "hidden" };
+                            app.notice = Some((format!("tool output {what}"), std::time::Instant::now()));
                         }
                         // Ctrl+D exits, only when input is empty (pi: exit when editor empty)
                         (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
@@ -485,7 +501,10 @@ pub fn ui_loop(
                         Some(i) if i < app.lines.len() && app.lines[i].starts_with("  ⠋ ") => app.lines[i] = line,
                         _ => app.lines.push(line),
                     }
-                    app.lines.extend(ai_core::fail_tail(&output)); // "  · " rows render dim like the stats line
+                    // "  · " rows render dim like the stats line. A success tail
+                    // is kept but marked hidden; Ctrl+O is what reveals it
+                    app.lines.extend(ai_core::fail_tail(&output).into_iter()
+                        .map(|r| if ok { format!("{HIDDEN}{r}") } else { r }));
                 }
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,

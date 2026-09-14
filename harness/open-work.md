@@ -7,7 +7,7 @@ Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--ver
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
   3a — done (feat-038/039/040/041: project config, plan mode, web fetch, /export; /session dropped as redundant
      with /resume, see feat-042)
-  3b (next): Test Loop, Diff in the Tool Line, Tool Output Expand Toggle, Read-Side Sandbox, Multi-Level Undo
+  3b (next): Diff in the Tool Line, Multi-Level Undo, Test Loop, Read-Side Sandbox (Tool Output Expand Toggle done: feat-059)
   3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
      OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
 
@@ -24,11 +24,6 @@ What: Use unicode-width crate for character display width
 Where: tui/mod.rs word_wrap()
 
 ## TUI Experience Gaps (from pi comparison, 2026-04-10 session)
-
-### Tool Output Expand Toggle
-When: feat-031 shows the tail of *failed* tool output only; a successful `cargo test` or `grep` still hides its result
-What: Ctrl+O toggles showing the tail for every tool line (carry `output` on success too, render on demand); the data is already in the session entries
-Where: tui/app.rs ToolEnd handler + key handler, ai_core/mod.rs ToolEnd emit
 
 ### Editor Autocomplete
 When: Typing speed matters; model/file names not discoverable (slash commands done)

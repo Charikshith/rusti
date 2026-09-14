@@ -252,6 +252,11 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
                     None => "·", // written before `ok` was recorded
                 };
                 lines.push(format!("  {mark} {summary}"));
+                // the result is right here in the entry, so Ctrl+O works on a
+                // resumed turn too; failures stay visible, as they were live
+                let hide = e.ok != Some(false);
+                lines.extend(ai_core::fail_tail(&e.content).into_iter()
+                    .map(|r| if hide { format!("{}{r}", app::HIDDEN) } else { r }));
             }
             _ => {} // the system prompt is not transcript
         }
@@ -579,7 +584,11 @@ mod tests {
                 "1› first task".to_string(),
                 "Let me look.".to_string(),
                 "  ✓ src/main.rs".to_string(),   // summary + outcome, paired in call order
+                // a resumed turn carries its output too, so Ctrl+O works on it:
+                // the success tail marked hidden, the failure tail plainly visible
+                format!("{}  · fn main…", app::HIDDEN),
                 "  ✗ cargo test".to_string(),
+                "  · [exit 101]".to_string(),
                 "done".to_string(),
                 String::new(), // the turn ended on prose
             ]
@@ -593,7 +602,12 @@ mod tests {
         a.tool_calls = Some(serde_json::json!([{"function": {"name": "glob", "arguments": "{\"pattern\":\"*.rs\"}"}}]));
         let a = old.add(a, Some(u));
         old.add(Entry::new("tool", "x".into()), Some(a));
-        assert_eq!(render_history(&old).0, vec!["1› q".to_string(), "  · *.rs".to_string()]);
+        // and its output hides like a success: an unknown outcome is not a
+        // failure, so it does not get to push its tail on screen unasked
+        assert_eq!(
+            render_history(&old).0,
+            vec!["1› q".to_string(), "  · *.rs".to_string(), format!("{}  · x", app::HIDDEN)]
+        );
     }
 
     #[test]

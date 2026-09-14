@@ -552,3 +552,25 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - Noted in open-work, not fixed here: `cargo clippy` fails with `read amount is not handled` at
   ai_core/mod.rs:566 (pre-existing, the self-test's fake server).
 - `cargo test` 27 passed · `--self-test` OK · release 4.3s.
+
+## Session 2026-09-14 (4): feat-059 — Ctrl+O reveals successful tool output
+
+- Tier-3b pick. feat-031 only ever showed the tail of *failed* tool output, so a successful `cargo test`
+  or `grep` left you watching a green tick that said nothing. The output was not hidden — it was **thrown
+  away at the emit site** (`let output = if ok { String::new() } else { result.clone() }`).
+- Now always carried. The TUI pushes a successful tail into the transcript behind a `HIDDEN` (U+0001)
+  marker prefix, and Ctrl+O flips `App.expand`; the renderer draws marked rows only when it is on.
+- **Why a marker and not a parallel `Vec<bool>`**: `app.lines` is pushed to from a dozen places, and two
+  containers that must stay in step is the bug. The marker rides along with the row it belongs to.
+  `render::visible()` is the single filter point, so `tool_line` / `ask_line` / `retry_line` indices into
+  `app.lines` keep working untouched — and it strips the marker, which must never reach the terminal
+  where it would print as a control character. That stripping is what the new test pins.
+- `render_history` carries the tails too, so Ctrl+O works on a **resumed** session — the results were
+  always in the entries; feat-047 just wasn't rendering them. Two existing assertions in the feat-047
+  test needed updating, which is the test doing its job.
+- Rules kept: failures always visible (same reason feat-048 kept failures out of the 3s notice); an entry
+  whose `ok` was never recorded hides like a success, since an unknown outcome is not a failure; the piped
+  path still prints tails only on failure, because a pipe has no keyboard.
+- Live on the piped path against the new default (mimo-v2.5-pro): successful `read_file` printed its tick
+  and no tail — the pipe behaviour did not change now that output is always carried.
+- `cargo test` 28 passed · `--self-test` OK · release 4.4s.
