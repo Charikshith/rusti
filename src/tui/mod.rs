@@ -215,6 +215,9 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
     let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     for e in session.path() {
         match e.role.as_str() {
+            // an attached image is a user entry the user never typed: it must
+            // not take a message number or land in the input history
+            "user" if e.image.is_some() => lines.push(format!("  · {}", e.content)),
             "user" => {
                 n += 1;
                 lines.push(format!("{n}› {}", e.content));

@@ -407,6 +407,14 @@ pub async fn run_agent(
             te.ok = Some(ok);
             parent = session.add(te, Some(parent));
         }
+        // AFTER every tool result, never between two of them: an image cannot
+        // ride on a tool message, and a user entry in the middle of the results
+        // would orphan the calls that follow it (feat-026).
+        if let Some((path, url)) = tools::take_pending_image() {
+            let mut ie = Entry::new("user", format!("image: {path}"));
+            ie.image = Some(url);
+            session.add(ie, Some(parent));
+        }
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
     Err("hit max iterations without a final answer".into())
@@ -474,7 +482,7 @@ pub fn tool_summary(name: &str, args: &Value) -> String {
 
 fn tool_schemas() -> Vec<Value> {
     let mut v = vec![
-        json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files. A .png/.jpg/.gif/.webp path is read as an image and attached to the conversation for you to look at.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"write_file","description":"Write content to a file, overwriting it.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}),
         json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120).","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
         json!({"type":"function","function":{"name":"edit_file","description":"Replace one exact text occurrence in a file. old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}}}),

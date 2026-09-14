@@ -13,7 +13,72 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "dist", "build", 
 
 /// offset = 1-based first line (0/1 = start), limit = max lines (0 = all).
 /// Whole-file reads return raw content; ranged reads prefix line numbers.
+/// Images a vision model can be sent, by extension. Anything else is read as
+/// text and fails honestly on invalid UTF-8 rather than being mangled.
+fn image_mime(path: &str) -> Option<&'static str> {
+    let ext = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Raw bytes an image may have before it is refused. Base64 inflates by 4/3 and
+/// history is re-sent every turn, so a big screenshot is not a one-off cost.
+const MAX_IMAGE: usize = 4 * 1024 * 1024;
+
+/// The image a read_file picked up, waiting for the agent loop to attach it to
+/// the conversation. A static like UNDO/JOBS rather than a wider dispatch
+/// return type: an OpenAI tool message cannot carry an image, so the bytes have
+/// to travel out of band to the user entry that goes after the tool results.
+static PENDING_IMAGE: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+pub fn take_pending_image() -> Option<(String, String)> {
+    PENDING_IMAGE.lock().unwrap().take()
+}
+
+/// base64 (RFC 4648, padded). Sixteen lines beats a dependency for this.
+pub fn b64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let b = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
+        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+        for i in 0..4 {
+            // a 2-byte chunk has 3 real sextets, a 1-byte chunk has 2; the rest is padding
+            out.push(if i <= c.len() { A[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// Read an image as a data URL and park it for the agent loop. The result the
+/// model sees is just a note: the picture itself arrives in the next message.
+fn read_image(path: &str, mime: &'static str) -> (bool, String) {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return (false, format!("error reading {path}: {e}")),
+    };
+    if bytes.len() > MAX_IMAGE {
+        return (false, format!(
+            "{path} is {} KB; over the {} KB limit for an attached image",
+            bytes.len() / 1024, MAX_IMAGE / 1024));
+    }
+    let url = format!("data:{mime};base64,{}", b64(&bytes));
+    *PENDING_IMAGE.lock().unwrap() = Some((path.to_string(), url));
+    // bytes under 1 KB, not "0 KB": a model that reads 0 concludes the
+    // attachment is empty and refuses to look at the picture it was sent
+    let size = if bytes.len() < 1024 { format!("{} bytes", bytes.len()) } else { format!("{} KB", bytes.len() / 1024) };
+    (true, format!("attached {path} ({mime}, {size}) — it follows as an image"))
+}
+
 pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
+    if let Some(mime) = image_mime(path) {
+        return read_image(path, mime);
+    }
     match std::fs::read_to_string(path) {
         Ok(s) => {
             if offset <= 1 && limit == 0 {
@@ -695,5 +760,32 @@ mod tests {
         let rows = diff_block("", &big).2;
         assert_eq!(rows.len(), DIFF_ROWS + 1);
         assert!(rows.last().unwrap().contains("42 more changed lines"));
+    }
+
+    /// RFC 4648 test vectors. The padding arm is the part that is easy to get
+    /// wrong: a 1-byte chunk has two real sextets, a 2-byte chunk has three.
+    #[test]
+    fn b64_matches_the_rfc_vectors() {
+        assert_eq!(b64(b""), "");
+        assert_eq!(b64(b"f"), "Zg==");
+        assert_eq!(b64(b"fo"), "Zm8=");
+        assert_eq!(b64(b"foo"), "Zm9v");
+        assert_eq!(b64(b"foob"), "Zm9vYg==");
+        assert_eq!(b64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(b64(b"foobar"), "Zm9vYmFy");
+        // bytes above 0x7f must not be mangled by sign or char conversion
+        assert_eq!(b64(&[0xff, 0xfe, 0xfd]), "//79");
+        assert_eq!(b64(&[0x00, 0x00, 0x00]), "AAAA");
+    }
+
+    /// Extension decides, and only for formats a vision model accepts; a .rs
+    /// file must stay on the text path or every source read turns into base64.
+    #[test]
+    fn image_mime_is_extension_only_and_narrow() {
+        assert_eq!(image_mime("a/b/shot.PNG"), Some("image/png"));
+        assert_eq!(image_mime("x.jpeg"), Some("image/jpeg"));
+        assert_eq!(image_mime("src/main.rs"), None);
+        assert_eq!(image_mime("Makefile"), None);
+        assert_eq!(image_mime("notes.png.txt"), None);
     }
 }

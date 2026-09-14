@@ -127,10 +127,12 @@ When: Long system prompt + history re-sent every turn on providers that support 
 What: Send provider cache-control markers on the system/early messages when the profile opts in
 Where: ai_core/llm.rs request body, config.rs profile field
 
-### Image Input
-When: Pasting a screenshot of an error / UI
-What: `/image <path>` or Alt+V attaches a base64 image part to the next user message (OpenAI content-parts format)
-Where: session.rs Entry content (String → parts), ai_core/llm.rs, tui/app.rs
+### Image Input — follow-ups
+When: feat-061 landed the tool side (read_file on a png/jpg/gif/webp attaches it); there is still no way for
+the USER to attach one, and no provider here to test against
+What: `/image <path>` or Alt+V to attach to the next user message, reusing Entry.image; a vision-capable
+endpoint to verify against, since the :20128 proxy strips image parts
+Where: tui/app.rs handle_command, ai_core/tools.rs read_image
 
 ### Native Anthropic / Gemini APIs
 When: Endpoint isn't OpenAI-compatible

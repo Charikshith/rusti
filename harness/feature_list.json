@@ -712,6 +712,25 @@
         "edit_stat requires both a +N and a -M of digits, so an unrelated result ending in two number-ish words cannot grow a fake stat on its row.",
         "Dropped the old \"{o} chars -> {n} chars\" wording: lines changed is what the reader wants, and two counts saying almost the same thing is worse than one."
       ]
+    },
+    {
+      "id": "feat-061",
+      "name": "read_file reads images and attaches them for vision models",
+      "description": "read_file was fs::read_to_string, so a .png failed with \"stream did not contain valid UTF-8\". It now detects png/jpg/jpeg/gif/webp by extension, base64-encodes the bytes into a data: URL and parks it; the agent loop attaches it to the conversation as a user message with OpenAI content parts. Entry gained an optional image field (a data URL) and Entry::to_message emits [{type:text},{type:image_url}] when it is set. A hand-written 16-line base64 encoder rather than a dependency, 4 MB raw cap, and the attachment is appended after ALL tool results of a turn so it cannot orphan a tool call.",
+      "dependencies": [
+        "feat-026"
+      ],
+      "status": "done",
+      "evidence": "cargo test 33 passed - new: tools::tests::b64_matches_the_rfc_vectors (all RFC 4648 vectors plus high bytes), tools::tests::image_mime_is_extension_only_and_narrow, session::image_tests::an_image_entry_becomes_content_parts (including that a tool message stays a string). --self-test OK. Wire-level proof from the real binary: pointed rusti at a capturing HTTP endpoint and the request carried role user with content [text, image_url] holding the full data URL, positioned after the tool result, with the tool message still a plain string. The stored data URL also decodes byte-identical to the original PNG. NOT verified: a model actually describing the picture - the :20128 proxy strips image parts, confirmed independently of rusti by raw curl against three models, each answering that the image was omitted.",
+      "decisions": [
+        "The image travels on a user entry after the tool results, never on the tool message: an OpenAI tool message takes a string only. Appending it after ALL results of the turn keeps every tool_call paired with its result (feat-026).",
+        "Entry.image beside content rather than turning content into parts: export, replay, compaction and the tree all want the text, and only the request builder cares that a picture rides along. One optional field instead of a type change rippling through six files.",
+        "A static PENDING_IMAGE handoff from the tool to the agent loop, in the style of UNDO/JOBS, so dispatch keeps its (bool, String) signature for all 17 tools.",
+        "Hand-written base64: 16 lines against a new dependency, on a codebase that measures its build time.",
+        "4 MB raw cap. Base64 inflates by 4/3 and history is re-sent every turn, so a large screenshot is a recurring cost, not a one-off.",
+        "Under 1 KB the result says bytes, not KB. It first said \"0 KB\" for a 105-byte PNG, and the model read that as an empty attachment and refused to look at the picture it had been sent - what a tool says about its result is part of the interface.",
+        "Extension-only detection: sniffing magic bytes would send every binary the model asked for, and a .rs file must never take the base64 path."
+      ]
     }
   ]
 }

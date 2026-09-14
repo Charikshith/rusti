@@ -612,3 +612,36 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   drive its own loop, or someone wants unattended retry with a hard cap.
 - Tier 3b is now empty but for Read-Side Sandbox, which only matters if rusti is run somewhere untrusted.
 - No code changed this session; nothing to verify beyond the tree still being green from feat-060.
+
+## Session 2026-09-14 (7): feat-061 — read_file reads images
+
+- `read_file` was `fs::read_to_string`, so a `.png` came back `stream did not contain valid UTF-8`. It now
+  detects png/jpg/jpeg/gif/webp **by extension**, base64-encodes the bytes into a `data:` URL, and the
+  agent loop attaches it as a user message with OpenAI content parts.
+- **The constraint that shapes the whole design**: an OpenAI `tool` message takes a string. An image cannot
+  be returned from a tool at all. So the tool result is a note ("attached x.png …"), the bytes travel out of
+  band through a `PENDING_IMAGE` static (the UNDO/JOBS pattern, so `dispatch` keeps its signature for all
+  17 tools), and the loop appends a user entry carrying the picture — **after every tool result of the
+  turn**, never between two, or the calls after it would be orphaned (feat-026 all over again).
+- `Entry.image: Option<String>` beside `content`, not `content: String → parts`: export, replay, compaction
+  and the tree all want the text, and only `to_message` cares that a picture rides along. One optional
+  field instead of a type change rippling through six files.
+- Base64 is 16 hand-written lines, not a dependency, on a codebase that measures its build time. RFC 4648
+  vectors are the test — the padding arm (1-byte chunk = 2 sextets, 2-byte = 3) is the part that is easy to
+  get wrong.
+- **Found live, and worth remembering**: the first run said `attached _shot.png (image/png, 0 KB)` because
+  105 bytes integer-divides to 0 — and the model *refused to look at the image it had been sent*, reasoning
+  that a 0 KB attachment must have failed. What a tool says about its result is part of the interface, not
+  decoration. Under 1 KB it now reports bytes.
+- Replay guard: the attached entry is a `user` entry the user never typed, so `render_history` renders it
+  as a dim row rather than giving it a message number and putting it in the input history.
+
+### Verified, and the part that is not
+- Wire-level proof from the real binary: pointed rusti at a capturing HTTP endpoint and read the body —
+  `role: user` with `content: [{type: text}, {type: image_url}]` carrying the full data URL, after the tool
+  result, with the tool message still a plain string. The stored URL also decodes byte-identical to the PNG.
+- **Not verified: a model describing the picture.** The :20128 proxy strips image parts. Confirmed
+  independently of rusti with raw curl against three models (deepseek-v4-flash-vision-exp, GLM-5.2,
+  Qwen3.8-Max) — each answered that the image was omitted, at ~7.5k prompt tokens. Nothing here can prove
+  the last hop; it needs a vision endpoint.
+- `cargo test` 33 passed · `--self-test` OK · release 4.4s.

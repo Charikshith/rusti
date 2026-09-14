@@ -111,13 +111,19 @@ pub struct Entry {
     /// ✓/✗. None on entries written before this was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok: Option<bool>,
+    /// A data: URL sent alongside this entry's text as an image part. Kept
+    /// beside `content` rather than turning content into parts: every reader
+    /// of a transcript (export, replay, compaction, the tree) wants the text,
+    /// and only the request builder cares that a picture rides with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     #[serde(default)]
     pub ts: u64,
 }
 
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.
@@ -125,7 +131,16 @@ impl Entry {
         if self.role == "tool" {
             json!({"role": "tool", "tool_call_id": self.tool_call_id, "content": self.content})
         } else {
-            let mut m = json!({"role": self.role, "content": self.content});
+            // an OpenAI tool message takes a string only, which is why an image
+            // travels on a user entry after the tool results, never on one
+            let content = match &self.image {
+                Some(url) => json!([
+                    {"type": "text", "text": self.content},
+                    {"type": "image_url", "image_url": {"url": url}},
+                ]),
+                None => json!(self.content),
+            };
+            let mut m = json!({"role": self.role, "content": content});
             if let Some(tc) = &self.tool_calls {
                 m["tool_calls"] = tc.clone();
             }
@@ -336,5 +351,31 @@ second".into()), Some(sys));
         assert_eq!(clip("abcdef", 3), "abc…");
         assert_eq!(clip("abc", 3), "abc");
         assert_eq!(clip("héllo wörld", 4), "héll…"); // clips on chars, not bytes
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    /// An image rides beside the text as a content part, and only for the roles
+    /// that can carry one — a tool message takes a string, so putting parts on
+    /// it is what the whole out-of-band attach exists to avoid.
+    #[test]
+    fn an_image_entry_becomes_content_parts() {
+        let mut e = Entry::new("user", "image: shot.png".into());
+        e.image = Some("data:image/png;base64,AAA".into());
+        let m = e.to_message();
+        assert_eq!(m["content"][0]["type"], "text");
+        assert_eq!(m["content"][0]["text"], "image: shot.png");
+        assert_eq!(m["content"][1]["image_url"]["url"], "data:image/png;base64,AAA");
+
+        let plain = Entry::new("user", "hi".into()).to_message();
+        assert_eq!(plain["content"], "hi", "no image, no parts");
+
+        let mut t = Entry::new("tool", "attached shot.png".into());
+        t.tool_call_id = Some("call_1".into());
+        t.image = Some("data:image/png;base64,AAA".into());
+        assert_eq!(t.to_message()["content"], "attached shot.png", "a tool message stays a string");
     }
 }
