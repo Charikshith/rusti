@@ -658,6 +658,22 @@
         "restore_terminal() is idempotent - leaving an alternate screen you are not on and disabling raw mode that is off are both no-ops - so the hook firing after a normal exit is harmless.",
         "Still not turning on panic=\"abort\": tools.rs and mcp.rs join reader threads and rely on unwinding, and this was the reason that setting was listed as blocked in feat-051."
       ]
+    },
+    {
+      "id": "feat-058",
+      "name": "/reload builds in the warm target dir instead of a 1.1GB private one",
+      "description": "/reload passed --target-dir target/reload, a second full build tree that never shared an artifact with ordinary cargo builds: 1.1GB on disk, and the first reload after any profile or dependency change paid a cold rebuild of every dependency instead of feat-051s 4.2s. The private tree existed for one reason - cargo uplifts the binary to target/release/rusti, and that file is usually the running process, which cannot be overwritten (Windows locks a running exe, Unix returns ETXTBSY). Renaming a running binary is allowed on both, so free_the_output_path() moves it aside before the build and /reload now builds in MANIFEST_DIR/target like everything else.",
+      "dependencies": [
+        "feat-051"
+      ],
+      "status": "done",
+      "evidence": "Mechanism proved on this platform with a live process: overwriting the running exe failed with Device or resource busy (the premise of the old design), renaming it succeeded. Whole sequence then simulated against the real tree with the exe running - move aside, cargo build --release, 4.32s with one crate recompiled rather than a cold rebuild, binary re-uplifted, staged copy ran and printed rusti 0.1.0. Separately confirmed cargo re-links a missing-but-fresh uplift in 0.11s, so moving the file aside never forces a rebuild. cargo test 27 passed (new: tui::tests::same_file_needs_both_paths_to_exist), --self-test OK.",
+      "decisions": [
+        "same_file() requires BOTH paths to canonicalize: the trap is that canonicalize() errors on a missing path, so treating (Err, Err) as equal would call any two non-existent paths the same file and move something aside that cargo was never going to write.",
+        "The moved-aside binary is named rusti-old-<ms> and lands in the target root, which is exactly where stage_reload_exe already sweeps rusti-* - so it is cleaned up by the existing sweep rather than by new code. In-use ones fail to delete and go on the next sweep.",
+        "No move when the process is already a staged copy (the 2nd and later reloads): cargo can overwrite target/release/rusti freely then.",
+        "target/reload is now dead and can be deleted by hand; not deleted from code, since a tool should not remove 1.1GB it did not create this run."
+      ]
     }
   ]
 }

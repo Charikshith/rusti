@@ -77,6 +77,11 @@ single `tool_line` would need per-call tracking. The win is milliseconds on fs c
 served by run_background/job_output.
 Revisit if: profiling shows tool time actually dominates a turn.
 
+### Clippy `read amount is not handled` (pre-existing)
+When: noticed 2026-09-14 while verifying feat-058; `cargo clippy` fails on it, so clippy can't be a gate until it goes
+What: `s.read(&mut buf).unwrap()` ignores the returned count, so a short read silently yields a truncated buffer
+Where: ai_core/mod.rs:566 (the self-test's fake server)
+
 ## Safety
 
 ### Read-Side Sandbox

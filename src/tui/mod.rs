@@ -79,12 +79,49 @@ pub enum Job {
 /// project it's coding on.
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// True only when both paths exist and name the same file. Both must exist:
+/// canonicalize() fails for a missing path, and treating two errors as equal
+/// would call any two non-existent paths the same file.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Cargo uplifts the binary to `target/release/rusti`, and if that file is this
+/// very process the write fails — Windows locks a running exe, Unix returns
+/// ETXTBSY. That is the whole reason /reload used to build into its own target
+/// tree, at the cost of a second copy of every dependency. Renaming a running
+/// binary IS allowed on both platforms, so move it aside instead and let cargo
+/// have the name; it lands beside the staged copies, where the sweep in
+/// stage_reload_exe deletes it on a later reload. Cargo re-links the uplifted
+/// binary whenever it is missing, so nothing needs rebuilding for this.
+fn free_the_output_path(target_dir: &str) {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let built = std::path::Path::new(target_dir).join("release").join(format!("rusti{ext}"));
+    let Ok(me) = std::env::current_exe() else { return };
+    if !same_file(&me, &built) {
+        return; // already running a staged copy: cargo can overwrite freely
+    }
+    let aside = std::path::Path::new(target_dir).join(format!("rusti-old-{}{ext}", now_ms()));
+    let _ = std::fs::rename(&built, aside);
+}
+
 /// Copy the freshly built binary to a unique name and return its path. We run
-/// copies, never `target/reload/release/rusti` itself, so cargo can always
-/// overwrite that file: Windows locks a running exe, and on Windows every
-/// previous generation stays alive as a thin wrapper (see run()), so a fixed
-/// pair of build dirs would run out on the third reload. Stale copies from
-/// finished chains are swept here; in-use ones simply fail to delete.
+/// copies, never `target/release/rusti` itself, so cargo can always overwrite
+/// that file: Windows locks a running exe, and on Windows every previous
+/// generation stays alive as a thin wrapper (see run()), so a fixed pair of
+/// names would run out on the third reload. Stale copies from finished chains
+/// are swept here — including the `rusti-old-*` that free_the_output_path moved
+/// aside; in-use ones simply fail to delete and go on the next sweep.
 fn stage_reload_exe(target_dir: &str) -> io::Result<String> {
     let ext = if cfg!(windows) { ".exe" } else { "" };
     if let Ok(rd) = std::fs::read_dir(target_dir) {
@@ -95,11 +132,7 @@ fn stage_reload_exe(target_dir: &str) -> io::Result<String> {
             }
         }
     }
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let exe = format!("{target_dir}/rusti-{ts}{ext}");
+    let exe = format!("{target_dir}/rusti-{}{ext}", now_ms());
     std::fs::copy(format!("{target_dir}/release/rusti{ext}"), &exe)?;
     Ok(exe)
 }
@@ -300,9 +333,12 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                 Ok(Job::Reload) => {
                     let _ = event_tx.send(ai_core::Event::ToolStart("cargo build --release".into()));
                     let manifest = format!("{MANIFEST_DIR}/Cargo.toml");
-                    // own dir, not target/release: the user usually launched from there,
-                    // and Windows won't let cargo overwrite that running exe
-                    let target_dir = format!("{MANIFEST_DIR}/target/reload");
+                    // rusti's own target dir, warm from ordinary cargo builds: a
+                    // private one meant a second copy of every dependency and a
+                    // cold first build. free_the_output_path handles the reason
+                    // it was private — the running exe holding its own path.
+                    let target_dir = format!("{MANIFEST_DIR}/target");
+                    free_the_output_path(&target_dir);
                     let t0 = std::time::Instant::now();
                     let out = std::process::Command::new("cargo")
                         .args(["build", "--release", "--manifest-path", &manifest, "--target-dir", &target_dir])
@@ -749,5 +785,24 @@ mod tests {
             .spawn(|| on_ui_thread())
             .unwrap();
         assert!(named.join().unwrap(), "the UI thread must restore");
+    }
+
+    /// The trap in free_the_output_path: canonicalize() errors for a missing
+    /// path, so treating (Err, Err) as equal would move a file aside that cargo
+    /// was never going to write - or match two unrelated missing paths.
+    #[test]
+    fn same_file_needs_both_paths_to_exist() {
+        let dir = std::env::temp_dir();
+        let f = dir.join("rusti_same_file_test.bin");
+        std::fs::write(&f, b"x").unwrap();
+        let missing_a = dir.join("rusti_no_such_file_a.bin");
+        let missing_b = dir.join("rusti_no_such_file_b.bin");
+
+        assert!(same_file(&f, &f), "a file is itself");
+        assert!(!same_file(&f, &missing_a), "an existing file is not a missing one");
+        assert!(!same_file(&missing_a, &missing_b), "two missing paths are not the same file");
+        // the same file reached by a different spelling still matches
+        assert!(same_file(&f, &dir.join(".").join("rusti_same_file_test.bin")));
+        let _ = std::fs::remove_file(&f);
     }
 }

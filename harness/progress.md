@@ -526,3 +526,29 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   the true arm. The restore sequences themselves are the two calls the normal exit has always used.
 - `panic = "abort"` stays off: `tools.rs` and `mcp.rs` join reader threads and rely on unwinding.
 - `cargo test` 26 passed · `--self-test` OK · clippy clean · release 4.3s.
+
+## Session 2026-09-14 (3): feat-058 — /reload builds in the warm target dir
+
+- Third and last of session 19's "found, not fixed" items. `/reload` passed `--target-dir target/reload`:
+  a second complete build tree, **1.1GB measured**, sharing nothing with ordinary cargo builds, so the first
+  reload after any profile or dependency change paid a cold rebuild of every dependency rather than 4.2s.
+- The private tree existed for exactly one reason, and it was a real one: cargo uplifts the binary to
+  `target/release/rusti`, and that file is usually the running process. **Verified rather than assumed** —
+  with the exe running, overwriting it failed `Device or resource busy`; renaming it succeeded. Renaming a
+  running binary is allowed on Windows and Unix alike; overwriting is not.
+- So `free_the_output_path()` moves the running exe aside as `rusti-old-<ms>` before the build, and the
+  build target is `MANIFEST_DIR/target` like everything else. The aside name lands in the target root,
+  which `stage_reload_exe` already sweeps for `rusti-*` — no new cleanup code, and an in-use one just fails
+  to delete and goes on the next sweep.
+- Checked the one assumption the whole thing rests on: cargo re-links a missing-but-fresh uplifted binary
+  in 0.11s, so moving the file aside never costs a rebuild.
+- **The trap in `same_file`**: `canonicalize()` errors on a missing path, so `(Err, Err)` compared equal
+  would call any two non-existent paths the same file and move aside something cargo was never going to
+  write. Both paths must resolve. That is what the new test pins.
+- Full sequence simulated against the real tree with a live process: move aside → `cargo build --release`
+  → **4.32s, one crate recompiled** (not cold) → binary re-uplifted → staged copy ran.
+- `target/reload` is now dead weight; left on disk deliberately — code that did not create 1.1GB this run
+  should not delete it.
+- Noted in open-work, not fixed here: `cargo clippy` fails with `read amount is not handled` at
+  ai_core/mod.rs:566 (pre-existing, the self-test's fake server).
+- `cargo test` 27 passed · `--self-test` OK · release 4.3s.
