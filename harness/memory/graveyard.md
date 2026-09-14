@@ -17,6 +17,8 @@ Routes tried and rejected. Not a lesson store — a **prohibition list with an e
 | Route | Verdict | Because | Blast | Sessions | Recheck-if |
 |---|---|---|---|---|---|
 | `date-fns-tz` for scheduling | rejected | drops DST on half-hour offset zones | 2h | 3 | upstream #1483 closes |
+| Multi-level `/undo` (stack of per-turn UNDO frames) | rejected | undoing turn N-2 writes its before-image over a file turns N-1/N also edited, silently clobbering the later work; the stack is the easy half, per-file ordering and conflict detection is the real cost. git already does this, and the agent sees `git status` every turn (feat-035) | 0 — analysed, never built | 1 | someone works outside a git repo and reports losing work across turns |
+| `/test <cmd>` loop (run, feed failures back, repeat until green) | rejected | the agent already does this inside one turn — MAX_ITERS is 50 precisely so a read/edit/test/fix cycle completes; "make cargo test pass" gets the same loop with judgment attached, where `/test` would retry N times without any | 0 — analysed, never built | 1 | a model proves unable to drive its own test loop, or someone wants unattended retry with a hard cap |
 
 - **Route** — what was tried, specifically enough to recognise a re-proposal of it.
 - **Verdict** — `rejected` or `deferred`. Deferred means it would work but not yet.

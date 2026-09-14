@@ -7,7 +7,9 @@ Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--ver
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
   3a — done (feat-038/039/040/041: project config, plan mode, web fetch, /export; /session dropped as redundant
      with /resume, see feat-042)
-  3b (next): Multi-Level Undo, Test Loop, Read-Side Sandbox (Tool Output Expand Toggle done: feat-059; Diff in the Tool Line done: feat-060)
+  3b: done or retired. Tool Output Expand Toggle -> feat-059, Diff in the Tool Line -> feat-060, Multi-Level Undo
+     and Test Loop rejected 2026-09-14 (verdicts and recheck conditions in harness/memory/graveyard.md).
+     Read-Side Sandbox is all that is left, and it only matters if rusti runs somewhere untrusted.
   3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
      OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
 
@@ -91,11 +93,6 @@ What: a way to see and forget saved permissions without hand-editing JSON (`/all
 per-profile `context` so the limit follows the model rather than the project
 Where: config.rs, tui/app.rs handle_command
 
-### Multi-Level Undo
-When: `/undo` only covers the last turn (UNDO is a single frame)
-What: Stack of per-turn frames; `/undo` pops one, `/undo N` pops N
-Where: ai_core/tools.rs UNDO
-
 ## Developer Workflow
 
 ### Git Follow-ups
@@ -109,11 +106,6 @@ When: feat-039 landed `/plan` as a toggle in the TUI only
 What: a `--plan` flag so one-shot CLI runs can plan too; auto-drop the mode when the user replies "go"/"do it"
 (needs an approval state machine — only worth it if the toggle proves annoying)
 Where: main.rs, tui/app.rs handle_command
-
-### Test Loop
-When: "Run tests until green" needs babysitting
-What: `/test <cmd>` runs cmd, feeds failure output back as the next user turn, repeats until exit 0 or N attempts
-Where: tui/app.rs command → Job::Task loop, or a run_agent wrapper
 
 ### --json NDJSON Output
 When: Scripting/CI use of the one-shot CLI (--help/--version landed as feat-034)

@@ -595,3 +595,20 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - Live with `--yolo` against mimo-v2.5-pro: `✓ _difftest.txt  +1 -1` storing `· - beta` / `· + BRAVO`, and
   a new file rendering `✓ _difftest2.txt  +3 -0` with three `+` rows.
 - `cargo test` 30 passed · `--self-test` OK · release 4.4s.
+
+## Session 2026-09-14 (6): tier 3b closed — two items retired, not built
+
+- **Multi-level `/undo` — rejected.** git is already the multi-step undo, and the agent sees `git status`
+  every turn (feat-035). Worse, the stack has a hazard the backlog entry never named: undoing turn N-2
+  writes *its* before-image over a file that turns N-1 and N also edited, silently destroying the later
+  work. The stack is the easy half; per-file ordering and conflict detection is the real cost. One frame
+  matches the actual reflex — you see a bad edit land and put it back.
+- **`/test <cmd>` loop — rejected.** The agent already does this *inside one turn*: `MAX_ITERS` is 50
+  precisely so a read/edit/test/fix cycle can finish (feat-022). "make cargo test pass" gets the same loop
+  with judgment attached, where `/test` would retry N times with none.
+- Both are in `harness/memory/graveyard.md` with recheck conditions, so the verdicts expire on evidence
+  rather than being re-proposed every time someone reads the backlog: multi-level undo returns if someone
+  works outside a git repo and loses work across turns; the test loop returns if a model proves unable to
+  drive its own loop, or someone wants unattended retry with a hard cap.
+- Tier 3b is now empty but for Read-Side Sandbox, which only matters if rusti is run somewhere untrusted.
+- No code changed this session; nothing to verify beyond the tree still being green from feat-060.
