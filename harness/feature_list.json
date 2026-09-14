@@ -641,6 +641,23 @@
         "An existing file that fails to read for any other reason (permissions, lock) is treated exactly like a parse failure; only ErrorKind::NotFound means first run.",
         "The TUI puts the warning in the transcript, not the 3s status-line notice: a warning you must act on must not expire."
       ]
+    },
+    {
+      "id": "feat-057",
+      "name": "A panic restores the terminal instead of wrecking it",
+      "description": "The TUI enabled raw mode and entered the alternate screen, then undid both with two plain sequential calls after ui_loop returned. A panic unwinds straight past them, so the shell was left with no echo, no prompt and no line editing, on a buffer that discards the panic message on the way out. The restore is now restore_terminal(), shared by the normal exit and by a panic hook installed just before raw mode is enabled. The hook restores first and then delegates to the previous hook, so the message prints on the primary buffer where it can actually be read.",
+      "dependencies": [
+        "feat-025"
+      ],
+      "status": "done",
+      "evidence": "cargo test 26 passed (new: tui::tests::only_the_ui_thread_restores_the_terminal, which asserts the predicate is false on a worker thread - the case the test harness itself provides - and true on a thread named main). --self-test OK, cargo clippy clean, release build 4.3s. The restore sequences themselves are the same two calls the normal exit has always used, now shared rather than duplicated.",
+      "decisions": [
+        "The hook is gated on the UI thread (name() == Some(\"main\")): every worker here is an unnamed thread::spawn, and a panicking worker restoring the terminal would tear the screen down while the TUI is still rendering on it - worse than the panic it is reporting.",
+        "Restore runs BEFORE the previous hook, not after: the panic message must land on the primary buffer, not on the alternate screen that is about to be discarded.",
+        "Installed inside the is_terminal branch only, so the piped/plain path keeps the default hook.",
+        "restore_terminal() is idempotent - leaving an alternate screen you are not on and disabling raw mode that is off are both no-ops - so the hook firing after a normal exit is harmless.",
+        "Still not turning on panic=\"abort\": tools.rs and mcp.rs join reader threads and rely on unwinding, and this was the reason that setting was listed as blocked in feat-051."
+      ]
     }
   ]
 }

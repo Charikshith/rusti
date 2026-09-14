@@ -21,6 +21,22 @@ use crate::session::Session;
 
 pub fn goto(f: &mut impl Write, x: u16, y: u16) { let _ = execute!(f, cursor::MoveTo(x, y)); }
 
+/// Undo what the TUI did to the terminal. Shared by the normal exit and the
+/// panic hook, and idempotent: leaving an alternate screen you are not on and
+/// disabling raw mode that is already off are both no-ops.
+pub fn restore_terminal() {
+    let _ = execute!(stdout(), cursor::Show, terminal::LeaveAlternateScreen);
+    let _ = terminal::disable_raw_mode();
+}
+
+/// The UI loop runs on the main thread; every worker in this program is an
+/// unnamed `thread::spawn`, so `name()` separates them. A panicking worker must
+/// NOT restore the terminal — the TUI is still drawing on it, and tearing the
+/// screen down under a live render is worse than the panic.
+fn on_ui_thread() -> bool {
+    std::thread::current().name() == Some("main")
+}
+
 /// Synchronized output begin — terminal batches writes until end.
 const SYNC_BEGIN: &str = "\x1b[?2026h";
 /// Synchronized output end — terminal flushes the batch atomically.
@@ -388,6 +404,17 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
     })));
 
     if is_terminal::is_terminal(std::io::stdin()) {
+        // A panic unwinds past the restore below, so without this the shell is
+        // left in raw mode on the alternate screen: no echo, no prompt, and the
+        // panic message painted on a buffer that is about to vanish. Restore
+        // first, then delegate, so the message lands on the primary buffer.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if on_ui_thread() {
+                restore_terminal();
+            }
+            prev(info);
+        }));
         terminal::enable_raw_mode()?;
         // Alternate screen: the TUI gets a fresh canvas every run (no stale
         // transcript from the previous one), and leaving restores the shell's
@@ -395,8 +422,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         // Transcripts persist via session.json + /resume, not the scrollback.
         execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
         let res = app::ui_loop(&job_tx, event_rx, model, seed_name, &cancel, seed_lines, seed_history, seed_msg_num);
-        let _ = execute!(stdout(), cursor::Show, terminal::LeaveAlternateScreen);
-        let _ = terminal::disable_raw_mode();
+        restore_terminal();
         // job_tx must drop before the join — the agent thread blocks in
         // job_rx.recv() until every Sender is gone, otherwise join() hangs.
         drop(job_tx);
@@ -708,5 +734,20 @@ mod tests {
         let no_resume = build_relaunch_args(&["--tui".to_string()], "u", "k", "m", None, false);
         assert!(!no_resume.contains(&"--resume".to_string()));
         assert!(!no_resume.contains(&"--session".to_string()));
+    }
+
+    /// The panic hook restores the terminal only from the UI thread. A worker
+    /// panic must delegate straight to the previous hook, or it would tear the
+    /// screen down while the TUI is still rendering on it.
+    #[test]
+    fn only_the_ui_thread_restores_the_terminal() {
+        // the test harness runs each test on its own named thread, which is
+        // exactly the "not main" case a panicking worker hits
+        assert!(!on_ui_thread(), "a worker thread must not restore");
+        let named = std::thread::Builder::new()
+            .name("main".into())
+            .spawn(|| on_ui_thread())
+            .unwrap();
+        assert!(named.join().unwrap(), "the UI thread must restore");
     }
 }

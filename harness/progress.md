@@ -507,3 +507,22 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   was green the whole time.
 
 - `cargo test` 25 passed · `--self-test` OK (twice) · release build 4.3s.
+
+## Session 2026-09-14 (2): feat-057 — a panic restores the terminal
+
+- Second of the two "found, not fixed" items from session 19. `run()` enabled raw mode, entered the
+  alternate screen, and undid both with two sequential calls after `ui_loop` returned — a panic unwinds
+  past them, leaving the shell with no echo and no prompt, and painting the panic message on a buffer
+  that is discarded on the way out. Both halves of the failure: terminal wrecked, message lost.
+- The restore is now `restore_terminal()`, shared by the normal exit and by a hook installed immediately
+  before raw mode goes on. It restores **first**, then delegates to the previous hook, so the message
+  prints on the primary buffer.
+- **The trap worth naming**: an unconditional hook is wrong here. Every worker in this program is an
+  unnamed `thread::spawn`, and an agent-thread panic firing the hook would tear the screen down while the
+  TUI is still rendering on it — a worse outcome than the panic. `on_ui_thread()` gates on
+  `thread::current().name() == Some("main")`; workers delegate straight through, exactly as today.
+- That predicate is the test: the harness runs each test on its own named thread, so `on_ui_thread()` is
+  false inside a `#[test]` — which is the worker case — and a `Builder::new().name("main")` thread proves
+  the true arm. The restore sequences themselves are the two calls the normal exit has always used.
+- `panic = "abort"` stays off: `tools.rs` and `mcp.rs` join reader threads and rely on unwinding.
+- `cargo test` 26 passed · `--self-test` OK · clippy clean · release 4.3s.
