@@ -7,7 +7,7 @@ Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--ver
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
   3a — done (feat-038/039/040/041: project config, plan mode, web fetch, /export; /session dropped as redundant
      with /resume, see feat-042)
-  3b (next): Diff in the Tool Line, Multi-Level Undo, Test Loop, Read-Side Sandbox (Tool Output Expand Toggle done: feat-059)
+  3b (next): Multi-Level Undo, Test Loop, Read-Side Sandbox (Tool Output Expand Toggle done: feat-059; Diff in the Tool Line done: feat-060)
   3c (only when the need is real): Prompt Caching (provider must support it), Native Anthropic/Gemini (only off an
      OpenAI-compatible endpoint), Image Input (changes Entry.content to parts), MCP Client (largest, ecosystem reach)
 
@@ -90,11 +90,6 @@ sketched — one file and one loader beat two, and the profile default already l
 What: a way to see and forget saved permissions without hand-editing JSON (`/allow` listing them, `--forget NAME`);
 per-profile `context` so the limit follows the model rather than the project
 Where: config.rs, tui/app.rs handle_command
-
-### Diff in the Tool Line
-When: feat-033 `/undo` can revert an edit, but you still can't *see* what edit_file/write_file changed before deciding
-What: Render a short unified diff (or ±line counts) under the ✓ line for edit/write/multi_edit, reusing fail_tail's dim rows
-Where: ai_core/tools.rs (return the diff in the result string), tui/app.rs ToolEnd
 
 ### Multi-Level Undo
 When: `/undo` only covers the last turn (UNDO is a single frame)

@@ -395,6 +395,12 @@ pub async fn run_agent(
             // carried on success too: the TUI hides it behind Ctrl+O rather
             // than throwing it away. fail_tail caps what is kept at 8 lines
             let output = result.clone();
+            // an edit's +N -M rides on the ✓ row itself; every other tool's row
+            // is unchanged, and the diff body stays behind Ctrl+O
+            let summary = match edit_stat(&result) {
+                Some(stat) if ok => format!("{summary}  {stat}"),
+                _ => summary,
+            };
             emit(Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output });
             let mut te = Entry::new("tool", result);
             te.tool_call_id = Some(tc.id.clone());
@@ -423,6 +429,20 @@ pub fn fail_tail(output: &str) -> Vec<String> {
     }
     out.extend(lines[skip..].iter().map(|l| format!("  · {l}")));
     out
+}
+
+/// The "+3 -1" an edit tool puts at the end of its first result line, so the
+/// ✓ row can show what a change cost without opening the diff behind Ctrl+O.
+/// None for every other tool, whose row is then left exactly as it was.
+pub fn edit_stat(result: &str) -> Option<&str> {
+    let first = result.lines().next()?;
+    let (rest, minus) = first.rsplit_once(' ')?;
+    let (_, plus) = rest.rsplit_once(' ')?;
+    let signed = |t: &str, sign: char| {
+        t.len() > 1 && t.starts_with(sign) && t[1..].chars().all(|c| c.is_ascii_digit())
+    };
+    (signed(plus, '+') && signed(minus, '-'))
+        .then(|| &first[first.len() - plus.len() - minus.len() - 1..])
 }
 
 /// Short human-ish summary for a tool call (path or command, not raw JSON).

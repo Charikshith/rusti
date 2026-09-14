@@ -693,6 +693,25 @@
         "The piped path still prints tails only on failure - a pipe has no keyboard to press Ctrl+O with.",
         "Ctrl+O also sets a status-line notice, so the key confirms itself even when nothing on screen changes (no tool output yet)."
       ]
+    },
+    {
+      "id": "feat-060",
+      "name": "Edits report +N -M on the tick row, with the hunk behind Ctrl+O",
+      "description": "write_file, edit_file and multi_edit reported bytes and char counts, which say nothing about what changed - and /undo could put an edit back but you could not see it first. tools::diff_block() trims the lines two texts share at the head and tail and reports what is left as (removed, added, rows). multi_edit calls it per (old, new) pair, which is exact because the caller already knows each changed region; write_file calls it once on the file it is replacing. The counts go on the end of the result first line, where ai_core::edit_stat() reads them back so the TUI can put +N -M on the tick row; the -/+ rows ride in the result and so appear under Ctrl+O through feat-059.",
+      "dependencies": [
+        "feat-033",
+        "feat-059"
+      ],
+      "status": "done",
+      "evidence": "cargo test 30 passed (new: tools::tests::diff_block_reports_only_what_changed covering middle change, pure append, new file, no-change and the row cap; mcp::tests::edit_stat_only_matches_a_real_pair covering both-halves-or-nothing and digits-not-words). --self-test OK. Live with --yolo against mimo-v2.5-pro: an edit_file of one word rendered \"✓ _difftest.txt  +1 -1\" and stored \"edited _difftest.txt: 1 edit(s) +1 -1\n  · - beta\n  · + BRAVO\"; a write_file creating a new file rendered \"✓ _difftest2.txt  +3 -0\" with three + rows.",
+      "decisions": [
+        "No LCS and no diff crate: multi_edit passes one (old, new) pair at a time, so its hunks are exact by construction, and write_file has a whole-file replacement where a single trimmed hunk is the honest shape. A real diff algorithm would buy nothing on either path.",
+        "The trim keeps at least one line per side (max_tail clamp): without it a pure append counts the shared tail as both head and tail and reports a change it cannot show.",
+        "Rows capped at DIFF_ROWS=8 plus an elision line, so one cap bounds both the tokens the model is charged for and the tail Ctrl+O renders.",
+        "The stat travels in the result string rather than a new Event field, so a resumed session gets it too - render_history reads it back off the stored entry with the same helper.",
+        "edit_stat requires both a +N and a -M of digits, so an unrelated result ending in two number-ish words cannot grow a fake stat on its row.",
+        "Dropped the old \"{o} chars -> {n} chars\" wording: lines changed is what the reader wants, and two counts saying almost the same thing is worse than one."
+      ]
     }
   ]
 }

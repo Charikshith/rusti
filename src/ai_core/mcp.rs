@@ -408,4 +408,18 @@ mod tests {
 
         SERVERS.lock().unwrap().retain(|s| s.name != "fake");
     }
+
+    /// edit_stat reads back the "+N -M" the edit tools write. It must not fire
+    /// on any other tool's output, or an unrelated result ending in two
+    /// number-ish words would grow a fake diff stat on its ✓ row.
+    #[test]
+    fn edit_stat_only_matches_a_real_pair() {
+        use crate::ai_core::edit_stat;
+        assert_eq!(edit_stat("edited src/main.rs: 1 edit(s) +3 -1\n  · - a"), Some("+3 -1"));
+        assert_eq!(edit_stat("wrote 42 bytes to x.txt +2 -0"), Some("+2 -0"));
+        assert_eq!(edit_stat("read 30 lines"), None);
+        assert_eq!(edit_stat("+3"), None, "both halves or nothing");
+        assert_eq!(edit_stat("weird +x -y"), None, "digits, not any word");
+        assert_eq!(edit_stat(""), None);
+    }
 }

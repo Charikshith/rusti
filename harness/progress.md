@@ -574,3 +574,24 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - Live on the piped path against the new default (mimo-v2.5-pro): successful `read_file` printed its tick
   and no tail — the pipe behaviour did not change now that output is always carried.
 - `cargo test` 28 passed · `--self-test` OK · release 4.4s.
+
+## Session 2026-09-14 (5): feat-060 — edits report +N -M, with the hunk behind Ctrl+O
+
+- Tier-3b. `write_file`/`multi_edit` reported bytes and *char* counts, which say nothing about what
+  changed; `/undo` (feat-033) could put an edit back but you could not look at it first.
+- `tools::diff_block()` drops the lines two texts share at the head and at the tail — what is left is what
+  changed. **No LCS and no diff crate**: `multi_edit` calls it once per `(old, new)` pair, where the hunk
+  is exact by construction because the caller already knows each changed region, and `write_file` calls it
+  once against the file it is replacing. A real diff algorithm would buy nothing on either path.
+- **The edge that bites**: a pure append. Without the `max_tail` clamp the shared tail is counted as both
+  head and tail, and the function reports a change it cannot show. One line, and the test that names it.
+- Counts go at the end of the result's first line; `ai_core::edit_stat()` reads them back so the ✓ row
+  reads `✓ src/main.rs  +3 -1`. It requires both a `+N` and a `-M` of digits, so no other tool's output can
+  grow a fake stat. The `-`/`+` rows ride in the result itself, so feat-059's Ctrl+O shows the hunk and a
+  resumed session gets both for free — `render_history` reads the same stored string.
+- Rows capped at 8 + an elision line: one cap bounds the tokens the model pays for *and* the tail Ctrl+O
+  draws. The old `{o} chars -> {n} chars` wording is gone; two counts saying nearly the same thing is worse
+  than one that answers the question.
+- Live with `--yolo` against mimo-v2.5-pro: `✓ _difftest.txt  +1 -1` storing `· - beta` / `· + BRAVO`, and
+  a new file rendering `✓ _difftest2.txt  +3 -0` with three `+` rows.
+- `cargo test` 30 passed · `--self-test` OK · release 4.4s.

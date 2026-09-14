@@ -251,7 +251,11 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
                     Some(false) => "✗",
                     None => "·", // written before `ok` was recorded
                 };
-                lines.push(format!("  {mark} {summary}"));
+                let stat = match ai_core::edit_stat(&e.content) {
+                    Some(s) if e.ok == Some(true) => format!("  {s}"),
+                    _ => String::new(),
+                };
+                lines.push(format!("  {mark} {summary}{stat}"));
                 // the result is right here in the entry, so Ctrl+O works on a
                 // resumed turn too; failures stay visible, as they were live
                 let hide = e.ok != Some(false);

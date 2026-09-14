@@ -77,13 +77,48 @@ pub fn undo_turn() -> Vec<String> {
     out
 }
 
+/// Rows shown for one changed region before the rest is elided.
+const DIFF_ROWS: usize = 8;
+
+/// A one-hunk diff of two texts: drop the lines they share at the start and at
+/// the end, and what is left is what changed. No LCS, because the callers
+/// already know where the change is — multi_edit passes one (old, new) pair at
+/// a time and write_file has a whole-file replacement, so a single hunk is the
+/// honest shape for both. Returns (removed, added, rows) with rows capped, so
+/// the model's result and the TUI's Ctrl+O tail are both bounded.
+pub fn diff_block(old: &str, new: &str) -> (usize, usize, Vec<String>) {
+    let (o, n): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
+    let head = o.iter().zip(&n).take_while(|(a, b)| a == b).count();
+    // leave at least one line on each side, or a pure append would count the
+    // shared tail twice and report a change it cannot show
+    let max_tail = o.len().min(n.len()) - head;
+    let tail = o.iter().rev().zip(n.iter().rev()).take_while(|(a, b)| a == b).count().min(max_tail);
+    let (o, n) = (&o[head..o.len() - tail], &n[head..n.len() - tail]);
+
+    let mut rows: Vec<String> = o.iter().map(|l| format!("  · - {}", truncate(l, 200)))
+        .chain(n.iter().map(|l| format!("  · + {}", truncate(l, 200))))
+        .collect();
+    if rows.len() > DIFF_ROWS {
+        let more = rows.len() - DIFF_ROWS;
+        rows.truncate(DIFF_ROWS);
+        rows.push(format!("  · … {more} more changed lines"));
+    }
+    (o.len(), n.len(), rows)
+}
+
 pub fn write_file(path: &str, content: &str) -> (bool, String) {
     if let Err(e) = guard(path) {
         return (false, e);
     }
     snapshot(path);
+    let before = std::fs::read_to_string(path).unwrap_or_default();
     match std::fs::write(path, content) {
-        Ok(()) => (true, format!("wrote {} bytes to {path}", content.len())),
+        Ok(()) => {
+            let (rm, add, rows) = diff_block(&before, content);
+            (true, format!("wrote {} bytes to {path} +{add} -{rm}
+{}", content.len(), rows.join("
+")))
+        }
         Err(e) => (false, format!("error writing {path}: {e}")),
     }
 }
@@ -140,6 +175,7 @@ pub fn multi_edit(path: &str, edits: &[(String, String)]) -> (bool, String) {
         Ok(s) => s,
         Err(e) => return (false, format!("error reading {path}: {e}")),
     };
+    let (mut rm, mut add, mut rows) = (0usize, 0usize, Vec::new());
     for (i, (old, new)) in edits.iter().enumerate() {
         let count = content.matches(old.as_str()).count();
         let which = if edits.len() > 1 { format!(" (edit {})", i + 1) } else { String::new() };
@@ -150,11 +186,16 @@ pub fn multi_edit(path: &str, edits: &[(String, String)]) -> (bool, String) {
             return (false, format!("edit failed{which}: old text appears {count} times in {path}; make it unique; nothing written"));
         }
         content = content.replacen(old.as_str(), new, 1);
+        let (r, a, mut hunk) = diff_block(old, new);
+        (rm, add) = (rm + r, add + a);
+        rows.append(&mut hunk);
     }
     match std::fs::write(path, &content) {
         Ok(()) => {
-            let (o, n): (usize, usize) = edits.iter().fold((0, 0), |(o, n), (a, b)| (o + a.len(), n + b.len()));
-            (true, format!("edited {path}: {} edit(s), {o} chars -> {n} chars", edits.len()))
+            rows.truncate(DIFF_ROWS + 1);
+            (true, format!("edited {path}: {} edit(s) +{add} -{rm}
+{}", edits.len(), rows.join("
+")))
         }
         Err(e) => (false, format!("error writing {path}: {e}")),
     }
@@ -624,5 +665,35 @@ pub fn truncate(s: &str, n: usize) -> String {
         let mut cut = n;
         while !s.is_char_boundary(cut) { cut -= 1; }
         format!("{}\n…[truncated]", &s[..cut])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the trim: report the lines that changed, not the
+    /// file they live in. The append case is the one that bites — the shared
+    /// tail must not be counted twice as both head and tail.
+    #[test]
+    fn diff_block_reports_only_what_changed() {
+        let (rm, add, rows) = diff_block("a\nb\nc\n", "a\nB\nc\n");
+        assert_eq!((rm, add), (1, 1), "one line changed in the middle of three");
+        assert_eq!(rows, vec!["  · - b".to_string(), "  · + B".to_string()]);
+
+        let (rm, add, _) = diff_block("a\nb\n", "a\nb\nc\n");
+        assert_eq!((rm, add), (0, 1), "a pure append removes nothing");
+
+        let (rm, add, _) = diff_block("", "x\ny\n");
+        assert_eq!((rm, add), (0, 2), "a new file is all additions");
+
+        let (rm, add, rows) = diff_block("same\n", "same\n");
+        assert_eq!((rm, add, rows.len()), (0, 0, 0), "no change, no rows");
+
+        // the cap keeps both the model's result and the Ctrl+O tail bounded
+        let big: String = (0..50).map(|i| format!("line {i}\n")).collect();
+        let rows = diff_block("", &big).2;
+        assert_eq!(rows.len(), DIFF_ROWS + 1);
+        assert!(rows.last().unwrap().contains("42 more changed lines"));
     }
 }
