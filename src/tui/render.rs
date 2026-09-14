@@ -1,7 +1,7 @@
 // Alternate-screen renderer with differential updates (pi-style).
 // First frame: full draw. Subsequent frames: only changed lines.
 // Synchronized output (CSI 2026) for atomic flicker-free updates.
-// No box — plain terminal lines like pi. Input + status pinned at bottom.
+// No box — plain terminal lines like pi. Status then input pinned at bottom.
 
 use std::io::{self, Write, stdout};
 
@@ -129,10 +129,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     frame.extend(panel);
 
-    let input_len = input.len();
-    frame.extend(input);
-
-    // status line: session/model/branch left, spinner + hint right
+    // status line, drawn ABOVE the input: session/model/branch left, spinner + hint right
     let armed = app.armed();
     let hint = if armed {
         "press ctrl+c again to exit".to_string()
@@ -169,6 +166,10 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     }
     frame.push(srow);
 
+    // the input is the last block on screen, resting under the status line
+    let input_len = input.len();
+    frame.extend(input);
+
     // ── differential draw ──
     let mut out = stdout();
     out.write_all(SYNC_BEGIN.as_bytes())?;
@@ -202,11 +203,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     }
 
     // ── position cursor at input ──
-    // the input block ends just above the status line; the caret sits in the
+    // the input block runs to the bottom of the screen; the caret sits in the
     // row holding the cursor, which is not the last one in a multi-line draft
     let (caret_line, caret_col) = caret_at(draft, caret);
-    let input_top = h.saturating_sub(1 + input_len);
-    let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
+    let input_top = h.saturating_sub(input_len);
+    let input_y = (input_top + caret_line).min(h.saturating_sub(1)) as u16;
     let input_x = (2 + caret_col).min(w.saturating_sub(1)) as u16; // after "> "
     goto(&mut out, input_x, input_y);
 

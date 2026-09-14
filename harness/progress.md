@@ -704,3 +704,17 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
 - The test now pins the head and the tail around the wall-clock middle (`starts_with` + `ends_with`)
   instead of matching one prefix — the clock is the only part that cannot be asserted exactly.
 - `cargo test` 34 passed · `--self-test` OK.
+
+## Session 2026-09-14 (11): feat-064 — status line above the input
+
+- The frame was composed transcript → spacer → panel → input → status, so the working spinner, the 3s
+  notices and the session footer were all drawn *below* the box you type in. The status block is now
+  pushed before the input, making the input the last block on screen.
+- The caret math moves with it: `input_top = h - input_len` (was `h - 1 - input_len`) and the clamp is the
+  last row (was the second to last). That is the part that would break first if the order were wrong.
+- `bottom_rows` is unchanged at `2 + input + panel` — the same two fixed rows in the other order — so the
+  transcript height and its bottom-resting pad (feat-043) need no adjustment.
+- Status sits between the panel and the input rather than above the panel: a picker and the input belong
+  together at the bottom.
+- `cargo test` 34 passed · `--self-test` OK. The composition is inside `draw()`, which needs a terminal, so
+  the row order is confirmed by reading and by the user's run.

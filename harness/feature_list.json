@@ -769,6 +769,21 @@
         "The test matches the head of the row with starts_with: the finish time is wall-clock and cannot be asserted exactly without injecting a clock, which is more plumbing than the line is worth.",
         "Row order: both times first, then tok/tps/ctx. The two questions after a turn are how long it took and when it landed; the accounting is what you read second."
       ]
+    },
+    {
+      "id": "feat-064",
+      "name": "The status line sits above the input, not under it",
+      "description": "The frame was composed transcript, spacer, panel, input, status - so the working spinner, notices and the session footer were drawn on the very last row, below the box you type in. The status block is now pushed before the input, which makes the input the last block on screen and puts the status directly above it. The caret math moved with it: input_top is h - input_len rather than h - 1 - input_len, and the clamp is the last row rather than the second to last.",
+      "dependencies": [
+        "feat-043",
+        "feat-046"
+      ],
+      "status": "done",
+      "evidence": "cargo test 34 passed, --self-test OK, release build clean. The composition itself is inside draw(), which needs a terminal, so the row order is confirmed by reading and by the user running the TUI - the caret clamp is the part that would misbehave first if it were wrong.",
+      "decisions": [
+        "Status goes between the panel and the input, not above the panel: a picker and the input belong together at the bottom, and the status is what separates them from each other rather than from the transcript.",
+        "bottom_rows is unchanged at 2 + input + panel - the same two fixed rows, in the other order - so the transcript height and its bottom-resting pad (feat-043) need no adjustment."
+      ]
     }
   ]
 }
