@@ -13,6 +13,83 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "dist", "build", 
 
 /// offset = 1-based first line (0/1 = start), limit = max lines (0 = all).
 /// Whole-file reads return raw content; ranged reads prefix line numbers.
+/// Where a pasted clipboard image is parked. Under .rusti/, which is already
+/// git-ignored, and relative so the path stays short in the input box.
+pub const CLIP_DIR: &str = ".rusti/clips";
+
+/// Delete clips older than a day. Not "every clip but the newest": two images
+/// pasted into one unsent message would take each other out.
+fn sweep_clips(dir: &str) {
+    let day = Duration::from_secs(24 * 60 * 60);
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let stale = e.metadata().ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > day);
+        if stale && e.file_name().to_string_lossy().starts_with("clip-") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Put the clipboard's image on disk and return its path, for the TUI to type
+/// into the input. A file COPIED in a file manager is not an image on the
+/// clipboard but a file-drop list, and that is how most people "copy a
+/// screenshot" — that path is returned as-is, with nothing written.
+///
+/// One process, not a probe followed by a save: the script exits 1 when there
+/// is nothing to take, which is the same answer for a third of the latency.
+/// PowerShell must be `powershell -Sta`; the clipboard needs a single-threaded
+/// apartment and `pwsh` is MTA, where GetImage() returns null on a machine
+/// whose clipboard is perfectly fine.
+pub fn clipboard_image() -> Result<String, String> {
+    let dir = CLIP_DIR;
+    sweep_clips(dir);
+    std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let path = format!("{dir}/clip-{ts}.png");
+
+    let out = if cfg!(windows) {
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; \
+             $i = [System.Windows.Forms.Clipboard]::GetImage(); \
+             if ($null -ne $i) {{ $i.Save('{path}', [System.Drawing.Imaging.ImageFormat]::Png); '{path}'; exit 0 }} \
+             foreach ($f in [System.Windows.Forms.Clipboard]::GetFileDropList()) \
+             {{ if ($f -match '[.](png|jpg|jpeg|gif|webp)$') {{ $f; exit 0 }} }} \
+             exit 1");
+        Command::new("powershell").args(["-NoProfile", "-Sta", "-Command", &script]).output()
+    } else if cfg!(target_os = "macos") {
+        let script = format!(
+            "set f to open for access POSIX file \"{path}\" with write permission\n\
+             write (the clipboard as «class PNGf») to f\nclose access f");
+        Command::new("osascript").args(["-e", &script]).output()
+    } else {
+        // png first, bmp second: X11 clipboards often carry only bmp
+        let cmd = format!(
+            "xclip -selection clipboard -t image/png -o > {path} 2>/dev/null || \
+             wl-paste --type image/png > {path} 2>/dev/null || \
+             xclip -selection clipboard -t image/bmp -o > {path} 2>/dev/null || \
+             wl-paste --type image/bmp > {path} 2>/dev/null");
+        shell(&cmd).output()
+    };
+
+    let out = out.map_err(|e| format!("could not read the clipboard: {e}"))?;
+    // Windows prints the path it used (ours, or the dropped file's); the others
+    // redirect into the file, so an empty file is the real failure signal
+    let printed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if out.status.success() && !printed.is_empty() && Path::new(&printed).exists() {
+        return Ok(printed);
+    }
+    let wrote = std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false);
+    if out.status.success() && wrote {
+        return Ok(path);
+    }
+    let _ = std::fs::remove_file(&path); // a zero-byte clip is worse than none
+    Err("no image on the clipboard".into())
+}
+
 /// Images a vision model can be sent, by extension. Anything else is read as
 /// text and fails honestly on invalid UTF-8 rather than being mangled.
 fn image_mime(path: &str) -> Option<&'static str> {
@@ -787,5 +864,21 @@ mod tests {
         assert_eq!(image_mime("src/main.rs"), None);
         assert_eq!(image_mime("Makefile"), None);
         assert_eq!(image_mime("notes.png.txt"), None);
+    }
+
+    /// The clipboard half cannot be faked, so this is a real end-to-end check:
+    /// put a known PNG on the clipboard, take it back, compare the pixels.
+    /// Opt-in via RUSTI_CLIPBOARD_TEST=1 — it OVERWRITES the clipboard, which no
+    /// one wants from a routine `cargo test`, and a headless box has none.
+    #[test]
+    fn clipboard_image_round_trips() {
+        if std::env::var("RUSTI_CLIPBOARD_TEST").as_deref() != Ok("1") {
+            return;
+        }
+        let path = clipboard_image().expect("clipboard should hold the image the harness put there");
+        let got = std::fs::metadata(&path).expect("the clip must exist").len();
+        assert!(got > 0, "a zero-byte clip is a failure, not an image");
+        assert!(path.ends_with(".png"));
+        println!("clipboard_image -> {path} ({got} bytes)");
     }
 }

@@ -128,11 +128,11 @@ What: Send provider cache-control markers on the system/early messages when the 
 Where: ai_core/llm.rs request body, config.rs profile field
 
 ### Image Input — follow-ups
-When: feat-061 landed the tool side (read_file on a png/jpg/gif/webp attaches it); there is still no way for
-the USER to attach one, and no provider here to test against
-What: `/image <path>` or Alt+V to attach to the next user message, reusing Entry.image; a vision-capable
-endpoint to verify against, since the :20128 proxy strips image parts
-Where: tui/app.rs handle_command, ai_core/tools.rs read_image
+When: feat-061 (read_file attaches an image) and feat-062 (ctrl+v / alt+v paste one) are in; what is missing
+is a provider to prove the last hop, since the :20128 proxy strips image parts
+What: a vision-capable endpoint to verify against; optionally attach straight to the user entry instead of
+via a read_file round-trip, which needs the [Image #N] placeholder + side table Claude Code uses
+Where: ai_core/tools.rs clipboard_image, tui/app.rs Enter handler
 
 ### Native Anthropic / Gemini APIs
 When: Endpoint isn't OpenAI-compatible

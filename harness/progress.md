@@ -645,3 +645,34 @@ User ran the TUI and sent a screenshot. Two findings, both fixed.
   Qwen3.8-Max) — each answered that the image was omitted, at ~7.5k prompt tokens. Nothing here can prove
   the last hop; it needs a vision endpoint.
 - `cargo test` 33 passed · `--self-test` OK · release 4.4s.
+
+## Session 2026-09-14 (8): feat-062 — Ctrl+V / Alt+V paste a clipboard image
+
+- Both chords call `tools::clipboard_image()`, which saves the clipboard bitmap to
+  `.rusti/clips/clip-<ms>.png` and returns the path; the key handler types that path into the input at the
+  cursor, and feat-061's `read_file` attaches the picture when the message is sent.
+- **Both chords on purpose.** Windows Terminal binds ctrl+v to its own text paste and usually never
+  delivers the key; alt+v always arrives (feat-046 already leans on ALT reaching the app). Claude Code
+  makes the identical split — `var ce = ae ? "alt+v" : "ctrl+v"` with `ae = windows || wsl` — found by
+  reading the strings in its shipped binary, along with its `checkImage`/`saveImage`/`deleteFile` trio.
+- Taken from that reading: `-Sta` (the clipboard needs a single-threaded apartment; `pwsh` is MTA and
+  `GetImage()` returns null there on a machine whose clipboard is fine), `-NoProfile`, and the file-drop
+  fallback. **Not** taken: the probe-then-save pair (the save script already exits 1 with no image, same
+  answer for a third of the latency) and the `[Image #N]` placeholder + side table, because `read_file`
+  already attaches images, so the path IS the plumbing.
+- A file **copied in a file manager** is a file-drop list, not an image — that is how most people copy a
+  screenshot, and without the fallback the key looks broken. That path is returned as-is, nothing written.
+- Clips older than a day are swept per paste. Not "all but the newest": two images pasted into one unsent
+  message would delete each other.
+
+### Verified live, both branches
+- **Bitmap**: a known 64×64 PNG placed on the clipboard with `Clipboard::SetImage`; `clipboard_image()`
+  wrote `clip-1789407051990.png`, and decoding both files gave 64×64 with identical pixels top
+  `(200,30,90)` and bottom `(30,120,200)`. GDI+ re-encodes as RGBA, so the byte size differs and the image
+  does not — worth knowing before someone compares hashes and thinks it broke.
+- **File drop**: `SetFileDropList` with the same file returned that path directly and wrote no clip.
+- The live test is opt-in behind `RUSTI_CLIPBOARD_TEST=1` — it overwrites the clipboard, which no one
+  wants from a routine `cargo test`, and a headless box has no clipboard at all.
+- **Unverifiable here**: the keystroke itself. The TUI needs a tty; the user tests whether their terminal
+  delivers ctrl+v, with alt+v as the guaranteed path.
+- `cargo test` 34 passed · `--self-test` OK · release 4.5s.

@@ -731,6 +731,25 @@
         "Under 1 KB the result says bytes, not KB. It first said \"0 KB\" for a 105-byte PNG, and the model read that as an empty attachment and refused to look at the picture it had been sent - what a tool says about its result is part of the interface.",
         "Extension-only detection: sniffing magic bytes would send every binary the model asked for, and a .rs file must never take the base64 path."
       ]
+    },
+    {
+      "id": "feat-062",
+      "name": "Ctrl+V / Alt+V paste a clipboard image into the input",
+      "description": "The TUI can now take a screenshot straight off the clipboard. Both chords call tools::clipboard_image(), which saves the clipboard bitmap to .rusti/clips/clip-<ms>.png and returns the path; the key handler types that path into the input at the cursor, and read_file attaches the image when the message is sent (feat-061). A file COPIED in a file manager is a file-drop list rather than an image, and that path is returned as-is with nothing written - it is how most people copy a screenshot. Clips older than a day are swept on each paste. Windows goes through powershell -NoProfile -Sta, macOS through osascript, Linux through xclip/wl-paste with png then bmp.",
+      "dependencies": [
+        "feat-061"
+      ],
+      "status": "done",
+      "evidence": "Verified live on this machine, both branches. Bitmap branch: a known 64x64 PNG was put on the clipboard with Clipboard::SetImage, clipboard_image() wrote .rusti/clips/clip-1789407051990.png, and decoding both confirmed 64x64 with identical pixels at top (200,30,90) and bottom (30,120,200) - GDI+ re-encodes as RGBA so the byte size differs while the image does not. File-drop branch: Clipboard::SetFileDropList with the same file returned D:CodeAIAgents\rustypi_clip_src.png directly and wrote no clip at all. cargo test 34 passed, --self-test OK. The keystroke itself is unverifiable here - the TUI needs a tty - and Windows Terminal may swallow ctrl+v, which is why alt+v is bound as well.",
+      "decisions": [
+        "Both chords, one function: Windows Terminal binds ctrl+v to its own text paste and usually never delivers the key, while alt+v always arrives (feat-046 already relies on ALT reaching the app). Claude Code makes the same split - alt+v on windows/wsl, ctrl+v elsewhere - found by reading the strings in its shipped binary.",
+        "One process, not the probe-then-save pair Claude Code uses: the save script already exits 1 when there is no image, which is the same answer for a third of the latency.",
+        "powershell -Sta, never pwsh: the clipboard needs a single-threaded apartment and pwsh is MTA, where GetImage() returns null on a machine whose clipboard is fine.",
+        "The path is typed into the input rather than an [Image #1] placeholder backed by a side table: read_file already attaches images, so the path IS the plumbing. The cost is one visible path and one tool round-trip.",
+        "Sweep clips older than a day, not all but the newest - two images pasted into one unsent message would otherwise delete each other.",
+        "A failed paste sets a status notice rather than doing nothing: a silent key reads as a broken key.",
+        "The live clipboard test is opt-in behind RUSTI_CLIPBOARD_TEST=1. It overwrites the clipboard, which no one wants from a routine cargo test, and a headless machine has none."
+      ]
     }
   ]
 }

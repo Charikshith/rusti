@@ -334,6 +334,28 @@ pub fn ui_loop(
                             }
                             app.exit_armed = Some(std::time::Instant::now());
                         }
+                        // Ctrl+V / Alt+V paste the clipboard's image: it lands in
+                        // .rusti/clips and its PATH is typed into the input, which
+                        // read_file then attaches (feat-061). Both chords, because
+                        // Windows Terminal binds ctrl+v to its own text paste and
+                        // usually swallows it — alt+v is the one that always arrives.
+                        (KeyCode::Char('v'), m)
+                            if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                        {
+                            match ai_core::tools::clipboard_image() {
+                                Ok(path) => {
+                                    let text = format!("{path} ");
+                                    let byte = app.input.char_indices().nth(app.cursor)
+                                        .map(|(i, _)| i).unwrap_or(app.input.len());
+                                    app.input.insert_str(byte, &text);
+                                    app.cursor += text.chars().count();
+                                    app.notice = Some((format!("pasted {path}"), std::time::Instant::now()));
+                                }
+                                // a keypress that does nothing reads as a broken key,
+                                // so say why on the status line either way
+                                Err(e) => app.notice = Some((e, std::time::Instant::now())),
+                            }
+                        }
                         // Ctrl+O reveals the output of tools that SUCCEEDED; failures
                         // are on screen already. The rows sit in app.lines the whole
                         // time, marked hidden, so this is a redraw and not a rebuild.
