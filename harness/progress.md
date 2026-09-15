@@ -833,3 +833,65 @@ through the session"):
 - Not done: interleaving removed and added lines pair by pair — that needs an LCS, and `diff_block`
   deliberately has none, because its callers already know where the change is.
 - `cargo test` 35 passed (one new) · `--self-test` OK.
+
+## Session 2026-09-15 (4): feat-070 — /themes
+
+- The question was "change blue and cyan". The real finding: cyan was doing four unrelated jobs (your `N›`
+  marker, the input prompt, the picker's selection and inline `code`) and `ℹ` used ANSI blue 34, the one
+  colour most terminals render near-navy on a dark background — and it carries the permission prompt.
+- `src/tui/theme.rs` is a table of fifteen palettes, each field a complete SGR sequence built by a macro
+  from the bare code, so a theme reads as the codes you would have typed. `render.rs` reads
+  `theme::current()` where it had literals.
+- **Theme 0 is what shipped before this feature and stays the default.** A theme feature that restyles
+  everyone's terminal on update is the opposite of a theme feature.
+- `/themes` opens the picker (each row carries the palette's own note, so the list explains itself and you
+  do not have to try all fifteen); `/themes <name>` switches outright; the choice lands in `model.json`.
+  The picker stays open on Enter like `/settings` — the whole screen is the preview, so walking the rows is
+  the comparison.
+- The test checks `index_of`, not `set`: `set` writes a global the render tests read, and cargo runs tests
+  in parallel, so flipping the palette mid-suite would make them flaky. That is the trap this layout has.
+- A saved name that is no longer in the table keeps the default and says so in the transcript at startup.
+- One incidental change worth knowing: stats rows moved from `ESC[2m` to the theme's grey. `ESC[2m` is
+  barely darker in Windows Terminal — the reason `THINK` and `DIM` already avoided it — so now every
+  secondary row agrees.
+- `cargo test` 36 passed (one new) · `--self-test` OK · release build clean.
+
+## Session 2026-09-15 (5): feat-071 — tables and syntax highlighting
+
+- Two complaints, one screenshot each: a model's table printed as raw `| pipes |`, and a fenced block drawn
+  in one flat tan where the reference terminal colours each token.
+- **Tables are a block, not a line.** A column is as wide as its widest cell, which cannot be known one
+  line at a time, so `table_block()` claims the whole run and the caller's cursor jumps past it. The
+  `|---|` separator is what distinguishes a table from prose that happens to contain a pipe — that is the
+  test's first assertion.
+- Layout decisions, all visible in the test: a **rule, not a box** (the transcript is 2-space-indented
+  plain rows and box walls fight that); cells **truncate, never wrap** (a wrapped cell destroys the
+  alignment that is the whole point); and when it will not fit, the **widest column gives back first**,
+  since it is the one with slack.
+- **One tokeniser for every language.** It only has to beat "the whole block is one colour", so it marks
+  what is unambiguous across C-likes, JSON, TOML and shell: quoted strings, a string used as a key (the
+  colon after it is the tell), numbers, `true/false/null`, punctuation. Anything unrecognised keeps the
+  block's old colour, so an unknown language degrades to exactly what rusti drew before.
+- The subtle half is key vs string — both are quoted — and the escaped-quote case, where a naive scan ends
+  the string early and colours the rest of the line as if it were outside one. Both are pinned by tests,
+  along with "highlighting must not change one visible character".
+- New theme roles (head, rule, key, string, num, boolean, punct) **derive from the palette a theme already
+  has**, so all fifteen gained highlighting without a single new colour decision. `current` overrides the
+  four syntax colours with Nord's.
+- **The colours were read, not guessed**: decoding the screenshot's pixels gave `#88c0d0` and `#a3be8c` on
+  `#7b8496` grey, which identified card 09 (Nord) exactly. `palette-samples.html` now shows card 01 with
+  those real values rather than its derived ones.
+- `cargo test` 38 passed (two new) · `--self-test` OK · release build clean.
+
+### feat-071 follow-up: two bugs the first real table found
+
+- **The last row was drawn twice**, once in the table and once as raw `| pipes |` underneath. The caller
+  advanced by `rows.len()`, but the run consumed is `rows.len() + 1` — the separator is eaten and is not a
+  row. `table_block` now returns `(rows, consumed)` so the parse and the count cannot drift apart; the
+  caller no longer knows how a table is shaped, which is the point.
+- **Cells kept their markdown**: `` `index_repository` `` reached the screen with its backticks, and the
+  column was padded for characters that are never drawn. Cells now go through `md_line` before anything is
+  measured — a cell is markdown too, which the first pass simply forgot.
+- Both are in the test now: the consumed count (4 for header + separator + two rows), no backtick in the
+  output, and the second column still starting at the same offset in header and body.
+- `cargo test` 38 passed · `--self-test` OK · release clean.

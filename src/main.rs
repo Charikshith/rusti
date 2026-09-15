@@ -46,7 +46,7 @@ slash commands (--tui)
   /plan           propose, change nothing     /commit           stage and commit the work
   /export         transcript to markdown      /reload           rebuild and relaunch
   /settings       show/hide status-line parts  /mcp              MCP servers on/off
-  /quit
+  /themes         pick the colour palette     /quit
   !CMD            run a shell command; its output goes to the model too
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
 ";

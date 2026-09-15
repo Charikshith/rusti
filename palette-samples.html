@@ -1,0 +1,235 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rusti palette samples</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: #17181c; color: #c8ccd4;
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; color: #e6e9ef; }
+  .lede { margin: 0 0 28px; max-width: 70ch; color: #8b919e; }
+  .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); }
+  .card { border: 1px solid #2a2d35; border-radius: 8px; overflow: hidden; background: #1b1d22; }
+  .card header { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #2a2d35; }
+  .n { color: #6b7280; font-variant-numeric: tabular-nums; }
+  .name { font-weight: 600; color: #e6e9ef; }
+  .note { margin-left: auto; font-size: 12px; color: #8b919e; text-align: right; }
+  pre.term {
+    margin: 0; padding: 14px; overflow-x: auto;
+    font: 12.5px/1.65 "Cascadia Mono", "Consolas", ui-monospace, monospace;
+    white-space: pre;
+  }
+  .sw { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid #2a2d35; }
+  .sw span {
+    font: 11px/1.4 "Cascadia Mono", Consolas, ui-monospace, monospace;
+    padding: 2px 7px; border-radius: 4px; background: #23262d; border: 1px solid #2f333c;
+  }
+  .sw i { font-style: normal; }
+  b.hl { font-weight: 600; }
+</style>
+
+<h1>rusti palette samples</h1>
+<p class="lede">
+  Fifteen options for the two colours you asked about, each shown on one frame of the real TUI:
+  your query marker, a running tool, ok / fail, the <code>ℹ</code> permission line, a diff hunk,
+  inline code, the picker's selected row, the working hint, the input prompt and the footer.
+  Swatches under each card carry the exact codes, so whichever you pick I can apply it directly.
+  <b>#1 is what ships today; #2 is what I recommended.</b>
+</p>
+<p class="lede">
+  <b>New in this pass:</b> each card now also shows the two things rusti does <i>not</i> do yet —
+  a <b>rendered table</b> (aligned columns and a rule, instead of raw <code>| pipes |</code>) and
+  <b>syntax highlighting</b> in a fenced block (keys, strings, numbers and booleans coloured by
+  role, instead of one flat tan). The token colours are <i>derived</i> from each palette rather
+  than invented: key = the palette's own accent, string = its ok colour, number = its code colour,
+  boolean = its info colour, punctuation = its grey. So picking a theme picks the highlighting too.
+</p>
+
+<div class="grid" id="grid"></div>
+
+<script>
+// One frame of the TUI. Each [class, text] pair is a span; null class = plain text.
+const FRAME = t => [
+  [[t.user, " 9› "], [t.text, "fix the wrapping in render.rs"]],
+  [[t.dim, "   "], [t.warn, "⠋"], [t.dim, " cargo build --release"]],
+  [[t.dim, "   "], [t.ok, "✓"], [t.dim, " Cargo.toml  0ms"]],
+  [[t.dim, "   "], [t.fail, "✗"], [t.dim, " edit failed: old text not found"]],
+  [[t.dim, "   "], [t.info, "ℹ"], [t.dim, " allow run_command git log --oneline -20?"]],
+  [[t.del, "   · -  238"], [t.dim, "  let count = if p.filter.is_empty() {"]],
+  [[t.add, "   · +  241"], [t.dim, "  let count = match p.kind {"]],
+  [[t.text, "   the wrap now measures "], [t.code, "`visible text`"], [t.text, ", not markers"]],
+  [[t.think, "   reasoning: the marker only exists on the first row"]],
+  [],
+  // ── a markdown table, rendered instead of printed raw ──
+  [[t.head, "   Tool             "], [t.head, " Description"]],
+  [[t.rule, "   ───────────────── ────────────────────────────"]],
+  [[t.text, "   index_repository  "], [t.text, "Index a codebase into the graph"]],
+  [[t.text, "   search_graph      "], [t.text, "Search the knowledge graph"]],
+  [[t.text, "   trace_path        "], [t.text, "Trace code paths"]],
+  [],
+  // ── a fenced block with syntax highlighting, not one flat colour ──
+  [[t.punct, "   {"]],
+  [[t.key, "     \"command\""], [t.punct, ": "], [t.str, "\"codebase-memory-mcp.exe\""], [t.punct, ","]],
+  [[t.key, "     \"args\""], [t.punct, ": [], "], [t.key, "\"timeout\""], [t.punct, ": "], [t.num, "30"], [t.punct, ","]],
+  [[t.key, "     \"enabled\""], [t.punct, ": "], [t.bool, "true"]],
+  [[t.punct, "   }"]],
+  [],
+  [[t.dim, "   allow run_command git log --oneline -20?"]],
+  [[t.sel, " ▸ 1. Yes"]],
+  [[t.dim, "   2. No"]],
+  [[t.dim, "   3. Yes, and stop asking for run_command"]],
+  [[t.dim, "   ↑/↓ select · enter confirm · esc no"]],
+  [],
+  [[t.warn, "   ⠋"], [t.dim, " working…"]],
+  [[t.user, " › "], [t.text, "▏"]],
+  [[t.dim, " session · cmc/deepseek/deepseek-v4-flash · ⎇ master · ctx 21%"]],
+];
+
+// label -> [css colour, ansi code to write in the source]
+const THEMES = [
+  { name: "Current (what ships today)", note: "everything as it was, plus Nord syntax colours",
+    // the one theme with explicit syntax colours: picked off card 09 rather than derived
+    syn: { key:["#88c0d0","38;5;110"], str:["#a3be8c","38;5;144"],
+           num:["#b48ead","38;5;139"], bool:["#88c0d0","38;5;110"] },
+    c: { user:["#2bc4c4","36"], info:["#2222cc","34"], ok:["#22c55e","32"], fail:["#ef4444","31"],
+         warn:["#d7b100","33"], add:["#22c55e","32"], del:["#ef4444","31"], code:["#2bc4c4","36"],
+         fenced:["#d7af87","38;5;180"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#2bc4c4","36"], text:["#d6d9e0","0"] } },
+
+  { name: "Recommended", note: "bright blue ℹ · inline code joins fenced tan · bold cyan selection",
+    c: { user:["#2bc4c4","36"], info:["#5c9dff","94"], ok:["#22c55e","32"], fail:["#ef4444","31"],
+         warn:["#d7b100","33"], add:["#22c55e","32"], del:["#ef4444","31"], code:["#d7af87","38;5;180"],
+         fenced:["#d7af87","38;5;180"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#6fe3e3","1;36"], text:["#d6d9e0","0"] } },
+
+  { name: "Periwinkle info", note: "softer than bright blue, still clearly not grey",
+    c: { user:["#2bc4c4","36"], info:["#87afff","38;5;111"], ok:["#22c55e","32"], fail:["#ef4444","31"],
+         warn:["#d7b100","33"], add:["#22c55e","32"], del:["#ef4444","31"], code:["#d7af87","38;5;180"],
+         fenced:["#d7af87","38;5;180"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#6fe3e3","1;36"], text:["#d6d9e0","0"] } },
+
+  { name: "Teal identity", note: "you are teal, not cyan — calmer next to the greens",
+    c: { user:["#2aa198","38;5;37"], info:["#87afff","38;5;111"], ok:["#22c55e","32"], fail:["#ef4444","31"],
+         warn:["#d7b100","33"], add:["#22c55e","32"], del:["#ef4444","31"], code:["#d7af87","38;5;180"],
+         fenced:["#d7af87","38;5;180"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#4fd6cd","1;38;5;37"], text:["#d6d9e0","0"] } },
+
+  { name: "Violet info", note: "info reads as a different kind of event, not a cold blue",
+    c: { user:["#2bc4c4","36"], info:["#af87ff","38;5;141"], ok:["#22c55e","32"], fail:["#ef4444","31"],
+         warn:["#d7b100","33"], add:["#22c55e","32"], del:["#ef4444","31"], code:["#d7af87","38;5;180"],
+         fenced:["#d7af87","38;5;180"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#af87ff","1;38;5;141"], text:["#d6d9e0","0"] } },
+
+  { name: "One accent", note: "greys everywhere, cyan only where you act or are asked",
+    c: { user:["#2bc4c4","36"], info:["#2bc4c4","36"], ok:["#a3a8b3","38;5;248"], fail:["#ef4444","31"],
+         warn:["#a3a8b3","38;5;248"], add:["#a3a8b3","38;5;248"], del:["#ef4444","31"], code:["#c5c9d3","38;5;251"],
+         fenced:["#c5c9d3","38;5;251"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#6fe3e3","1;36"], text:["#d6d9e0","0"] } },
+
+  { name: "Solarized dark", note: "blue #268bd2 · cyan #2aa198",
+    c: { user:["#2aa198","38;5;37"], info:["#268bd2","38;5;33"], ok:["#859900","38;5;100"], fail:["#dc322f","38;5;160"],
+         warn:["#b58900","38;5;136"], add:["#859900","38;5;100"], del:["#dc322f","38;5;160"], code:["#6c71c4","38;5;61"],
+         fenced:["#93a1a1","38;5;109"], think:["#586e75","3;38;5;66"], dim:["#657b83","38;5;66"],
+         sel:["#2aa198","1;38;5;37"], text:["#93a1a1","38;5;109"] } },
+
+  { name: "Gruvbox", note: "warm, low glare for long sessions",
+    c: { user:["#8ec07c","38;5;108"], info:["#83a598","38;5;109"], ok:["#b8bb26","38;5;142"], fail:["#fb4934","38;5;167"],
+         warn:["#fabd2f","38;5;214"], add:["#b8bb26","38;5;142"], del:["#fb4934","38;5;167"], code:["#d3869b","38;5;175"],
+         fenced:["#ebdbb2","38;5;223"], think:["#928374","3;38;5;245"], dim:["#a89984","38;5;246"],
+         sel:["#8ec07c","1;38;5;108"], text:["#ebdbb2","38;5;223"] } },
+
+  { name: "Nord", note: "cool and even; the ℹ is frost blue",
+    c: { user:["#88c0d0","38;5;110"], info:["#81a1c1","38;5;110"], ok:["#a3be8c","38;5;144"], fail:["#bf616a","38;5;131"],
+         warn:["#ebcb8b","38;5;222"], add:["#a3be8c","38;5;144"], del:["#bf616a","38;5;131"], code:["#b48ead","38;5;139"],
+         fenced:["#d8dee9","38;5;188"], think:["#6f7a8c","3;38;5;103"], dim:["#7b8496","38;5;103"],
+         sel:["#8fbcbb","1;38;5;109"], text:["#d8dee9","38;5;188"] } },
+
+  { name: "Tokyo Night", note: "high separation between blue, cyan and magenta",
+    c: { user:["#7dcfff","38;5;117"], info:["#7aa2f7","38;5;111"], ok:["#9ece6a","38;5;150"], fail:["#f7768e","38;5;210"],
+         warn:["#e0af68","38;5;180"], add:["#9ece6a","38;5;150"], del:["#f7768e","38;5;210"], code:["#bb9af7","38;5;141"],
+         fenced:["#c0caf5","38;5;189"], think:["#565f89","3;38;5;60"], dim:["#787c99","38;5;103"],
+         sel:["#7dcfff","1;38;5;117"], text:["#c0caf5","38;5;189"] } },
+
+  { name: "Catppuccin Mocha", note: "pastel; nothing shouts",
+    c: { user:["#94e2d5","38;5;116"], info:["#89b4fa","38;5;111"], ok:["#a6e3a1","38;5;151"], fail:["#f38ba8","38;5;211"],
+         warn:["#f9e2af","38;5;223"], add:["#a6e3a1","38;5;151"], del:["#f38ba8","38;5;211"], code:["#f5c2e7","38;5;218"],
+         fenced:["#cdd6f4","38;5;189"], think:["#6c7086","3;38;5;60"], dim:["#7f849c","38;5;103"],
+         sel:["#94e2d5","1;38;5;116"], text:["#cdd6f4","38;5;189"] } },
+
+  { name: "High contrast", note: "every marker uses the bright ANSI pair — max legibility",
+    c: { user:["#4ae5e5","96"], info:["#5c9dff","94"], ok:["#3ee66b","92"], fail:["#ff6b6b","91"],
+         warn:["#ffd34d","93"], add:["#3ee66b","92"], del:["#ff6b6b","91"], code:["#f0c674","38;5;180"],
+         fenced:["#f0c674","38;5;180"], think:["#a8a8a8","3;38;5;248"], dim:["#9aa0aa","38;5;247"],
+         sel:["#4ae5e5","1;96"], text:["#e8ebf0","97"] } },
+
+  { name: "Colourblind-safe", note: "diff uses blue/orange, not red/green — the glyphs still carry it",
+    c: { user:["#2bc4c4","36"], info:["#5c9dff","94"], ok:["#56b4e9","38;5;74"], fail:["#e69f00","38;5;208"],
+         warn:["#f0e442","38;5;227"], add:["#56b4e9","38;5;74"], del:["#e69f00","38;5;208"], code:["#d7af87","38;5;180"],
+         fenced:["#d7af87","38;5;180"], think:["#9a9a9a","3;38;5;249"], dim:["#8a8a8a","38;5;245"],
+         sel:["#6fe3e3","1;36"], text:["#d6d9e0","0"] } },
+
+  { name: "Quiet", note: "desaturated: colour marks the row, the text stays calm",
+    c: { user:["#6fa8a8","38;5;73"], info:["#7d93bd","38;5;67"], ok:["#7fa87f","38;5;108"], fail:["#c08080","38;5;138"],
+         warn:["#bda46a","38;5;179"], add:["#7fa87f","38;5;108"], del:["#c08080","38;5;138"], code:["#b39d80","38;5;180"],
+         fenced:["#b39d80","38;5;180"], think:["#8c8c8c","3;38;5;245"], dim:["#7e838c","38;5;243"],
+         sel:["#8fc7c7","1;38;5;73"], text:["#c3c7cf","38;5;251"] } },
+
+  { name: "Amber CRT", note: "one hue, brightness does the work — novelty, but it reads",
+    c: { user:["#ffb000","38;5;214"], info:["#ffcc66","38;5;221"], ok:["#d99b00","38;5;178"], fail:["#ff6a00","38;5;202"],
+         warn:["#ffd480","38;5;222"], add:["#d99b00","38;5;178"], del:["#ff6a00","38;5;202"], code:["#e0a955","38;5;179"],
+         fenced:["#e0a955","38;5;179"], think:["#8a6a2a","3;38;5;94"], dim:["#a07c31","38;5;136"],
+         sel:["#ffd480","1;38;5;222"], text:["#e8c07a","38;5;180"] } },
+];
+
+const KEYS = ["user", "info", "ok", "fail", "warn", "add", "del", "code", "fenced", "sel", "dim", "think"];
+
+// Derived, not invented: every new role reuses a colour the palette already has,
+// so a theme stays one decision instead of turning into seventeen.
+const DERIVED = {
+  head:  t => t.user,   // a table header — the palette's own accent
+  rule:  t => t.dim,    // the line under it
+  key:   t => t.user,   // a JSON key
+  str:   t => t.ok,     // a string literal (green is the convention)
+  num:   t => t.code,   // a number
+  bool:  t => t.info,   // true / false / null
+  punct: t => t.dim,    // braces, colons, commas — structure, not content
+};
+
+const grid = document.getElementById("grid");
+THEMES.forEach((t, i) => {
+  // theme colours as [css, ansi]; FRAME wants the css side
+  const css = {}; for (const k of KEYS.concat(["text"])) css[k] = t.c[k][0];
+  const ansi = {}; for (const k of KEYS) ansi[k] = t.c[k][1];
+  for (const [role, pick] of Object.entries(DERIVED)) {
+    css[role] = pick(css);
+    ansi[role] = pick(ansi);
+  }
+  // a theme may name its own syntax colours instead of deriving them
+  for (const [role, pair] of Object.entries(t.syn || {})) {
+    css[role] = pair[0];
+    ansi[role] = pair[1];
+  }
+
+  const term = FRAME(css).map(row =>
+    row.length === 0 ? "" : row.map(([colour, text]) => {
+      const italic = colour === css.think ? "font-style:italic;" : "";
+      return `<span style="color:${colour};${italic}">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>`;
+    }).join("")
+  ).join("\n");
+
+  const swatches = KEYS.concat(["key", "str", "num", "bool"]).map(k =>
+    `<span><i style="color:${css[k]}">██</i> ${k} <b class="hl" style="color:${css[k]}">${ansi[k]}</b></span>`
+  ).join("");
+
+  const card = document.createElement("section");
+  card.className = "card";
+  card.innerHTML =
+    `<header><span class="n">${String(i + 1).padStart(2, "0")}</span>` +
+    `<span class="name">${t.name}</span><span class="note">${t.note}</span></header>` +
+    `<pre class="term" style="background:#17181c">${term}</pre>` +
+    `<div class="sw">${swatches}</div>`;
+  grid.appendChild(card);
+});
+</script>

@@ -38,6 +38,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
     Cmd { name: "/plan", desc: "toggle plan mode: read and propose, change nothing", soon: false },
     Cmd { name: "/settings", desc: "choose which segments the status line shows", soon: false },
+    Cmd { name: "/themes", desc: "pick the colour palette, or /themes <name>", soon: false },
     Cmd { name: "/mcp", desc: "list MCP servers and switch them on or off", soon: false },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
     Cmd { name: "/export", desc: "/export [file.md] - write the transcript out as markdown", soon: false },
@@ -83,6 +84,7 @@ pub enum PickKind {
     Tree,     // branch the session at the chosen entry
     Settings, // flip a status-line segment; the only kind Enter does not close
     Mcp,      // connect/disconnect an MCP server; also stays open on Enter
+    Theme,    // switch the palette; stays open, so you can walk the list and watch
     Ask,      // answer a pending question; Enter sends the row's value back
 }
 
@@ -311,6 +313,9 @@ pub fn ui_loop(
     seed_msg_num: usize,
 ) -> io::Result<Exit> {
     let cfg = crate::config::Config::load();
+    // a saved palette that is no longer in the table keeps the default and says
+    // so below, rather than leaving the user wondering why /themes did nothing
+    let bad_theme = cfg.theme.as_deref().filter(|n| !super::theme::set(n)).map(String::from);
     let mut app = App {
         lines: seed_lines, current: String::new(),
         ask: None, input: String::new(), cursor: 0, done: true, model, session,
@@ -329,6 +334,9 @@ pub fn ui_loop(
     if let Some(e) = &cfg.err {
         app.lines.push(format!("  ⚠ {e}"));
         app.lines.push("  ⚠ no saved models, permissions or MCP servers loaded; saving is off".into());
+    }
+    if let Some(name) = bad_theme {
+        app.lines.push(format!("  ⚠ no theme called {name}; using {}", super::theme::name()));
     }
     let mut state = RenderState::new();
 
@@ -736,6 +744,15 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/settings" => pick_settings(app),
+        // /themes <name> switches outright; bare /themes opens the list
+        "/themes" => {
+            if arg.is_empty() {
+                pick_themes(app)
+            } else {
+                apply_theme(app, arg);
+                app.pick = None; // named outright: no list to leave open
+            }
+        }
         "/mcp" => pick_mcp(app),
         "/tree" => { let _ = job_tx.send(Job::Tree); }
         "/export" => {
@@ -960,12 +977,18 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
                 toggle_mcp(app, &value);
                 return;
             }
+            // the whole screen is the preview, so the list stays open: Enter
+            // applies, Esc closes, and walking the rows is how you compare
+            if p.kind == PickKind::Theme {
+                apply_theme(app, &value);
+                return;
+            }
             let Some(p) = app.pick.take() else { return };
             match p.kind {
                 PickKind::Session => { let _ = job_tx.send(Job::ResumePath(value)); }
                 PickKind::Model => switch_model(app, job_tx, &value),
                 PickKind::Tree => { let _ = job_tx.send(Job::Select(value)); }
-                PickKind::Settings | PickKind::Mcp => {} // returned above; closing is Esc's job
+                PickKind::Settings | PickKind::Mcp | PickKind::Theme => {} // returned above; closing is Esc's job
                 PickKind::Ask => {} // handled at the top: an answer is not a list action
             }
             return;
@@ -1061,6 +1084,45 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
 /// /settings: the status-line segments as an on/off list. Rebuilt in place
 /// after every toggle so the marks are the live state, keeping the cursor and
 /// the typed filter where they were — you are usually flipping a second row.
+/// /themes with no argument. The rows carry the note from the table, so the
+/// list explains itself rather than making you try all fifteen.
+fn pick_themes(app: &mut App) {
+    let here = super::theme::name();
+    let rows: Vec<(String, String)> = super::theme::THEMES
+        .iter()
+        .map(|t| {
+            let mark = if t.name == here { "•" } else { " " };
+            (format!("{mark} {:<14} {}", t.name, t.note), t.name.to_string())
+        })
+        .collect();
+    let (idx, top, filter) = match app.pick.take() {
+        Some(p) if p.kind == PickKind::Theme => (p.idx, p.top, p.filter),
+        // open on the row you are using, not on row 0
+        _ => {
+            let i = super::theme::index_of(here).unwrap_or(0);
+            (i, i.saturating_sub(PICK_ROWS - 1), String::new())
+        }
+    };
+    let mut p = Pick { kind: PickKind::Theme, title: "palette".into(), rows, idx, top, filter };
+    p.idx = p.idx.min(p.visible().len().saturating_sub(1));
+    app.pick = Some(p);
+}
+
+/// Switch and save. The redraw happens on the next frame anyway, so there is
+/// nothing to repaint here — the whole screen is already the preview.
+fn apply_theme(app: &mut App, name: &str) {
+    if !super::theme::set(name) {
+        app.notice = Some((format!("no theme called {name}"), std::time::Instant::now()));
+        return;
+    }
+    let mut cfg = crate::config::Config::load();
+    cfg.theme = Some(name.to_string());
+    if let Err(e) = cfg.save() {
+        app.notice = Some((format!("theme not saved: {e}"), std::time::Instant::now()));
+    }
+    pick_themes(app); // redraw the list so the • moves to the row you just picked
+}
+
 fn pick_settings(app: &mut App) {
     let f = app.footer.clone();
     // no on-marker here: the picker draws ▸ for the cursor, and a second ▸ for

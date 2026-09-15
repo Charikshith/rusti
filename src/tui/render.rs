@@ -11,6 +11,7 @@ use crossterm::{
 };
 
 use super::app::{self, App, CMDS, MENU_ROWS};
+use super::theme;
 use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
 
 /// Braille spinner frames (~20fps at the 50ms poll rate).
@@ -89,21 +90,36 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
             return;
         }
         // model prose: markdown, one source line at a time so ``` fences keep
-        // their state and code never gets reflowed
+        // their state and code never gets reflowed. A table is the exception —
+        // its columns cannot be measured one line at a time, so it is taken as
+        // a block and the cursor jumps past it.
+        let src: Vec<&str> = l.split('\n').collect();
         let mut fence = false;
-        for src in l.split('\n') {
-            if src.trim_start().starts_with("```") {
+        let mut i = 0;
+        while i < src.len() {
+            let line = src[i];
+            if line.trim_start().starts_with("```") {
                 fence = !fence;
+                i += 1;
                 continue; // the fence itself is not drawn; the body is coloured
             }
             if fence {
-                all.push((b'm', format!("  {FENCED}{}{RESET}", truncate_str(src, inner_w))));
+                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w)))));
+                i += 1;
                 continue;
             }
-            let (cs, runs) = md_line(src);
+            if let Some((rows, used)) = table_block(&src[i..]) {
+                for row in render_table(&rows, inner_w) {
+                    all.push((b'm', row));
+                }
+                i += used;
+                continue;
+            }
+            let (cs, runs) = md_line(line);
             for (x, y) in wrap_ranges(&cs, inner_w) {
                 all.push((b'm', md_row(&cs, &runs, x, y)));
             }
+            i += 1;
         }
     };
     for l in visible(&app.lines, app.expand) {
@@ -155,8 +171,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // the live frame gets the accent; every other hint is plain dim text
     frame.push(match hint.as_str() {
         "" => String::new(),
-        h if h.starts_with(spin) => format!("\x1b[33m{spin}\x1b[0m\x1b[2m working…\x1b[0m"),
-        h => format!("\x1b[2m{}\x1b[0m", truncate_str(h, w)),
+        h if h.starts_with(spin) => {
+            let t = theme::current();
+            format!("{}{spin}{RESET}{} working…{RESET}", t.warn, t.dim)
+        }
+        h => format!("{}{}{RESET}", theme::current().dim, truncate_str(h, w)),
     });
 
     let input_len = input.len();
@@ -166,7 +185,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         &app.footer, crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
         app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(),
     );
-    frame.push(format!("\x1b[2m{}\x1b[0m", truncate_str(&footer, w)));
+    frame.push(format!("{}{}{RESET}", theme::current().dim, truncate_str(&footer, w)));
 
     // ── differential draw ──
     let mut out = stdout();
@@ -223,7 +242,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 fn panel_rows(app: &App, w: usize) -> Vec<String> {
     let sel_row = |s: &str, sel: bool| {
         let s = truncate_str(s, w);
-        if sel { format!("[36m{s}[0m") } else { format!("[2m{s}[0m") }
+        let t = theme::current();
+        if sel { format!("{}{s}{RESET}", t.sel) } else { format!("{}{s}{RESET}", t.dim) }
     };
 
     if let Some(p) = &app.pick {
@@ -233,6 +253,7 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
             app::PickKind::Tree => "↑/↓ select · enter branch here · type to filter · esc cancel",
             app::PickKind::Settings => "↑/↓ select · enter toggle · esc close",
             app::PickKind::Mcp => "↑/↓ select · enter connect/disconnect · esc close",
+            app::PickKind::Theme => "↑/↓ select · enter apply · type to filter · esc close",
             app::PickKind::Ask => "↑/↓ select · enter confirm · 1-9 answer outright · esc no",
         };
         let vis = p.visible();
@@ -311,11 +332,9 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// Reasoning: italic light grey, the whole block. 256-colour 249 (#b2b2b2) rather
 /// than ESC[2m — Windows Terminal renders dim as barely-darker, which is what made
 /// reasoning and answer text look identical.
-const THINK: &str = "\x1b[3;38;5;249m";
 /// Tool output text. 256-colour 245 (#8a8a8a) for the same reason THINK avoids
 /// ESC[2m — and a shade under THINK so reasoning still reads as the brighter of
 /// the two greys, with the italic carrying the rest of the difference.
-const DIM: &str = "\x1b[38;5;245m";
 const RESET: &str = "\x1b[0m";
 
 /// Rows that carry a status marker; these keep the per-row glyph colouring.
@@ -349,19 +368,21 @@ fn line_style(l: &str) -> u8 {
 }
 
 fn colorize_row(style: u8, s: &str, spin: char) -> String {
+    let t = theme::current();
+    let (think, dim) = (t.think, t.dim);
     match style {
         // the │ is an internal sentinel for line_style, never drawn: italic grey
         // carries the block on its own, the way the reference terminals do it
-        b't' => return format!("  {THINK}{}{RESET}", s.strip_prefix("  │ ").unwrap_or(s)),
-        b's' => return format!("\x1b[2m{s}\x1b[0m"),
+        b't' => return format!("  {think}{}{RESET}", s.strip_prefix("  │ ").unwrap_or(s)),
+        b's' => return format!("{dim}{s}{RESET}"),
         // the sign is what the eye should catch, so it keeps full colour while
         // the code itself stays dim — a hunk is context, not the answer
         b'-' | b'+' => {
-            let colour = if style == b'-' { "\x1b[31m" } else { "\x1b[32m" };
+            let colour = if style == b'-' { t.del } else { t.add };
             // "  · - " is the marker; everything after it is the line's own code
             let cut = s.char_indices().nth(6).map(|(i, _)| i).unwrap_or(s.len());
             let (sign, rest) = s.split_at(cut);
-            return format!("{colour}{sign}{RESET}{DIM}{rest}{RESET}");
+            return format!("{colour}{sign}{RESET}{dim}{rest}{RESET}");
         }
         // the user's own query: cyan "N›" marker so it's easy to find when
         // scrolling back, text at full brightness like the model's answer.
@@ -370,7 +391,7 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         b'u' => {
             let i = s.bytes().take_while(u8::is_ascii_digit).count();
             return if i > 0 && s[i..].starts_with("› ") {
-                format!("\x1b[36m{}›\x1b[0m{}", &s[..i], &s[i + '›'.len_utf8()..])
+                format!("{}{}›{RESET}{}", t.user, &s[..i], &s[i + '›'.len_utf8()..])
             } else {
                 format!("  {s}")
             };
@@ -384,17 +405,17 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         // "running" and "finished a while ago" cannot be confused at a glance.
         // ToolEnd rewrites this row to ✓/✗, which lands in the dim branches
         // below — that swap is what un-bolds it.
-        format!("  \x1b[33m{spin}\x1b[0m {BOLD}{rest}{RESET}")
+        format!("  {}{spin}{RESET} {BOLD}{rest}{RESET}", t.warn)
     } else if let Some(rest) = s.strip_prefix("  ✓ ") {
-        format!("  \x1b[32m✓\x1b[0m {DIM}{rest}{RESET}")
+        format!("  {}✓{RESET} {dim}{rest}{RESET}", t.ok)
     } else if let Some(rest) = s.strip_prefix("  ✗ ") {
-        format!("  \x1b[31m✗\x1b[0m {DIM}{rest}{RESET}")
+        format!("  {}✗{RESET} {dim}{rest}{RESET}", t.fail)
     } else if let Some(rest) = s.strip_prefix("  ⚠ ") {
-        format!("  \x1b[33m⚠\x1b[0m {DIM}{rest}{RESET}")
+        format!("  {}⚠{RESET} {dim}{rest}{RESET}", t.warn)
     } else if let Some(rest) = s.strip_prefix("  ℹ ") {
-        format!("  \x1b[34mℹ\x1b[0m {DIM}{rest}{RESET}")
+        format!("  {}ℹ{RESET} {dim}{rest}{RESET}", t.info)
     } else {
-        format!("  {DIM}{s}{RESET}") // wrapped continuation of a tool row
+        format!("  {dim}{s}{RESET}") // wrapped continuation of a tool row
     }
 }
 
@@ -404,8 +425,142 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
 // measures real columns instead of counting asterisks it is about to delete.
 
 const BOLD: &str = "\x1b[1m";
-const CODE: &str = "\x1b[36m"; // inline `code`
-const FENCED: &str = "\x1b[38;5;180m"; // fenced code block body
+fn code() -> &'static str { theme::current().code }     // inline `code`
+
+// ── tables ──────────────────────────────────────────────────────────────────
+// A pipe table only means anything as a block: the columns are as wide as the
+// widest cell in them, which cannot be known one line at a time. Raw `| … |`
+// rows in the transcript were the whole complaint.
+
+/// The rows of a table starting at `src[0]` and **how many source lines they
+/// came from**, or None if this is not one. A table is a pipe row, then a
+/// `|---|` separator, then pipe rows: the separator is what tells a table from
+/// a line of prose that happens to contain a pipe.
+///
+/// The count is returned rather than recomputed by the caller because it is not
+/// `rows.len()`: the separator is consumed but is not a row. Deriving it at the
+/// call site left the last row to be drawn twice — once in the table, once as
+/// raw pipes underneath it.
+fn table_block<'a>(src: &[&'a str]) -> Option<(Vec<Vec<&'a str>>, usize)> {
+    let is_row = |s: &str| s.trim_start().starts_with('|');
+    let is_rule = |s: &str| {
+        let t = s.trim();
+        t.starts_with('|') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) && t.contains('-')
+    };
+    if !is_row(src.first()?) || !is_rule(src.get(1)?) {
+        return None;
+    }
+    let cells = |s: &'a str| -> Vec<&'a str> {
+        let t = s.trim().trim_start_matches('|').trim_end_matches('|');
+        t.split('|').map(str::trim).collect()
+    };
+    let mut rows = vec![cells(src[0])];
+    for line in src.iter().skip(2).take_while(|s| is_row(s)) {
+        rows.push(cells(line));
+    }
+    let used = rows.len() + 1; // + the separator
+    Some((rows, used))
+}
+
+/// Header in the accent, a rule under it, then the body. Columns are as wide as
+/// their widest cell; if the total will not fit, the widest column gives back
+/// first, because that is the one with slack. Cells truncate rather than wrap —
+/// a wrapped cell destroys the alignment that makes a table worth drawing.
+fn render_table(rows: &[Vec<&str>], w: usize) -> Vec<String> {
+    let t = theme::current();
+    // Cells are markdown too: `code` and **bold** have to lose their markers
+    // before anything is measured, or a column is padded for characters that
+    // are never drawn — and the backticks show up in the table.
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| r.iter().map(|c| md_line(c).0.iter().collect::<String>()).collect())
+        .collect();
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if cols == 0 {
+        return Vec::new();
+    }
+    let mut width: Vec<usize> = (0..cols)
+        .map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| s.chars().count()).max().unwrap_or(0))
+        .collect();
+    // gap of 1 between columns, 2 for the transcript indent
+    let budget = w.saturating_sub(2);
+    while width.iter().sum::<usize>() + cols.saturating_sub(1) > budget {
+        let widest = width.iter().enumerate().max_by_key(|(_, n)| **n).map(|(i, _)| i).unwrap_or(0);
+        if width[widest] <= 3 {
+            break; // nothing left to give; the last column will be cut instead
+        }
+        width[widest] -= 1;
+    }
+    let lay = |cells: &[String]| {
+        let mut s = String::from("  ");
+        for (c, wid) in width.iter().enumerate() {
+            let cell = cells.get(c).map(String::as_str).unwrap_or("");
+            let cell = truncate_str(cell, *wid);
+            s.push_str(&cell);
+            let pad = wid.saturating_sub(cell.chars().count()) + usize::from(c + 1 < cols);
+            s.extend(std::iter::repeat(' ').take(pad));
+        }
+        s.trim_end().to_string()
+    };
+    let mut out = vec![format!("{}{BOLD}{}{RESET}", t.head(), lay(&rows[0]))];
+    let rule: Vec<String> = width.iter().map(|n| "─".repeat(*n)).collect();
+    out.push(format!("{}  {}{RESET}", t.rule(), rule.join(" ")));
+    for row in rows.iter().skip(1) {
+        out.push(lay(row));
+    }
+    out
+}
+
+// ── syntax highlighting ─────────────────────────────────────────────────────
+// One tokeniser for every language, because the alternative is a grammar per
+// language and this only has to beat "the whole block is one colour". It marks
+// what is unambiguous across C-likes, JSON, TOML and shell: quoted strings, a
+// string used as a key, numbers, the three word-literals, and punctuation.
+
+/// Colour one line of a fenced block. Anything not recognised keeps the block's
+/// own colour, so an unknown language degrades to what rusti did before.
+fn highlight(line: &str) -> String {
+    let t = theme::current();
+    let cs: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '"' || c == '\'' {
+            let mut j = i + 1;
+            while j < cs.len() && cs[j] != c {
+                j += if cs[j] == '\\' { 2 } else { 1 }; // an escaped quote does not close it
+            }
+            let end = (j + 1).min(cs.len());
+            let text: String = cs[i..end].iter().collect();
+            // a string followed by ':' names something — that is a key
+            let key = cs[end..].iter().find(|c| !c.is_whitespace()) == Some(&':');
+            out.push_str(&format!("{}{text}{RESET}", if key { t.key() } else { t.string() }));
+            i = end;
+        } else if c.is_ascii_digit() && !cs[..i].last().is_some_and(|p| p.is_alphanumeric() || *p == '_') {
+            let j = cs[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == '.').count() + i;
+            out.push_str(&format!("{}{}{RESET}", t.num(), cs[i..j].iter().collect::<String>()));
+            i = j;
+        } else if c.is_alphabetic() || c == '_' {
+            let j = cs[i..].iter().take_while(|c| c.is_alphanumeric() || **c == '_').count() + i;
+            let word: String = cs[i..j].iter().collect();
+            match word.as_str() {
+                "true" | "false" | "null" | "None" | "nil" => {
+                    out.push_str(&format!("{}{word}{RESET}", t.boolean()))
+                }
+                _ => out.push_str(&format!("{}{word}{RESET}", t.fenced)),
+            }
+            i = j;
+        } else if "{}[]()<>,:;=".contains(c) {
+            out.push_str(&format!("{}{c}{RESET}", t.punct()));
+            i += 1;
+        } else {
+            out.push_str(&format!("{}{c}{RESET}", t.fenced));
+            i += 1;
+        }
+    }
+    out
+}
 
 /// One source line as visible chars plus the style runs over them (char ranges).
 fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
@@ -446,7 +601,7 @@ fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
             if let Some(end) = (i + 1..cs.len()).find(|&j| cs[j] == '`') {
                 let s = out.len();
                 out.extend_from_slice(&cs[i + 1..end]);
-                runs.push((s, out.len(), CODE));
+                runs.push((s, out.len(), code()));
                 i = end + 1;
                 continue;
             }
@@ -530,7 +685,8 @@ fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
     let mut seen = 0; // chars before this line, the '\n's included
     for (i, line) in input.split('\n').enumerate() {
         let n = line.chars().count();
-        let prefix = if i == 0 { "\x1b[36m> \x1b[0m" } else { "  " };
+        let prompt = format!("{}> {RESET}", theme::current().user);
+        let prefix: &str = if i == 0 { &prompt } else { "  " };
         // exactly one row owns the cursor: the next line starts at seen + n + 1,
         // so the ranges [seen, seen+n] never overlap
         out.push(if cursor >= seen && cursor <= seen + n {
@@ -562,6 +718,93 @@ fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
 mod tests {
     use super::*;
 
+
+    /// Strip SGR sequences: these tests care about layout and which colour a
+    /// token got, not about where the escapes land.
+    #[cfg(test)]
+    fn bare(s: &str) -> String {
+        let mut out = String::new();
+        let mut cs = s.chars();
+        while let Some(c) = cs.next() {
+            if c == '\x1b' {
+                for c in cs.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The separator row is what makes it a table: without it, a line of prose
+    /// with a pipe in it would be swallowed as one. The columns then have to
+    /// line up, which is the entire reason for rendering instead of printing.
+    #[test]
+    fn a_pipe_table_becomes_aligned_columns() {
+        let src = vec![
+            "| Tool | Description |",
+            "|------|-------------|",
+            "| `index_repository` | Index a codebase |",
+            "| `search_graph` | Search the graph |",
+            "not part of the table",
+        ];
+        let (rows, used) = table_block(&src).expect("this is a table");
+        assert_eq!(rows.len(), 3, "the prose line after it is not a row: {rows:?}");
+        assert_eq!(rows[0], vec!["Tool", "Description"]);
+        // the separator is consumed but is not a row: deriving this from
+        // rows.len() drew the last row twice, once as raw pipes
+        assert_eq!(used, 4, "header + separator + two body rows");
+
+        let out: Vec<String> = render_table(&rows, 60).iter().map(|r| bare(r)).collect();
+        assert_eq!(out.len(), 4, "header, rule, two body rows");
+        // every cell of column 2 starts at the same column
+        let at = |r: &str, needle: &str| r.find(needle).unwrap();
+        assert_eq!(at(&out[0], "Description"), at(&out[2], "Index a codebase"));
+        assert_eq!(at(&out[2], "Index a codebase"), at(&out[3], "Search the graph"));
+        assert!(out[1].contains("─"), "the header gets a rule: {:?}", out[1]);
+        assert!(render_table(&rows, 60)[0].contains(theme::current().head()), "header takes the accent");
+        // a cell is markdown too: the backticks must not reach the screen, and
+        // the column must not be padded for characters that are never drawn
+        assert!(out[2].contains("index_repository"), "{:?}", out[2]);
+        assert!(!out[2].contains('`'), "backticks must be stripped: {:?}", out[2]);
+        assert_eq!(at(&out[0], "Description"), at(&out[3], "Search the graph"));
+
+        // a line with a pipe but no rule under it is prose, not a table
+        assert!(table_block(&["a | b", "still prose"]).is_none());
+        // narrow: columns give back width, rows do not multiply
+        let narrow: Vec<String> = render_table(&rows, 26).iter().map(|r| bare(r)).collect();
+        assert_eq!(narrow.len(), 4, "a cramped table truncates, it does not wrap");
+        assert!(narrow.iter().all(|r| r.chars().count() <= 26), "{narrow:?}");
+    }
+
+    /// The key/string split is the subtle half: both are quoted, and what tells
+    /// them apart is the colon that follows one of them.
+    #[test]
+    fn a_fenced_line_is_coloured_by_token() {
+        let t = theme::current();
+        let line = highlight(r#"  "command": "rusti.exe", "timeout": 30, "enabled": true"#);
+        let colour_of = |needle: &str| {
+            let i = line.find(needle).expect(needle);
+            let start = line[..i].rfind('\x1b').expect("a colour before it");
+            line[start..i].to_string()
+        };
+        assert_eq!(colour_of(r#""command""#), t.key(), "a quoted name before a colon is a key");
+        assert_eq!(colour_of(r#""rusti.exe""#), t.string(), "the value is a string");
+        assert_eq!(colour_of("30"), t.num());
+        assert_eq!(colour_of("true"), t.boolean());
+        assert_eq!(bare(&line), r#"  "command": "rusti.exe", "timeout": 30, "enabled": true"#,
+            "highlighting must not change one visible character");
+
+        // an escaped quote does not end the string, or the rest of the line
+        // would be coloured as if it were outside it
+        let esc = highlight(r#""a\"b" 12"#);
+        assert_eq!(bare(&esc), r#""a\"b" 12"#);
+        assert_eq!(esc.matches(t.string()).count(), 1, "one string, not two: {esc:?}");
+    }
+
     /// The bug this pins: word_wrap used to drop the leading indent, so every
     /// marker row missed its colorize_row branch and rendered plain. Both halves
     /// must agree, so run a row through the real pipeline, not colorize_row alone.
@@ -577,28 +820,28 @@ mod tests {
         // the glyph turns with the frame, and the text is bold, not dim
         let run = colorize_row(line_style("  ⠋ pwd"), "  ⠋ pwd", '⠹');
         assert!(run.contains('⠹'), "spinner must show the live frame, not the stored ⠋: {run:?}");
-        assert!(run.contains(BOLD) && !run.contains(DIM), "running tool must be bold: {run:?}");
-        assert!(first("  ✓ Cargo.toml  0ms").contains(DIM), "a finished tool un-bolds to dim");
+        assert!(run.contains(BOLD) && !run.contains(theme::current().dim), "running tool must be bold: {run:?}");
+        assert!(first("  ✓ Cargo.toml  0ms").contains(theme::current().dim), "a finished tool un-bolds to dim");
         assert!(!first("  ✓ Cargo.toml  0ms").contains(BOLD), "a finished tool is not bold");
         assert!(first("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
         assert!(first("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
         assert!(first("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
         assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
-        assert!(first("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
+        assert!(first("  · 32 tok").starts_with(theme::current().dim), "stats must be dim");
         // a hunk row is a stats row until the sign is read, so the order of the
         // line_style arms is the whole feature: "  · - x" must not land on b's'
         assert!(first("  · -    2  let x = 1;").starts_with("\x1b[31m"), "a removed line must be red");
         assert!(first("  · +    2  let x = 2;").starts_with("\x1b[32m"), "an added line must be green");
-        assert!(first("  · +    2  let x = 2;").contains(DIM), "the code itself stays dim");
-        assert!(first("  · … 3 more changed lines").starts_with("\x1b[2m"), "the overflow row is not a hunk row");
+        assert!(first("  · +    2  let x = 2;").contains(theme::current().dim), "the code itself stays dim");
+        assert!(first("  · … 3 more changed lines").starts_with(theme::current().dim), "the overflow row is not a hunk row");
         // tool text is dim, so a wall of output recedes behind the prose
-        assert!(first("  ✓ Cargo.toml  0ms").contains(DIM), "tool text must be dim");
+        assert!(first("  ✓ Cargo.toml  0ms").contains(theme::current().dim), "tool text must be dim");
         // the user's query keeps a cyan marker and BRIGHT text, on every row —
         // wrapped rows carry no marker, so they must not fall into the dim branch
         let q = rows("9› hello there, this is a long query that will certainly wrap past eighty columns");
         assert!(q[0].starts_with("\x1b[36m9›\x1b[0m"), "query marker must be cyan: {:?}", q[0]);
-        assert!(q.len() > 1 && q.iter().all(|r| !r.contains(DIM)), "query must stay bright: {q:?}");
+        assert!(q.len() > 1 && q.iter().all(|r| !r.contains(theme::current().dim)), "query must stay bright: {q:?}");
         assert_eq!(first("12› hi there"), "\x1b[36m12›\x1b[0m hi there");
     }
 
@@ -618,14 +861,14 @@ mod tests {
         let (cs, runs) = md_line("- `grep`: Search **fast**.");
         let at = |i: usize| runs.iter().find(|(x, y, _)| i >= *x && i < *y).map(|(_, _, c)| *c);
         let s: String = cs.iter().collect();
-        assert_eq!(at(s.find("grep").unwrap()), Some(CODE));
+        assert_eq!(at(s.find("grep").unwrap()), Some(code()));
         assert_eq!(at(s.find("fast").unwrap()), Some(BOLD));
         assert_eq!(at(s.find("Search").unwrap()), None);
 
         // a heading keeps bold across an inline code span nested inside it
         let (cs, runs) = md_line("## use `grep` now");
         let row = md_row(&cs, &runs, 0, cs.len());
-        assert!(row.contains(CODE) && row.matches(BOLD).count() >= 2, "{row:?}");
+        assert!(row.contains(code()) && row.matches(BOLD).count() >= 2, "{row:?}");
     }
 
     #[test]
@@ -653,14 +896,14 @@ mod tests {
         let rows: Vec<String> =
             word_wrap(&long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40), '⠋')).collect();
         assert!(rows.len() > 3, "expected a wrapped block, got {}", rows.len());
-        assert!(rows.iter().all(|r| r.contains(THINK)), "every row must be italic grey: {rows:?}");
+        assert!(rows.iter().all(|r| r.contains(theme::current().think)), "every row must be italic grey: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains('│')), "the sentinel bar is never drawn");
         // the answer is the plain one, so the two can never be confused
-        assert!(!colorize_row(line_style("an answer"), "an answer", '⠋').contains(THINK));
+        assert!(!colorize_row(line_style("an answer"), "an answer", '⠋').contains(theme::current().think));
         // paragraph breaks inside a block survive and stay styled
         let two = "  │ first thought\n\nsecond thought";
         let st = line_style(two);
-        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(THINK)));
+        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(theme::current().think)));
     }
 
     /// Ctrl+O reveals a successful tool's output. The rows are always in

@@ -62,6 +62,11 @@ pub struct Config {
     pub allow: Vec<String>,
     #[serde(default)]
     pub footer: Footer,
+    /// The palette /themes picked, by name. None is the built-in default, and
+    /// an unknown name is reported rather than applied — a theme table that
+    /// loses an entry must not silently restyle the terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// BTreeMap, not HashMap: the tool list sent to the model must be in a
     /// stable order, or every run reshuffles it and defeats prompt caching.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]

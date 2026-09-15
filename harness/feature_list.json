@@ -865,6 +865,44 @@
         "Sign coloured, code dim, rather than colouring the whole row: a hunk is context under a result line, and two fully-coloured blocks would outshout the answer.",
         "Not done: interleaving removed and added lines pair by pair. That needs an LCS, and diff_block deliberately has none - the callers already know where the change is."
       ]
+    },
+    {
+      "id": "feat-070",
+      "name": "/themes: fifteen palettes, picked from a list and remembered",
+      "description": "The colours were literals spread through render.rs - a cyan doing four different jobs and an ANSI blue 34 that is near-unreadable on a dark background. src/tui/theme.rs now holds a table of fifteen palettes (the ones drawn up in palette-samples.html: current, recommended, periwinkle, teal, violet, one-accent, solarized, gruvbox, nord, tokyo-night, catppuccin, high-contrast, colourblind, quiet, amber), each a struct of complete SGR sequences built by a macro from the bare codes. render.rs reads theme::current() instead of literals. /themes opens the picker with the list and each palette's note, /themes <name> switches outright, and the choice is saved to model.json so it outlives the process.",
+      "dependencies": [
+        "feat-024",
+        "feat-069"
+      ],
+      "status": "done",
+      "evidence": "cargo test 36 passed (one new), --self-test OK, release build with no warnings. The theme test asserts every field of every theme is a well-formed SGR sequence, names are unique and typeable as an argument, and theme 0 is still 'current' - a hand-written table's failure mode is a typo, so that is what it checks.",
+      "decisions": [
+        "Theme 0 is the palette that shipped before this feature, and the default stays there. An update that restyles everyone's terminal without being asked is the opposite of a theme feature.",
+        "The picker stays open on Enter, like /settings and /mcp: the whole screen is the preview, so walking the list IS the comparison. Esc closes.",
+        "The test checks index_of, not set(): set writes a global that the render tests read, and cargo runs tests in parallel, so flipping the theme mid-suite would make them flaky.",
+        "An unknown name in model.json keeps the default and says so in the transcript at startup, rather than being ignored - a theme that quietly does nothing is a bug report waiting to happen.",
+        "Stats rows moved from ESC[2m to the theme's dim grey. ESC[2m is barely darker in Windows Terminal, which is why THINK and DIM avoided it already; now every secondary row agrees."
+      ]
+    },
+    {
+      "id": "feat-071",
+      "name": "Markdown tables render as columns, and fenced blocks are syntax-highlighted",
+      "description": "A model that answers with a table printed raw pipes, and a fenced block was one flat tan. Tables: table_block() takes a run of lines as a block - a pipe row, a |---| separator, then pipe rows - because a column's width is the widest cell in it and cannot be known one line at a time; render_table() lays out aligned columns with the header in the theme's accent and a rule under it. Highlighting: one language-agnostic tokeniser marks quoted strings, a string used as a key (the colon after it is the tell), numbers, true/false/null and punctuation, leaving anything unrecognised in the block's own colour. New theme roles head/rule/key/string/num/boolean/punct derive from the palette a theme already has, so all fifteen got highlighting without new colour decisions; 'current' overrides the four syntax colours with Nord's, chosen off the sample sheet.",
+      "dependencies": [
+        "feat-024",
+        "feat-070"
+      ],
+      "status": "done",
+      "evidence": "cargo test 38 passed (two new), --self-test OK, release build with no warnings. The table test asserts the separator row is what distinguishes a table from prose containing a pipe, that column 2 starts at the same offset in header and both body rows, and that a 26-column terminal truncates instead of multiplying rows. The highlight test asserts the key/string split (both quoted - the colon decides), that an escaped quote does not end a string, and that highlighting changes not one visible character. FIXED after live use (2026-09-15): the first real table showed two bugs the test had not covered. (1) The last row was drawn twice - once in the table, once as raw pipes - because the caller advanced by rows.len(), and the separator is consumed but is not a row; table_block now returns the consumed count with the rows, so the two cannot drift. (2) Cells kept their markdown: `index_repository` reached the screen with its backticks and the column was padded for characters that are never drawn. Cells now go through md_line before anything is measured. Both are pinned by the test.",
+      "decisions": [
+        "A rule, not a box: the transcript is 2-space-indented plain rows, and box-drawing walls fight that. One ─ line under the header is what a terminal table needs.",
+        "Cells truncate, never wrap. A wrapped cell destroys the column alignment that is the entire reason for rendering the table rather than printing it.",
+        "When a table will not fit, the WIDEST column gives back width first - it is the one with slack, and shrinking every column equally would cut short cells that fit fine.",
+        "One tokeniser for every language, not a grammar per language. It only has to beat 'the whole block is one colour', and it marks what is unambiguous across C-likes, JSON, TOML and shell.",
+        "Syntax roles derive from the palette by default (key = accent, string = ok, number = code, boolean = info, punctuation = grey), so adding a theme stays one decision instead of seventeen.",
+        "The colours for 'current' were read off the screenshot's pixels rather than guessed: decoding it gave #88c0d0 and #a3be8c on #7b8496, which identified Nord exactly.",
+        "table_block returns (rows, consumed) rather than letting the caller derive it. The count is not rows.len() - the separator is eaten and is not a row - and deriving it at the call site is exactly what drew the last row twice."
+      ]
     }
   ]
 }

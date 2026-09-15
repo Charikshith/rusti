@@ -5,6 +5,7 @@
 
 mod app;
 mod render;
+mod theme;
 mod plain;
 
 use std::io::{self, Write, stdout};
