@@ -19,8 +19,11 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
                 writeln!(out, "  {} {summary}  {}", if ok { "✓" } else { "✗" }, ai_core::took(ms))?;
                 for l in ai_core::fail_tail(&output) { writeln!(out, "{l}")?; }
             }
-            Ok(ai_core::Event::Ask { question, reply }) => {
+            Ok(ai_core::Event::Ask { question, choices, reply }) => {
                 writeln!(err, "? {question}")?;
+                for (label, value) in &choices {
+                    writeln!(err, "    {value} — {label}")?;
+                }
                 write!(err, "> ")?;
                 err.flush()?;
                 let mut line = String::new();

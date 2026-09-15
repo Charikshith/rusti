@@ -65,8 +65,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let h = rows as usize;
     let inner_w = w.saturating_sub(2); // transcript content width (2-space indent)
 
-    // bottom is pinned: blank spacer, panel (picker or slash menu), input, status.
-    // The input is as tall as the draft — Shift+Enter puts newlines in it.
+    // bottom is pinned: blank spacer, panel (picker or slash menu), hint, input,
+    // footer. The input is as tall as the draft — Shift+Enter puts newlines in it.
     let panel = panel_rows(app, w);
     // While a picker is open the filter IS the draft: it types at the prompt,
     // not in the picker header. The real draft is hidden until Esc restores it.
@@ -75,7 +75,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         None => (app.input.as_str(), app.cursor),
     };
     let input = input_rows(draft, caret, w.saturating_sub(3));
-    let bottom_rows = 2 + input.len() + panel.len();
+    let bottom_rows = 3 + input.len() + panel.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
     // (style, row). The style is read from the logical line ONCE and carried to
@@ -135,7 +135,9 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     frame.extend(panel);
 
-    // status line, drawn ABOVE the input: session/model/branch left, spinner + hint right
+    // Two rows, not one: the hint rides ABOVE the input because it is what
+    // changes mid-turn and belongs next to the caret, while session/model/branch
+    // stays BELOW, pinned to the bottom edge where it can be read at a glance.
     let armed = app.armed();
     let hint = if armed {
         "press ctrl+c again to exit".to_string()
@@ -150,31 +152,21 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     } else {
         String::new()
     };
+    // the live frame gets the accent; every other hint is plain dim text
+    frame.push(match hint.as_str() {
+        "" => String::new(),
+        h if h.starts_with(spin) => format!("\x1b[33m{spin}\x1b[0m\x1b[2m working…\x1b[0m"),
+        h => format!("\x1b[2m{}\x1b[0m", truncate_str(h, w)),
+    });
+
+    let input_len = input.len();
+    frame.extend(input);
+
     let footer = app::footer_right(
         &app.footer, crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
         app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(),
     );
-    // the session info gets the width; the hint is short and yields to it
-    let info = truncate_str(&footer, w.saturating_sub(hint.chars().count() + 3));
-    let mut srow = format!("\x1b[2m{info}\x1b[0m");
-    if !hint.is_empty() {
-        // draw_line clears to end of line, so this padding only pushes the hint
-        // to the right edge — it is not there to erase the previous frame
-        let used = info.chars().count() + 1 + hint.chars().count();
-        if used < w {
-            srow.extend(std::iter::repeat(' ').take(w - used));
-        }
-        srow.push_str(&if app.done {
-            format!("\x1b[2m{hint}\x1b[0m")
-        } else {
-            format!("\x1b[33m{spin}\x1b[0m\x1b[2m working…\x1b[0m")
-        });
-    }
-    frame.push(srow);
-
-    // the input is the last block on screen, resting under the status line
-    let input_len = input.len();
-    frame.extend(input);
+    frame.push(format!("\x1b[2m{}\x1b[0m", truncate_str(&footer, w)));
 
     // ── differential draw ──
     let mut out = stdout();
@@ -209,11 +201,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     }
 
     // ── position cursor at input ──
-    // the input block runs to the bottom of the screen; the caret sits in the
-    // row holding the cursor, which is not the last one in a multi-line draft
+    // the footer holds the last row, so the input block ends one row short of it;
+    // the caret sits in the row holding the cursor, not the last row of a draft
     let (caret_line, caret_col) = caret_at(draft, caret);
-    let input_top = h.saturating_sub(input_len);
-    let input_y = (input_top + caret_line).min(h.saturating_sub(1)) as u16;
+    let input_top = h.saturating_sub(1 + input_len);
+    let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
     let input_x = (2 + caret_col).min(w.saturating_sub(1)) as u16; // after "> "
     goto(&mut out, input_x, input_y);
 
@@ -241,19 +233,27 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
             app::PickKind::Tree => "↑/↓ select · enter branch here · type to filter · esc cancel",
             app::PickKind::Settings => "↑/↓ select · enter toggle · esc close",
             app::PickKind::Mcp => "↑/↓ select · enter connect/disconnect · esc close",
+            app::PickKind::Ask => "↑/↓ select · enter confirm · 1-9 answer outright · esc no",
         };
         let vis = p.visible();
-        let count = if p.filter.is_empty() {
-            format!("({})", p.rows.len())
-        } else {
-            format!("({}/{})", vis.len(), p.rows.len())
+        // a question is not a list: its rows are the answers, so a count reads
+        // as noise and the numbers belong on the rows instead
+        let count = match p.kind {
+            app::PickKind::Ask => String::new(),
+            _ if p.filter.is_empty() => format!("({})", p.rows.len()),
+            _ => format!("({}/{})", vis.len(), p.rows.len()),
         };
-        let mut out = vec![sel_row(&format!("  {} {count}", p.title), false)];
+        let mut out = vec![sel_row(format!("  {} {count}", p.title).trim_end(), false)];
         if vis.is_empty() {
             out.push(sel_row("  nothing matches", false));
         }
         for (i, (label, _)) in vis.iter().enumerate().skip(p.top).take(app::PICK_ROWS) {
-            out.push(sel_row(&format!("{}{label}", if i == p.idx { "▸ " } else { "  " }), i == p.idx));
+            let arrow = if i == p.idx { "▸ " } else { "  " };
+            let label = match p.kind {
+                app::PickKind::Ask => format!("{}. {label}", i + 1),
+                _ => label.clone(),
+            };
+            out.push(sel_row(&format!("{arrow}{label}"), i == p.idx));
         }
         if vis.len() > app::PICK_ROWS {
             out.push(sel_row(&format!("  {hint}  · {}/{}", p.idx + 1, vis.len()), false));
@@ -333,6 +333,10 @@ fn is_user_line(l: &str) -> bool {
 fn line_style(l: &str) -> u8 {
     if l.starts_with("  │ ") {
         b't' // reasoning_content
+    } else if l.starts_with("  · - ") {
+        b'-' // a removed line in an edit's hunk
+    } else if l.starts_with("  · + ") {
+        b'+' // an added one
     } else if l.starts_with("  · ") {
         b's' // turn stats
     } else if is_user_line(l) {
@@ -350,6 +354,15 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         // carries the block on its own, the way the reference terminals do it
         b't' => return format!("  {THINK}{}{RESET}", s.strip_prefix("  │ ").unwrap_or(s)),
         b's' => return format!("\x1b[2m{s}\x1b[0m"),
+        // the sign is what the eye should catch, so it keeps full colour while
+        // the code itself stays dim — a hunk is context, not the answer
+        b'-' | b'+' => {
+            let colour = if style == b'-' { "\x1b[31m" } else { "\x1b[32m" };
+            // "  · - " is the marker; everything after it is the line's own code
+            let cut = s.char_indices().nth(6).map(|(i, _)| i).unwrap_or(s.len());
+            let (sign, rest) = s.split_at(cut);
+            return format!("{colour}{sign}{RESET}{DIM}{rest}{RESET}");
+        }
         // the user's own query: cyan "N›" marker so it's easy to find when
         // scrolling back, text at full brightness like the model's answer.
         // Wrapped rows carry no marker and must stay bright too — that's the
@@ -573,6 +586,12 @@ mod tests {
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
         assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
         assert!(first("  · 32 tok").starts_with("\x1b[2m"), "stats must be dim");
+        // a hunk row is a stats row until the sign is read, so the order of the
+        // line_style arms is the whole feature: "  · - x" must not land on b's'
+        assert!(first("  · -    2  let x = 1;").starts_with("\x1b[31m"), "a removed line must be red");
+        assert!(first("  · +    2  let x = 2;").starts_with("\x1b[32m"), "an added line must be green");
+        assert!(first("  · +    2  let x = 2;").contains(DIM), "the code itself stays dim");
+        assert!(first("  · … 3 more changed lines").starts_with("\x1b[2m"), "the overflow row is not a hunk row");
         // tool text is dim, so a wall of output recedes behind the prose
         assert!(first("  ✓ Cargo.toml  0ms").contains(DIM), "tool text must be dim");
         // the user's query keeps a cyan marker and BRIGHT text, on every row —

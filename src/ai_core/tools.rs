@@ -228,7 +228,12 @@ const DIFF_ROWS: usize = 8;
 /// a time and write_file has a whole-file replacement, so a single hunk is the
 /// honest shape for both. Returns (removed, added, rows) with rows capped, so
 /// the model's result and the TUI's Ctrl+O tail are both bounded.
-pub fn diff_block(old: &str, new: &str) -> (usize, usize, Vec<String>) {
+///
+/// `base` is the 0-indexed line where `old` starts in the file, so the rows can
+/// carry real file line numbers. For a sequence of edits it is the position in
+/// the file *as of that edit* — earlier edits in the same call have already
+/// shifted it, which is the only numbering a sequential editor can honestly give.
+pub fn diff_block(old: &str, new: &str, base: usize) -> (usize, usize, Vec<String>) {
     let (o, n): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
     let head = o.iter().zip(&n).take_while(|(a, b)| a == b).count();
     // leave at least one line on each side, or a pure append would count the
@@ -237,8 +242,11 @@ pub fn diff_block(old: &str, new: &str) -> (usize, usize, Vec<String>) {
     let tail = o.iter().rev().zip(n.iter().rev()).take_while(|(a, b)| a == b).count().min(max_tail);
     let (o, n) = (&o[head..o.len() - tail], &n[head..n.len() - tail]);
 
-    let mut rows: Vec<String> = o.iter().map(|l| format!("  · - {}", truncate(l, 200)))
-        .chain(n.iter().map(|l| format!("  · + {}", truncate(l, 200))))
+    // numbers count from the first line that actually differs: base skips the
+    // file above this hunk, head the lines the two sides still share
+    let first = base + head + 1;
+    let mut rows: Vec<String> = o.iter().enumerate().map(|(i, l)| format!("  · - {:>4}  {}", first + i, truncate(l, 200)))
+        .chain(n.iter().enumerate().map(|(i, l)| format!("  · + {:>4}  {}", first + i, truncate(l, 200))))
         .collect();
     if rows.len() > DIFF_ROWS {
         let more = rows.len() - DIFF_ROWS;
@@ -256,7 +264,7 @@ pub fn write_file(path: &str, content: &str) -> (bool, String) {
     let before = std::fs::read_to_string(path).unwrap_or_default();
     match std::fs::write(path, content) {
         Ok(()) => {
-            let (rm, add, rows) = diff_block(&before, content);
+            let (rm, add, rows) = diff_block(&before, content, 0);
             (true, format!("wrote {} bytes to {path} +{add} -{rm}
 {}", content.len(), rows.join("
 ")))
@@ -327,8 +335,10 @@ pub fn multi_edit(path: &str, edits: &[(String, String)]) -> (bool, String) {
         if count > 1 {
             return (false, format!("edit failed{which}: old text appears {count} times in {path}; make it unique; nothing written"));
         }
+        // where this edit lands, read before the replacement moves it
+        let at = content.find(old.as_str()).map(|p| content[..p].lines().count()).unwrap_or(0);
         content = content.replacen(old.as_str(), new, 1);
-        let (r, a, mut hunk) = diff_block(old, new);
+        let (r, a, mut hunk) = diff_block(old, new, at);
         (rm, add) = (rm + r, add + a);
         rows.append(&mut hunk);
     }
@@ -777,12 +787,18 @@ pub fn todo(items: Vec<(String, String)>) -> (bool, String) {
 }
 
 pub async fn ask_user(question: &str) -> (bool, String) {
+    ask_choice(question, Vec::new()).await
+}
+
+/// Ask with a fixed set of answers. The front end shows them as a chooser; the
+/// answer that comes back is one of the values, exactly as a typed one would be.
+pub async fn ask_choice(question: &str, choices: Vec<(String, String)>) -> (bool, String) {
     use std::io::Write;
     // Front-end mode: send the question to the TUI and wait for its answer.
     if let Some(tx) = crate::ai_core::SINK.get() {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         if tx
-            .send(crate::ai_core::Event::Ask { question: question.to_string(), reply: reply_tx })
+            .send(crate::ai_core::Event::Ask { question: question.to_string(), choices, reply: reply_tx })
             .is_ok()
         {
             return (true, reply_rx.await.unwrap_or_else(|_| "no answer given".into()));
@@ -819,24 +835,53 @@ mod tests {
     /// tail must not be counted twice as both head and tail.
     #[test]
     fn diff_block_reports_only_what_changed() {
-        let (rm, add, rows) = diff_block("a\nb\nc\n", "a\nB\nc\n");
+        let (rm, add, rows) = diff_block("a\nb\nc\n", "a\nB\nc\n", 0);
         assert_eq!((rm, add), (1, 1), "one line changed in the middle of three");
-        assert_eq!(rows, vec!["  · - b".to_string(), "  · + B".to_string()]);
+        // the number is the line in the file, not the index within the hunk:
+        // one shared line above it, so the change is on line 2
+        assert_eq!(rows, vec!["  · -    2  b".to_string(), "  · +    2  B".to_string()]);
 
-        let (rm, add, _) = diff_block("a\nb\n", "a\nb\nc\n");
+        // base is where the fragment starts, so a hunk found deep in a file
+        // numbers from there rather than from 1
+        let rows = diff_block("b\nc\n", "b\nC\n", 40).2;
+        assert_eq!(rows, vec!["  · -   42  c".to_string(), "  · +   42  C".to_string()]);
+
+        let (rm, add, _) = diff_block("a\nb\n", "a\nb\nc\n", 0);
         assert_eq!((rm, add), (0, 1), "a pure append removes nothing");
 
-        let (rm, add, _) = diff_block("", "x\ny\n");
+        let (rm, add, _) = diff_block("", "x\ny\n", 0);
         assert_eq!((rm, add), (0, 2), "a new file is all additions");
 
-        let (rm, add, rows) = diff_block("same\n", "same\n");
+        let (rm, add, rows) = diff_block("same\n", "same\n", 0);
         assert_eq!((rm, add, rows.len()), (0, 0, 0), "no change, no rows");
 
         // the cap keeps both the model's result and the Ctrl+O tail bounded
         let big: String = (0..50).map(|i| format!("line {i}\n")).collect();
-        let rows = diff_block("", &big).2;
+        let rows = diff_block("", &big, 0).2;
         assert_eq!(rows.len(), DIFF_ROWS + 1);
         assert!(rows.last().unwrap().contains("42 more changed lines"));
+    }
+
+    /// The hunk numbers are only worth printing if they point at the right
+    /// lines of the real file: multi_edit has to find where each fragment sits
+    /// before the replacement moves it, and the second edit must number against
+    /// the file the first edit already changed.
+    #[test]
+    fn edit_hunks_carry_real_file_line_numbers() {
+        // inside the project root: the write guard refuses anything outside it,
+        // and target/ is the one place in here that is not source
+        let path = "target/rusti_diff_lines.txt";
+        std::fs::write(path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
+
+        let (ok, out) = multi_edit(path, &[
+            ("two".to_string(), "TWO".to_string()),
+            ("five".to_string(), "FIVE".to_string()),
+        ]);
+        assert!(ok, "{out}");
+        assert!(out.contains("  · -    2  two"), "edit 1 is on line 2: {out}");
+        assert!(out.contains("  · -    5  five"), "edit 2 is on line 5: {out}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "one\nTWO\nthree\nfour\nFIVE\n");
+        std::fs::remove_file(path).unwrap();
     }
 
     /// RFC 4648 test vectors. The padding arm is the part that is easy to get

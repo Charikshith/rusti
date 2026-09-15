@@ -26,7 +26,9 @@ pub enum Event {
     Tree(Vec<(String, String)>),               // (label, id) rows for the TUI's /tree picker
     Prefill(String),                           // put this text in the input (branching at a user message)
     Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
-    Ask { question: String, reply: tokio::sync::oneshot::Sender<String> },
+    // choices empty = free-text answer (the ask_user tool); non-empty = a fixed
+    // set of (label, answer) the front end offers as a chooser
+    Ask { question: String, choices: Vec<(String, String)>, reply: tokio::sync::oneshot::Sender<String> },
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
     Reload { exe: String, args: Vec<String> },   // TUI /reload: new binary built, ready to relaunch
 }
@@ -256,7 +258,15 @@ async fn permitted(name: &str, summary: &str) -> Result<(), String> {
     if tools::YOLO.load(Ordering::Relaxed) || !gated(name) || ALLOWED.lock().unwrap().iter().any(|a| a == name) {
         return Ok(());
     }
-    let (_, ans) = tools::ask_user(&format!("allow {name} {summary}? [y]es / [n]o / [a]lways (saved)")).await;
+    let (_, ans) = tools::ask_choice(
+        &format!("allow {name} {summary}?"),
+        vec![
+            ("Yes".into(), "yes".into()),
+            ("No".into(), "no".into()),
+            (format!("Yes, and stop asking for {name}"), "always".into()),
+        ],
+    )
+    .await;
     match decide(&ans) {
         Answer::Once => Ok(()),
         Answer::Always => {
@@ -707,6 +717,11 @@ pub fn self_test() {
     assert!(matches!(decide("n"), Answer::Deny) && matches!(decide(""), Answer::Deny));
     assert!(matches!(decide("no answer given"), Answer::Deny));
     assert!(matches!(decide("a"), Answer::Always) && matches!(decide("ALWAYS"), Answer::Always));
+    // the exact strings the permission picker sends back, so renaming a row's
+    // value without touching decide() cannot silently turn a yes into a denial
+    assert!(matches!(decide("yes"), Answer::Once));
+    assert!(matches!(decide("no"), Answer::Deny));
+    assert!(matches!(decide("always"), Answer::Always));
     // a saved "always" answer is what survives a restart
     allow_from_config(&["run_command".to_string(), "run_command".to_string()]);
     assert_eq!(ALLOWED.lock().unwrap().iter().filter(|a| *a == "run_command").count(), 1);

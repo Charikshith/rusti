@@ -788,3 +788,48 @@ through the session"):
 - No rusti code changed this session — the binary that failed and the binary that passed are the same one
   (6fa3900). `feat-061` evidence updated.
 - **Still unproven: the clipboard path (feat-062) against a vision model.** Needs a TUI run with alt+v.
+
+## Session 2026-09-15 (2): feat-067, feat-068 — the bottom of the screen
+
+- **feat-067 — the hint rides above the input, the footer stays below.** feat-064 took the whole status
+  block up with it, footer included; the user wanted the halves split. The merged row is now two: the
+  spinner/notice/ctrl-c hint above the input where it sits next to the caret, and session · model · branch
+  · ctx pinned back on the last row. `bottom_rows` 2 → 3, so the transcript gives up one row — the cost of
+  two things that used to share a row needing two. The caret clamp returns to the second-to-last row.
+- **feat-068 — the permission prompt is a chooser.** `allow run_command git log? [y]es / [n]o / [a]lways`
+  read as output, not as a question aimed at the user. `Event::Ask` now carries `choices`; empty keeps the
+  free-text path the `ask_user` tool needs, non-empty opens the picker `/model` and `/resume` already use.
+- **Reuse, not a new widget**: panel, selection, scroll window and render path existed, so the feature is a
+  `PickKind` and a few rows. Two deliberate departures from the other pickers, both because a question is
+  not a list: **Esc answers "no"** rather than dismissing (a tool is blocked on the reply — a dismissable
+  panel would hang the turn), and **letters do not filter** (typing "y" would hide the row it looks like it
+  picks). Digits 1-9 answer outright.
+- The choices ride on the event rather than the TUI sniffing the question for `[y]es`: a front end that
+  parses prose to learn what kind of question it received breaks the next time the wording changes.
+- `cargo test` 34 passed · `--self-test` OK, now asserting `decide()` maps the exact strings the picker
+  sends (yes/no/always) — renaming a row's value cannot quietly turn a yes into a denial.
+- The running TUI holds the release exe, so both builds needed it moved aside first (`rusti-old*.exe` in
+  `target/release`, deletable once the old process exits). `/reload` does this properly via
+  `free_the_output_path`.
+
+## Session 2026-09-15 (3): feat-069 — the hunk shows its colours and its line numbers
+
+- Asked whether rusti does what Claude Code's diff view does. It already had the substance (feat-060: `+N
+  -M` on the result line, the real hunk behind Ctrl+O, capped at `DIFF_ROWS`); what it lacked was the two
+  things that make a hunk readable at a glance.
+- **Colour**: every `  · ` row fell through to the same dim stats style, so a removed line and an added one
+  were typographically identical. `line_style` now reads the sign first. The **order of the arms is the
+  feature** — `"  · - "` must be tested before `"  · "` — so the test pins it, including that the
+  `… N more changed lines` overflow row still lands on the plain stats style.
+- **Line numbers**: `diff_block` gained a `base` offset and numbers each row `base + shared-prefix + i`.
+  `write_file` passes 0; `multi_edit` passes where the fragment starts, **read before `replacen` moves it**
+  — the one line in this change that could silently produce plausible wrong numbers, so it has a test that
+  edits a real file twice and asserts lines 2 and 5.
+- For a run of edits the number is the line *as of that edit*: earlier edits in the same call have already
+  shifted the file. That is the only numbering a sequential editor can honestly give, and it is also the
+  one the model needs to aim its next edit.
+- Sign coloured, code left grey: a hunk is context under a result line, and two fully coloured blocks would
+  outshout the answer itself.
+- Not done: interleaving removed and added lines pair by pair — that needs an LCS, and `diff_block`
+  deliberately has none, because its callers already know where the change is.
+- `cargo test` 35 passed (one new) · `--self-test` OK.

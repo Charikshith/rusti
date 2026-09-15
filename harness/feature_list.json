@@ -816,6 +816,55 @@
         "max_scroll lives on RenderState because only the renderer knows it - it depends on the wrapped row count and the terminal height, neither of which the key handler can see.",
         "DisableMouseCapture goes in restore_terminal, so the panic hook (feat-057) undoes it too - a terminal left in mouse-reporting mode prints escape junk on every click."
       ]
+    },
+    {
+      "id": "feat-067",
+      "name": "The hint rides above the input, the session footer stays below it",
+      "description": "feat-064 moved the whole status block above the input, which took the session footer (session, model, branch, ctx) up with it. The user wanted the two halves split: the spinner/notice/ctrl-c hint above the input where it sits next to the caret and is read while a turn runs, and session/model/branch/ctx pinned back on the last row where it is read at a glance. The single merged status row is now two rows - hint pushed before the input, footer pushed after it - so the hint no longer has to share a row and yield width to the footer.",
+      "dependencies": [
+        "feat-064"
+      ],
+      "status": "done",
+      "evidence": "cargo test 34 passed, --self-test OK on the freshly built binary (the running TUI held the exe, so it was moved aside first - the same lock free_the_output_path handles for /reload). Row order and the caret clamp are confirmed by reading, as draw() needs a terminal; the user confirms visually after /reload.",
+      "decisions": [
+        "bottom_rows goes from 2 to 3 + input + panel: two pinned rows became three, so the transcript gives up exactly one row. Not free, and not worth hiding - the alternative was leaving the footer to share the hint's row, which is what the user asked to undo.",
+        "The caret math returns to feat-064's predecessor: input_top is h - 1 - input_len and the clamp is the second-to-last row, because the footer, not the input, now holds the last row.",
+        "The hint is left-aligned on its own row rather than right-aligned as it was when it shared with the footer: alone on a row, there is nothing to yield to."
+      ]
+    },
+    {
+      "id": "feat-068",
+      "name": "The permission prompt is a chooser, not a line of text to type at",
+      "description": "A gated tool asked with a flat transcript line - allow run_command git log? [y]es / [n]o / [a]lways (saved) - and waited for a typed letter, which reads as log output rather than as a question addressed to the user. Event::Ask now carries choices: a list of (label, answer). Empty means free text, which is what the ask_user tool still sends; non-empty opens the picker that /model and /resume already use, titled with the question and numbered 1. Yes / 2. No / 3. Yes, and stop asking for <tool>. The answer that travels back is the same string a typed answer was, so decide() and the plain front end are unchanged in behaviour.",
+      "dependencies": [
+        "feat-023"
+      ],
+      "status": "done",
+      "evidence": "cargo test 34 passed, --self-test OK, and the self-test now asserts decide() maps the exact strings the picker sends (yes/no/always), so renaming a row's value cannot quietly turn a yes into a denial. Panel layout is confirmed by reading; the user confirms visually.",
+      "decisions": [
+        "Reused Pick rather than writing a prompt widget: the panel, its selection, its scroll window and its render path already existed, so the feature is a new PickKind and a few rows.",
+        "Esc answers 'no' instead of closing the panel. Every other picker can be dismissed because nothing waits on it; a permission question has a tool blocked on the reply, so a dismissable panel would hang the turn.",
+        "Digits 1-9 answer outright and letters do NOT filter. Filtering is right for 37 model profiles and wrong for three answers - typing 'y' would have hidden the very row it looks like it selects.",
+        "The choices ride on the event rather than the TUI sniffing the question text for '[y]es'. A front end that has to parse prose to know what kind of question it was received is a bug waiting for the wording to change.",
+        "Not built: Claude Code's 'Tab to amend', which edits the command before running it. That is a command editor, not a prompt, and nobody asked for it yet."
+      ]
+    },
+    {
+      "id": "feat-069",
+      "name": "Edit hunks show red/green signs and real file line numbers",
+      "description": "feat-060 already reported +N -M and put the hunk behind Ctrl+O, but every row rendered through the same dim '  · ' style as the turn stats, so a removed line and an added one looked identical, and neither said where in the file it was. line_style now reads the sign before falling through to stats, colouring the marker red or green while the code after it stays grey - the sign is what the eye needs, the code is context. diff_block takes a base line offset and numbers each row from base + shared-prefix, so the rows carry the file's own line numbers; write_file passes 0 and multi_edit passes the line where each fragment starts, read before the replacement moves it.",
+      "dependencies": [
+        "feat-059",
+        "feat-060"
+      ],
+      "status": "done",
+      "evidence": "cargo test 35 passed (one new), --self-test OK. The render test asserts a '  · - ' row starts red, a '  · + ' row starts green, the code after the sign is still dim, and the '… N more changed lines' overflow row stays a plain stats row - that last one pins the arm ordering in line_style, which is the whole feature. The new tools test edits a real file twice and asserts the hunks say lines 2 and 5, so the base offset is verified against the filesystem rather than by reading.",
+      "decisions": [
+        "Numbers come from a base offset passed in, not from searching inside diff_block: only the caller knows where the fragment sits, and multi_edit must read that position BEFORE replacen moves it.",
+        "For a sequence of edits the number is the line as of that edit - earlier edits in the same call have already shifted the file. That is the only numbering a sequential editor can honestly give, and it is what the model needs to place its next edit.",
+        "Sign coloured, code dim, rather than colouring the whole row: a hunk is context under a result line, and two fully-coloured blocks would outshout the answer.",
+        "Not done: interleaving removed and added lines pair by pair. That needs an LCS, and diff_block deliberately has none - the callers already know where the change is."
+      ]
     }
   ]
 }

@@ -83,6 +83,7 @@ pub enum PickKind {
     Tree,     // branch the session at the chosen entry
     Settings, // flip a status-line segment; the only kind Enter does not close
     Mcp,      // connect/disconnect an MCP server; also stays open on Enter
+    Ask,      // answer a pending question; Enter sends the row's value back
 }
 
 /// An open list picker (/resume with no argument, /model with no argument).
@@ -657,11 +658,23 @@ pub fn ui_loop(
                     app.turn_gen_ms += gen_ms;
                     app.turn_est |= est;
                 }
-                ai_core::Event::Ask { question, reply } => {
+                ai_core::Event::Ask { question, choices, reply } => {
                     app.flush();
                     app.lines.push(format!("  ℹ {question}"));
                     app.ask_line = Some(app.lines.len() - 1);
-                    app.ask = Some((question, reply));
+                    app.ask = Some((question.clone(), reply));
+                    // a fixed set of answers is a choice, not a sentence to type:
+                    // it opens the picker that /model and /resume already use
+                    if !choices.is_empty() {
+                        app.pick = Some(Pick {
+                            kind: PickKind::Ask,
+                            title: question,
+                            rows: choices,
+                            idx: 0,
+                            top: 0,
+                            filter: String::new(),
+                        });
+                    }
                 }
                 ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
                 ai_core::Event::TaskEnd { ok, error } => {
@@ -770,6 +783,17 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         _ => app.lines.push(format!("  ✗ unknown command: {cmd}")),
     }
     false
+}
+
+/// Answer the pending question from the picker: the panel closes, the question's
+/// transcript line records what was chosen, and the tool waiting on the reply is
+/// unblocked with the same string a typed answer would have sent.
+fn answer_pick(app: &mut App, ans: &str) {
+    app.pick = None;
+    app.fresh = false;
+    if let Some(reply) = close_ask(app, ans) {
+        let _ = reply.send(ans.to_string());
+    }
 }
 
 /// Close a pending question, recording the answer on the question's own line.
@@ -891,6 +915,31 @@ pub fn picker_nav(idx: usize, top: usize, n: usize, delta: isize) -> (usize, usi
 /// Esc cancels, everything else is swallowed. Ctrl+key never reaches here, so
 /// Ctrl+C still quits instead of typing a 'c'.
 fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
+    // An answer picker is a chooser, not a list to filter: Esc means no rather
+    // than "close the panel" (a pending question cannot just be dismissed —
+    // something is blocked waiting on it), a digit takes its row outright, and
+    // typed letters must not filter, or "y" would hide the answer you meant.
+    if app.pick.as_ref().is_some_and(|p| p.kind == PickKind::Ask) {
+        let row_value = |app: &App, i: usize| app.pick.as_ref().and_then(|p| p.rows.get(i)).map(|(_, v)| v.clone());
+        match code {
+            KeyCode::Esc => return answer_pick(app, "no"),
+            KeyCode::Enter => {
+                let i = app.pick.as_ref().map(|p| p.idx).unwrap_or(0);
+                if let Some(v) = row_value(app, i) {
+                    answer_pick(app, &v);
+                }
+                return;
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if let Some(v) = c.to_digit(10).and_then(|n| (n as usize).checked_sub(1)).and_then(|i| row_value(app, i)) {
+                    answer_pick(app, &v);
+                }
+                return;
+            }
+            KeyCode::Char(_) | KeyCode::Backspace => return,
+            _ => {}
+        }
+    }
     match code {
         KeyCode::Esc => {
             app.pick = None;
@@ -917,6 +966,7 @@ fn picker_key(app: &mut App, code: KeyCode, job_tx: &Sender<Job>) {
                 PickKind::Model => switch_model(app, job_tx, &value),
                 PickKind::Tree => { let _ = job_tx.send(Job::Select(value)); }
                 PickKind::Settings | PickKind::Mcp => {} // returned above; closing is Esc's job
+                PickKind::Ask => {} // handled at the top: an answer is not a list action
             }
             return;
         }
