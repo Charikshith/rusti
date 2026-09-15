@@ -60,3 +60,8 @@
 ## 2026-09-10 (4) - drop the redundant model-switch note
 - User asked why `✓ model switched to ...` lingers in the transcript when the status line already shows the model. It was a one-line Event::Text in the Job::Model arm - deleted.
 - Reminder: the status line source is app.model (set synchronously in switch_model), not the session; the async Job::Model only swaps the client/session model.
+## 2026-09-15 (1) - the image was dropped twice, in two different programs
+- Symptom identical in rusti, pi and curl ("I can't see the image"), so the instinct was one cause. There were two: 9router's openaiToCommandCode transform swapped image parts for the text `[image omitted]`, and pi never sent the image at all because its model catalog entry declared no image input.
+- What settled it: logging the raw user content the proxy transform received. pi's request carried `(image omitted: model does not support images)` as plain text — proof the client, not the proxy, had dropped it.
+- The model's explanation ("this model has no image support") read as self-knowledge and was in fact it paraphrasing the placeholder string it had been handed. Never take a model's account of its own capabilities as evidence about the wire.
+- Test-target lesson: the first `_bands.png` run "passed" because the agent inflated the PNG with node and read the pixels. A vision test has to forbid decoding, or it tests the wrong thing.

@@ -763,3 +763,28 @@ through the session"):
 - **Cost, stated not hidden**: with capture on, click-drag text selection needs Shift held in most
   terminals. Usual trade for wheel support, one line to revert.
 - `cargo test` 34 passed · `--self-test` OK · release 4.5s.
+
+## Session 2026-09-15 (1): feat-061 proven end to end — the proxy was the only stripper
+
+- Re-ran the image test on a purpose-built target: `_bands.png`, 240×240, three bands whose pixels were
+  decoded here first (220,40,40 / 40,200,60 / 40,80,220) so a right answer could not be a lucky guess.
+  Pre-fix the model still saw `[image omitted]` — but with tools it inflated the PNG itself and answered
+  correctly from the bytes, which is exactly the failure mode that looks like success. Ban decoding in the
+  prompt when testing vision.
+- **Found the stripper by reading the proxy, not by guessing.** 9router 0.4.80,
+  `app/.next-cli-build/server/chunks/7811.js`, `openaiToCommandCode`: every `image_url`/`image` part was
+  replaced with the literal text `[image omitted]`. Its Gemini and Ollama transforms convert images
+  properly, so this was one transform's omission, not a design stance. Patched locally to emit an AI-SDK
+  image part; `api.commandcode.ai/alpha/generate` accepted it first try — the upstream never refused
+  images, and nothing in rusti needed changing.
+- **`pi` failed after the proxy was fixed, for a second and unrelated reason.** Logging the transform's
+  input showed pi never sent the picture: it substituted its own
+  `(image omitted: model does not support images)` because its catalog entry in `~/.pi/agent/models.json`
+  lacked `"input": ["text","image"]`. Two independent droppers, the same symptom, and the model's wording
+  ("this model has no image support") was an echo of the placeholder text, not knowledge about itself.
+- With both fixed: **red, green, blue** from rusti (decoding forbidden), from pi, and from raw curl.
+  feat-061's "NOT verified: a model actually describing the picture" caveat is retired; feat-065's guard
+  keeps its value as the honest answer whenever a hop does strip the image.
+- No rusti code changed this session — the binary that failed and the binary that passed are the same one
+  (6fa3900). `feat-061` evidence updated.
+- **Still unproven: the clipboard path (feat-062) against a vision model.** Needs a TUI run with alt+v.
