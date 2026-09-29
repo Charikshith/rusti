@@ -3,9 +3,26 @@
 Minimal coding agent in Rust: async core (tokio + reqwest), custom ANSI
 TUI (no ratatui), ~2.2 MB release binary.
 
+## Install
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/Charikshith/rusti/master/install.ps1 | iex
+```
 ```sh
-cargo install --path .           # rusti on PATH (~/.cargo/bin); --force to update, cargo uninstall rusti to remove
-cargo build --release            # or just build it
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/Charikshith/rusti/master/install.sh | sh
+```
+
+Either puts `rusti` in `~/.rusti/bin` and adds it to your PATH; run it again to update.
+To uninstall, delete `~/.rusti` (that also removes your saved models) and the PATH entry.
+From source instead: `cargo install --git https://github.com/Charikshith/rusti`.
+New releases: push a `v*` tag and `.github/workflows/release.yml` builds and attaches the binaries.
+
+## Use
+
+```sh
+cargo build --release            # when working on rusti itself
 
 # Settings: ~/.rusti/config.json holds models, keys, theme, footer and MCP servers for every
 # project (RUSTI_HOME moves it). ./model.json holds this project's "allow" list, max_iters and

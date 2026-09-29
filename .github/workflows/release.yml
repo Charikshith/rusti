@@ -1,0 +1,30 @@
+# Push a tag like v0.2.0 and this builds rusti for each platform and attaches
+# the binaries to a GitHub Release. install.ps1 / install.sh download from
+# releases/latest, so the newest tag is what everyone installs.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, asset: rusti-windows-x86_64.exe, bin: rusti.exe }
+          # 22.04, not latest: an older glibc runs on more distros
+          - { os: ubuntu-22.04, asset: rusti-linux-x86_64, bin: rusti }
+          - { os: macos-latest, asset: rusti-macos-aarch64, bin: rusti }
+          - { os: macos-13, asset: rusti-macos-x86_64, bin: rusti }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release
+      - run: cargo build --release --locked
+      - shell: bash
+        run: cp target/release/${{ matrix.bin }} ${{ matrix.asset }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
