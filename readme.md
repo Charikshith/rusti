@@ -135,6 +135,10 @@ a visible checklist for multi-step work.
 
 ## project instructions
 
+rusti's own docs (this readme and `--help`) are compiled into the binary and written to
+`~/.rusti/docs/`; the system prompt carries only their paths and a topic map, so asking rusti
+"how do I change the theme?" makes it read them instead of guessing.
+
 If the working directory has an `AGENTS.md` (fallback `RUSTI.md`, then `CLAUDE.md`),
 its contents are appended to the system prompt. The file is re-read every turn, so
 edits take effect on the next message without a restart.

@@ -921,6 +921,38 @@
         "No dirs crate: USERPROFILE/HOME is all it would read here. RUSTI_HOME exists so tests and --self-test never write the real ~/.rusti.",
         "/reload needed no change: it builds from CARGO_MANIFEST_DIR baked in at compile time, so an installed rusti in any folder still rebuilds its own source."
       ]
+    },
+    {
+      "id": "feat-073",
+      "name": "One-command installers (install.ps1 / install.sh) and a tag-driven release workflow",
+      "description": "irm .../install.ps1 | iex on Windows, curl -fsSL .../install.sh | sh on Linux/macOS. Both download the latest GitHub Release binary into ~/.rusti/bin and add it to PATH; re-running updates. .github/workflows/release.yml builds Windows x86_64, Linux x86_64 (ubuntu-22.04 for an older glibc), macOS arm64 and x86_64 on a v* tag, runs cargo test on each, and attaches the binaries.",
+      "dependencies": [
+        "feat-072"
+      ],
+      "status": "done",
+      "evidence": "v0.1.0 tagged; release run 36618463256 built and passed tests on Windows, Linux and macOS arm64 (macOS x86_64 was still queued for a runner at the time of writing). The real one-liner, run on this Windows machine, installed rusti 0.1.0 to C:\\Users\\Chakri\\.rusti\\bin, added it to the user PATH, and --version ran from %TEMP%.",
+      "decisions": [
+        "Download a prebuilt binary, not cargo install: the tools users compare against (Claude Code, Codex, pi) need no toolchain. cargo install --git stays documented as the from-source path.",
+        "releases/latest/download/<asset> URLs, so the scripts never call the GitHub API and never need a token.",
+        "Windows update renames the running rusti.exe aside before downloading: a running exe cannot be overwritten but can be renamed. install.sh downloads to rusti.new and mv's it over for the same reason.",
+        "/reload in a downloaded binary fails with cargo's 'manifest path does not exist' - it only makes sense in a source checkout, and that message says so well enough."
+      ]
+    },
+    {
+      "id": "feat-074",
+      "name": "rusti knows its own docs: a pointer block in the system prompt",
+      "description": "Ported pi's <docs> pointer. readme.md and the --help text are compiled into the binary (include_str!, no new crate), written to ~/.rusti/docs on first use (rewritten only when they differ, so an upgrade refreshes them), and the system prompt carries only their absolute paths, a gate (read only when the user asks about rusti itself), a hand-written topic -> readme-section map, and 'read the whole file'. It sits before project instructions and is part of the system entry, so compaction never drops it.",
+      "dependencies": [
+        "feat-072"
+      ],
+      "status": "done",
+      "evidence": "cargo test 40 passed (one new: every § in the topic map is a real '## ' heading in readme.md, the block names absolute paths and carries the gate, written files equal the embedded ones, and stale files are refreshed). Live, deepseek-v4-flash from an empty folder with a scratch RUSTI_HOME: 'How do I change the colour theme in rusti?' read docs/help.txt and docs/readme.md and answered from them; 'reverse a string in Python' made no tool calls.",
+      "decisions": [
+        "Extract to disk rather than serve from memory, as the pi write-up argues: read_file, grep and run_command all work on real files. No virtual scheme.",
+        "One doc file plus help.txt, not a docs/ tree. readme.md is 12KB, under read_file's 20KB cap, so 'read the whole file' works in one call. Split into docs/ when readme outgrows that cap.",
+        "The topic map points at readme headings in the user's words, and a test fails CI if a heading it names is renamed - the rot mode the pi guide calls #1.",
+        "Skipped from the pi write-up: prompt sections struct, section diffing, extension overrides, any search/RAG. rusti has one prompt builder and no extensions."
+      ]
     }
   ]
 }

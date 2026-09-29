@@ -912,3 +912,17 @@ through the session"):
 - `/reload` needed nothing: it builds from CARGO_MANIFEST_DIR, baked in at compile time.
 - `cargo test` 39 passed (one new) · `--self-test` OK (RUSTI_HOME on a scratch dir) · end to end on a copy of
   the real model.json.
+
+### feat-073 — one-command install
+
+- `irm .../install.ps1 | iex` / `curl -fsSL .../install.sh | sh` download the latest release binary to
+  `~/.rusti/bin` and add it to PATH. `release.yml` builds four targets on a `v*` tag. v0.1.0 is out; the real
+  Windows one-liner installed and ran on this machine.
+
+### feat-074 — rusti reads its own docs (pi's docs pointer)
+
+- Ported from `harness/scratchpad/pi-docs-pointer-replication.md`. readme.md + `--help` are compiled in, written
+  to `~/.rusti/docs`, and the prompt gets paths + a gate + a topic map (~150 tokens), never the text.
+- Live check both ways: a rusti question read help.txt and readme.md before answering; an unrelated coding
+  question made no tool calls. `cargo test` 40 passed.
+- Skipped the prompt-sections struct and diffing from the write-up: one prompt builder, no extensions.

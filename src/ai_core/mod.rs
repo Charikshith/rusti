@@ -181,11 +181,65 @@ fn instructions_from(dir: &std::path::Path) -> Option<(String, String)> {
     })
 }
 
+/// rusti's own docs, compiled in so an installed binary with no source checkout
+/// still has them, then written to ~/.rusti/docs so read_file and grep work on
+/// them like any other file. The prompt carries only the paths, never the text.
+const DOCS: [(&str, &str); 2] = [("readme.md", include_str!("../../readme.md")), ("help.txt", crate::HELP)];
+
+/// Rewrites a file only when it differs, so an upgrade refreshes the docs and
+/// an ordinary start writes nothing. ponytail: two rusti versions running at
+/// once flip-flop the files; per-version dirs if that ever matters.
+fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for (name, body) in DOCS {
+        let p = dir.join(name);
+        if std::fs::read_to_string(&p).ok().as_deref() != Some(body) {
+            std::fs::write(p, body)?;
+        }
+    }
+    Ok(())
+}
+
+/// Topic -> where it is answered, in the user's words. Each § is a `## `
+/// heading in readme.md; a test pins that, so a renamed heading fails CI.
+const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
+permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line (help.txt, readme.md § TUI), \
+sessions, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
+AGENTS.md (readme.md § project instructions), delegate and background jobs (readme.md § sub-agents and background jobs), \
+/reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
+
+fn docs_section(dir: &str) -> String {
+    format!(
+        "# rusti documentation\n\
+Read these only when the user asks about rusti itself (using, configuring or extending this agent), never for their project's code.\n\
+- Docs: {dir}/readme.md and {dir}/help.txt (absolute paths; do not resolve them against the working directory)\n\
+- When asked about: {DOC_TOPICS}\n\
+- Read the whole file before answering, and answer from it rather than from memory."
+    )
+}
+
+fn docs_block() -> Option<&'static str> {
+    static BLOCK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    BLOCK
+        .get_or_init(|| {
+            let dir = crate::config::home_dir().join("docs");
+            write_docs(&dir).ok()?; // no writable home: no docs block, not a failed turn
+            // forward slashes: some models mangle Windows backslashes in a path
+            Some(docs_section(&dir.to_string_lossy().replace('\\', "/")))
+        })
+        .as_deref()
+}
+
 fn system_prompt() -> String {
-    let mut p = match instructions_from(std::path::Path::new(".")) {
-        Some((name, body)) => format!("{SYSTEM_PROMPT}\n\n# Project instructions (from {name} in the working directory)\n{body}"),
-        None => SYSTEM_PROMPT.to_string(),
-    };
+    let mut p = SYSTEM_PROMPT.to_string();
+    // before project instructions: about rusti itself, its own docs are the authority
+    if let Some(d) = docs_block() {
+        p.push_str("\n\n");
+        p.push_str(d);
+    }
+    if let Some((name, body)) = instructions_from(std::path::Path::new(".")) {
+        p.push_str(&format!("\n\n# Project instructions (from {name} in the working directory)\n{body}"));
+    }
     // refreshed every turn (run_agent rewrites the system entry), so the model
     // always sees the tree as it is now rather than as it was at session start
     if let Some(g) = git_context() {
@@ -886,3 +940,28 @@ pub fn self_test() {
     std::fs::remove_file("_test_model.json").unwrap();
     println!("self-test OK");
 }
+    /// The docs pointer: every § in the topic map is a real readme heading (the
+    /// rot a renamed heading causes), the block names absolute docs paths, and
+    /// the files written out are the ones compiled in.
+    #[test]
+    fn docs_pointer_names_real_files_and_headings() {
+        let readme = DOCS[0].1;
+        for part in DOC_TOPICS.split("§ ").skip(1) {
+            let heading = part.split(|c| c == ')' || c == ',').next().unwrap().trim();
+            assert!(readme.lines().any(|l| l == format!("## {heading}")), "no '## {heading}' in readme.md");
+        }
+        let block = docs_section("/home/u/.rusti/docs");
+        assert!(block.contains("/home/u/.rusti/docs/readme.md") && block.contains("/home/u/.rusti/docs/help.txt"));
+        assert!(block.contains("only when the user asks about rusti itself"), "the gate that keeps unrelated tasks from reading docs");
+
+        let dir = std::env::temp_dir().join(format!("rusti_docs_{}", std::process::id()));
+        write_docs(&dir).unwrap();
+        for (name, body) in DOCS {
+            assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(), body);
+        }
+        std::fs::write(dir.join("readme.md"), "stale").unwrap();
+        write_docs(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("readme.md")).unwrap(), readme, "an upgrade refreshes stale docs");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
