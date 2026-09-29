@@ -16,15 +16,21 @@ jobs:
           # 22.04, not latest: an older glibc runs on more distros
           - { os: ubuntu-22.04, asset: rusti-linux-x86_64, bin: rusti }
           - { os: macos-latest, asset: rusti-macos-aarch64, bin: rusti }
-          - { os: macos-13, asset: rusti-macos-x86_64, bin: rusti }
+          # Intel Mac cross-built on the Apple Silicon runner: macos-13 runners
+          # sat queued for hours on both v0.1.0 and v0.1.1
+          - { os: macos-latest, asset: rusti-macos-x86_64, bin: rusti, target: x86_64-apple-darwin }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --release
-      - run: cargo build --release --locked
+        with:
+          targets: ${{ matrix.target }}
+      # a cross-built binary cannot run here; the native arm64 job tests the same code
+      - if: ${{ !matrix.target }}
+        run: cargo test --release
+      - run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
       - shell: bash
-        run: cp target/release/${{ matrix.bin }} ${{ matrix.asset }}
+        run: cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.asset }}
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset }}
