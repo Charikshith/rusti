@@ -1212,7 +1212,7 @@ fn toggle_footer(app: &mut App, key: &str) {
 fn pick_model(app: &mut App) {
     let cfg = crate::config::Config::load();
     if cfg.models.is_empty() {
-        app.lines.push("  ✗ no saved models (see model.json)".into());
+        app.lines.push("  ✗ no saved models (rusti --add)".into());
         return;
     }
     let active = app.model.clone();

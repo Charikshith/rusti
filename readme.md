@@ -4,9 +4,12 @@ Minimal coding agent in Rust: async core (tokio + reqwest), custom ANSI
 TUI (no ratatui), ~2.2 MB release binary.
 
 ```sh
-cargo build --release
+cargo install --path .           # rusti on PATH (~/.cargo/bin); --force to update, cargo uninstall rusti to remove
+cargo build --release            # or just build it
 
-# model.json (in cwd) persists model details. First launch asks interactively:
+# Settings: ~/.rusti/config.json holds models, keys, theme, footer and MCP servers for every
+# project (RUSTI_HOME moves it). ./model.json holds this project's "allow" list, max_iters and
+# context; any other key put there overrides the global one here. First launch asks for a model:
 ./target/release/rusti "add a --version flag to src/main.rs"
 
 # manage saved models

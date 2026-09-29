@@ -1,10 +1,30 @@
-// Saved model profiles in model.json (cwd). On launch the CLI picks the
+// Settings live in two files: ~/.rusti/config.json (models, keys, theme,
+// footer, MCP servers — shared by every project) and ./model.json (the
+// "always" allow list and per-project limits). A key the project file has
+// overrides the global one and is saved back there. Saved model profiles: On launch the CLI picks the
 // default profile; if none is saved it asks interactively before running.
 // --url/--key/--model flags and LLM_* env vars override the saved profile.
 
 use serde::{Deserialize, Serialize};
 
 pub const PATH: &str = "model.json";
+/// Keys whose home is the project file; every other key lives in the global one.
+/// "allow" is per project on purpose: a tool safe in one repo is not safe in all.
+const PROJECT_KEYS: [&str; 3] = ["allow", "max_iters", "context"];
+
+/// ~/.rusti — RUSTI_HOME overrides it (tests, a second setup). ponytail: no
+/// `dirs` crate; USERPROFILE/HOME is all it would read on these platforms.
+pub fn home_dir() -> std::path::PathBuf {
+    if let Some(h) = std::env::var_os("RUSTI_HOME") {
+        return h.into();
+    }
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default();
+    std::path::Path::new(&home).join(".rusti")
+}
+
+pub fn global_path() -> String {
+    home_dir().join("config.json").to_string_lossy().into_owned()
+}
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ModelProfile {
@@ -82,11 +102,14 @@ pub struct Config {
     /// take the models, allow list and MCP servers with it.
     #[serde(skip)]
     pub err: Option<String>,
+    /// Top-level keys ./model.json had when loaded: those are saved back there.
+    #[serde(skip)]
+    project_keys: std::collections::BTreeSet<String>,
 }
 
 impl Config {
     pub fn load() -> Config {
-        Self::load_from(PATH)
+        Self::load_pair(&global_path(), PATH)
     }
     /// No file is a first run and loads the defaults. A file that exists but
     /// does not read or parse is an error, not an empty config: it keeps the
@@ -101,7 +124,66 @@ impl Config {
             .unwrap_or_else(|e| Config { err: Some(format!("{path}: {e}")), ..Default::default() })
     }
     pub fn save(&self) -> Result<(), String> {
-        self.save_to(PATH)
+        self.save_pair(&global_path(), PATH)
+    }
+    /// Global file, then the project file's top-level keys laid over it. The
+    /// first run after this change finds models in ./model.json and no global
+    /// file: those keys move home, so API keys stop living in the repo.
+    pub fn load_pair(global: &str, project: &str) -> Config {
+        let (g, p) = match (read_obj(global), read_obj(project)) {
+            (Ok(g), Ok(p)) => (g, p),
+            (Err(e), _) | (_, Err(e)) => return Config { err: Some(e), ..Default::default() },
+        };
+        let migrate = !std::path::Path::new(global).exists() && p.contains_key("models");
+        let mut merged = g;
+        let mut keys = std::collections::BTreeSet::new();
+        for (k, v) in p {
+            if !migrate || PROJECT_KEYS.contains(&k.as_str()) {
+                keys.insert(k.clone());
+            }
+            merged.insert(k, v);
+        }
+        let mut cfg: Config = match serde_json::from_value(serde_json::Value::Object(merged)) {
+            Ok(c) => c,
+            Err(e) => return Config { err: Some(format!("{global} + {project}: {e}")), ..Default::default() },
+        };
+        cfg.project_keys = keys;
+        if migrate {
+            match cfg.save_pair(global, project) {
+                Ok(()) => eprintln!("moved models/theme/footer/mcp from {project} to {global}"),
+                Err(e) => eprintln!("⚠ could not move settings to {global}: {e}"),
+            }
+        }
+        cfg
+    }
+    /// Each key goes back to the file it came from; a new key goes to its home
+    /// (PROJECT_KEYS -> project, the rest -> global). The project file is only
+    /// written when it exists or has something to hold, so running rusti in a
+    /// folder does not leave a model.json behind.
+    pub fn save_pair(&self, global: &str, project: &str) -> Result<(), String> {
+        if let Some(e) = &self.err {
+            return Err(format!("{e} — not overwriting it, fix the file by hand"));
+        }
+        let serde_json::Value::Object(all) = serde_json::to_value(self).map_err(|e| e.to_string())? else {
+            unreachable!("Config serializes to an object")
+        };
+        // A key the project overrides keeps its global value: the override is
+        // this project's, and dropping it here would change every other project.
+        let mut g = read_obj(global)?;
+        g.retain(|k, _| self.project_keys.contains(k));
+        let mut p = serde_json::Map::new();
+        for (k, v) in all {
+            let to_project = self.project_keys.contains(&k) || PROJECT_KEYS.contains(&k.as_str());
+            if to_project { p.insert(k, v) } else { g.insert(k, v) };
+        }
+        if let Some(dir) = std::path::Path::new(global).parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+        }
+        write_obj(global, g)?;
+        if !p.is_empty() || std::path::Path::new(project).exists() {
+            write_obj(project, p)?;
+        }
+        Ok(())
     }
     pub fn save_to(&self, path: &str) -> Result<(), String> {
         if let Some(e) = &self.err {
@@ -125,10 +207,25 @@ impl Config {
     }
 }
 
+/// A missing file is an empty object (first run); an unreadable or unparsable
+/// one is an error, so save refuses and neither file is overwritten.
+fn read_obj(path: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{path}: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(format!("{path}: {e}")),
+    }
+}
+
+fn write_obj(path: &str, m: serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(&serde_json::Value::Object(m)).map_err(|e| e.to_string())?;
+    std::fs::write(path, s).map_err(|e| format!("writing {path}: {e}"))
+}
+
 /// Interactive profile creation (stderr prompts, stdin answers).
 /// Returns None when stdin closes (EOF).
 pub fn ask_profile() -> Option<ModelProfile> {
-    eprintln!("No saved model in model.json — add one (enter keeps [default]):");
+    eprintln!("No saved model in {} — add one (enter keeps [default]):", global_path());
     let name = required("name", "default")?;
     let url = required("url (http://host:port/v1/chat/completions)", "")?;
     let key = prompt("api key (optional)", "")?;
@@ -214,5 +311,64 @@ mod tests {
         assert!(fresh.err.is_none(), "no file is a first run, not a failure");
         fresh.save_to(p).unwrap();
         let _ = std::fs::remove_file(p);
+    }
+    /// The two-file split: each key saves back where it came from, a folder
+    /// gains no model.json it does not need, an old model.json moves its
+    /// models home once, and a broken global file freezes both files.
+    #[test]
+    fn global_and_project_files_split_and_merge() {
+        let dir = std::env::temp_dir().join(format!("rusti_pair_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = dir.join("home").join("config.json");
+        let (g, p) = (g.to_str().unwrap(), dir.join("model.json"));
+        let p = p.to_str().unwrap();
+        let read = |f: &str| std::fs::read_to_string(f).unwrap();
+
+        // migration: an old model.json with models and no global file
+        std::fs::write(p, r#"{"default":"mimo","models":[{"name":"mimo","url":"u","key":"k"}],"allow":["read"],"theme":"nord"}"#).unwrap();
+        let cfg = Config::load_pair(g, p);
+        assert!(cfg.err.is_none());
+        assert!(read(g).contains("\"key\": \"k\"") && read(g).contains("nord"), "models and theme move home");
+        assert!(!read(p).contains("models") && !read(p).contains("theme"), "and leave the repo");
+        assert!(read(p).contains("read"), "allow stays in the project");
+
+        // global only: a footer toggle lands in the global file, no model.json appears
+        std::fs::remove_file(p).unwrap();
+        let mut cfg = Config::load_pair(g, p);
+        assert_eq!(cfg.resolve().unwrap().name, "mimo", "models load from the global file");
+        cfg.footer.context = false;
+        cfg.save_pair(g, p).unwrap();
+        assert!(!std::path::Path::new(p).exists(), "no project file for global settings");
+        assert!(!Config::load_pair(g, p).footer.context);
+
+        // a new allow goes to the project, not the global file
+        cfg.allow.push("edit".into());
+        cfg.save_pair(g, p).unwrap();
+        assert!(read(p).contains("edit") && !read(g).contains("allow"));
+
+        // a project override is read from and saved to the project only
+        std::fs::write(p, r#"{"theme":"gruvbox"}"#).unwrap();
+        let before = read(g);
+        let mut cfg = Config::load_pair(g, p);
+        assert_eq!(cfg.theme.as_deref(), Some("gruvbox"), "project key wins");
+        cfg.theme = Some("dracula".into());
+        cfg.save_pair(g, p).unwrap();
+        assert!(read(p).contains("dracula"));
+        assert_eq!(read(g), before, "global file untouched by a project override");
+        std::fs::remove_file(p).unwrap();
+        assert_eq!(Config::load_pair(g, p).theme.as_deref(), Some("nord"), "other projects keep the global theme");
+
+        // a malformed global file: reported, and neither file is written
+        std::fs::write(g, "{ not json").unwrap();
+        std::fs::write(p, r#"{"allow":["read"]}"#).unwrap();
+        let before_p = read(p);
+        let mut cfg = Config::load_pair(g, p);
+        assert!(cfg.err.is_some());
+        cfg.theme = Some("x".into());
+        assert!(cfg.save_pair(g, p).is_err());
+        assert_eq!(read(g), "{ not json");
+        assert_eq!(read(p), before_p);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

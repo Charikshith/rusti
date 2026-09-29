@@ -34,9 +34,11 @@ flags
 
 env: LLM_URL LLM_KEY LLM_MODEL RUSTI_SESSION RUSTI_MAX_ITERS RUSTI_CONTEXT RUSTI_YOLO
 
-model.json also carries project settings: \"allow\" (tools answered [a]lways, so the next
-run doesn't ask), \"max_iters\", \"context\". Flags and env override them.
-It also carries \"mcp\": MCP servers to start, each with a command, optional args/env,
+settings: ~/.rusti/config.json holds models, keys, theme, footer and \"mcp\" for every
+project (RUSTI_HOME moves it). ./model.json holds this project's \"allow\" (tools answered
+[a]lways, so the next run doesn't ask), \"max_iters\", \"context\"; any other key put there
+overrides the global one for this project. Flags and env override both.
+\"mcp\" lists MCP servers to start, each with a command, optional args/env,
 and \"enabled\". Their tools join the built-in ones as mcp__<server>__<tool>, are always
 permission-gated, and are refused in plan mode. Toggle them live with /mcp.
 
@@ -70,6 +72,7 @@ fn main() {
         if let Some(e) = &cfg.err {
             eprintln!("⚠ {e}");
         }
+        eprintln!("config: {} + ./{}", config::global_path(), config::PATH);
         if cfg.models.is_empty() {
             println!("no saved models (launch with a task to add one, or --add)");
             return;
@@ -103,7 +106,7 @@ fn main() {
                 cfg.default = Some(p.name.clone());
                 cfg.add(p);
                 cfg.save().unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
-                eprintln!("saved to model.json");
+                eprintln!("saved to {}", config::global_path());
             }
             None => eprintln!("aborted"),
         }
@@ -261,7 +264,7 @@ fn resolve_model(args: &[String]) -> (String, String, String) {
         cfg.default = Some(p.name.clone());
         cfg.add(p.clone());
         prof = p;
-        cfg.save().unwrap_or_else(|e| eprintln!("warning: could not save model.json: {e}"));
+        cfg.save().unwrap_or_else(|e| eprintln!("warning: could not save settings: {e}"));
     }
 
     let url = explicit_url.unwrap_or(prof.url);

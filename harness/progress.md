@@ -895,3 +895,20 @@ through the session"):
 - Both are in the test now: the consumed count (4 for header + separator + two rows), no backtick in the
   output, and the second column still starting at the same offset in header and body.
 - `cargo test` 38 passed · `--self-test` OK · release clean.
+
+## Session 2026-09-30: feat-072 — install, and settings in ~/.rusti
+
+- Question was "is there an install command, and does config go to a home folder like ~/.claude?" It did not:
+  model.json was read from the cwd, so every new folder asked for a model and API keys lived in each repo.
+- **Install is `cargo install --path .`** — no script; anyone building rusti already has cargo.
+- **Two files, one rule.** `~/.rusti/config.json` (models, keys, theme, footer, mcp) and `./model.json`
+  (allow, max_iters, context). A key the project file has overrides the global one and saves back there;
+  anything else saves to its home. No caller changed — every call site already went through load()/save().
+- **Migration**: first run with an old model.json that has models and no global file moves the global keys
+  home once. An old file also just works without it, since its keys count as project-owned.
+- **The test caught a real bug**: a project override of `theme` wiped the global theme on save, because the
+  global file was rebuilt from the merged config minus the project's keys. save_pair now keeps the global
+  value of any key the project overrides, and the test checks another project still sees it.
+- `/reload` needed nothing: it builds from CARGO_MANIFEST_DIR, baked in at compile time.
+- `cargo test` 39 passed (one new) · `--self-test` OK (RUSTI_HOME on a scratch dir) · end to end on a copy of
+  the real model.json.

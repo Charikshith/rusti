@@ -903,6 +903,24 @@
         "The colours for 'current' were read off the screenshot's pixels rather than guessed: decoding it gave #88c0d0 and #a3be8c on #7b8496, which identified Nord exactly.",
         "table_block returns (rows, consumed) rather than letting the caller derive it. The count is not rows.len() - the separator is eaten and is not a row - and deriving it at the call site is exactly what drew the last row twice."
       ]
+    },
+    {
+      "id": "feat-072",
+      "name": "Install with cargo install; settings live in ~/.rusti/config.json, project state stays in ./model.json",
+      "description": "rusti read model.json from the cwd, so every new folder asked for a model again and API keys sat in each repo. Now Config::load merges two files: ~/.rusti/config.json (models, default, keys, theme, footer, mcp; RUSTI_HOME overrides the dir) and ./model.json (allow, max_iters, context). A top-level key the project file has overrides the global one and is saved back to the project; every other key saves to its home. The first run with an old model.json that has models and no global file moves the global keys home once. Install is `cargo install --path .`.",
+      "dependencies": [
+        "feat-038"
+      ],
+      "status": "done",
+      "evidence": "cargo test 39 passed (one new: global_and_project_files_split_and_merge covers migration, global-only save creating no model.json, a new allow landing in the project, a project override read and saved in the project with the global file byte-identical and still in force elsewhere, and a malformed global file freezing both files). --self-test OK with RUSTI_HOME pointed at a scratch dir. End to end on a copy of the real model.json: --list migrated all profiles to the test home, then --list in an empty folder showed them. The test found a real bug first: a project override of theme erased the global theme on save; save_pair now keeps the global value of any key the project overrides.",
+      "decisions": [
+        "cargo install --path . is the installer. No script, no prebuilt binaries: anyone building rusti already has cargo. Add an installer when someone without a toolchain needs it.",
+        "allow stays per project: a tool answered [a]lways in one repo is not safe to auto-run in every repo.",
+        "Override is by whole top-level key, no deep merge. A project that sets mcp owns the whole map - the same thing a hand-edit reader would expect.",
+        "An old model.json keeps working without the migration (its keys are project-owned). The migration only runs when there is no global file yet, so it happens once and never fights a user's later project overrides.",
+        "No dirs crate: USERPROFILE/HOME is all it would read here. RUSTI_HOME exists so tests and --self-test never write the real ~/.rusti.",
+        "/reload needed no change: it builds from CARGO_MANIFEST_DIR baked in at compile time, so an installed rusti in any folder still rebuilds its own source."
+      ]
     }
   ]
 }
