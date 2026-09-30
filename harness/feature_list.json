@@ -1013,7 +1013,7 @@
         "The shell setting is used unchecked: a wrong path fails on the first command instead of silently running somewhere else.",
         "A setting whose file stem is cmd keeps /C (and & for the prefix); everything else gets -c, as Pi does.",
         "No bash at all falls back to cmd /C / sh -c rather than erroring (Pi errors on Windows).",
-        "Streamed rows are capped at 500 per command with a '… N more lines' row; the model still gets run_command's usual 20k-char result.",
+        "Every streamed line reaches the transcript (no row cap); the model still gets run_command's usual 20k-char result.",
         "The finished row keeps only the exit/timeout line, since the output is already on screen above it.",
         "MCP servers and utc_offset_min keep their own cmd /C: they are not shell commands."
       ]

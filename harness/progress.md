@@ -979,6 +979,6 @@ through the session"):
   `"shell"` setting (~ expanded) → Git Bash under Program Files / (x86) → bash on PATH → cmd /C / sh -c.
   `"shell_command_prefix"` goes in front of every command on its own line (`&` under cmd).
 - `!!cmd` = `!cmd` whose output never enters the session. `!`/`!!` stream line by line (tools::run_command_live,
-  tui::run_bash), capped at 500 rows. The system prompt now names the shell; HELP, readme § shell commands updated.
+  tui::run_bash), every line shown (no row cap). The system prompt now names the shell; HELP, readme § shell commands updated.
 - Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
   `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.
