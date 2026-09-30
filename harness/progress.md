@@ -973,3 +973,12 @@ through the session"):
 - Fix: the row now reads `N msg(s)` (`Session::msgs`, numbered user messages on the active path — the last
   N› after resume) plus `M branches` (`Session::branches`, leaves) when > 1; the resume notice matches.
 - Verification: `./init.sh`, cargo test 41 passed (new: resume_picker_counts_what_resuming_shows).
+
+## Session 2026-09-30 (3): feat-078 — shell commands like Pi's
+- One shell for run_command, run_background, `!` and `!!`, resolved once at startup (tools::set_shell from main):
+  `"shell"` setting (~ expanded) → Git Bash under Program Files / (x86) → bash on PATH → cmd /C / sh -c.
+  `"shell_command_prefix"` goes in front of every command on its own line (`&` under cmd).
+- `!!cmd` = `!cmd` whose output never enters the session. `!`/`!!` stream line by line (tools::run_command_live,
+  tui::run_bash), every line shown (no row cap). The system prompt now names the shell; HELP, readme § shell commands updated.
+- Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
+  `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.

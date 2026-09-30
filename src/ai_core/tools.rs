@@ -275,15 +275,18 @@ pub fn write_file(path: &str, content: &str) -> (bool, String) {
 
 /// timeout_secs = 0 -> CMD_TIMEOUT_SECS. The process is killed at the deadline.
 pub fn run_command(cmd: &str, timeout_secs: u64) -> (bool, String) {
-    use std::io::Read;
+    run_command_live(cmd, timeout_secs, Arc::new(|_: &str| {}))
+}
+
+/// run_command that also hands `live` each output line as it arrives, for a
+/// front end to show while the command is still running.
+pub fn run_command_live(cmd: &str, timeout_secs: u64, live: Arc<dyn Fn(&str) + Send + Sync>) -> (bool, String) {
     let mut child = match shell(cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return (false, format!("failed to run command: {e}")),
     };
-    let mut so = child.stdout.take().unwrap();
-    let mut se = child.stderr.take().unwrap();
-    let out_t = std::thread::spawn(move || { let mut v = Vec::new(); let _ = so.read_to_end(&mut v); v });
-    let err_t = std::thread::spawn(move || { let mut v = Vec::new(); let _ = se.read_to_end(&mut v); v });
+    let out_t = read_live(child.stdout.take().unwrap(), live.clone());
+    let err_t = read_live(child.stderr.take().unwrap(), live);
     let secs = if timeout_secs == 0 { CMD_TIMEOUT_SECS } else { timeout_secs };
     let deadline = Instant::now() + Duration::from_secs(secs);
     let status = loop {
@@ -292,7 +295,7 @@ pub fn run_command(cmd: &str, timeout_secs: u64) -> (bool, String) {
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                // ponytail: reader threads are not joined — a grandchild (cmd /C spawns one)
+                // ponytail: reader threads are not joined — a grandchild (the shell spawns one)
                 // may still hold the pipe; they exit when it does. Use a job object if it matters.
                 return (false, format!("[timed out after {secs}s; process killed]"));
             }
@@ -305,6 +308,25 @@ pub fn run_command(cmd: &str, timeout_secs: u64) -> (bool, String) {
     s.push_str(&String::from_utf8_lossy(&out_t.join().unwrap_or_default()));
     s.push_str(&String::from_utf8_lossy(&err_t.join().unwrap_or_default()));
     (code == 0, truncate(&s, MAX_RESULT))
+}
+
+/// Read a pipe to the end, passing each complete line to `live` on the way.
+fn read_live(mut r: impl std::io::Read + Send + 'static, live: Arc<dyn Fn(&str) + Send + Sync>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let (mut all, mut chunk, mut from) = (Vec::new(), [0u8; 8192], 0);
+        while let Ok(n) = r.read(&mut chunk) {
+            if n == 0 { break; }
+            all.extend_from_slice(&chunk[..n]);
+            while let Some(i) = all[from..].iter().position(|&b| b == b'\n') {
+                live(String::from_utf8_lossy(&all[from..from + i]).trim_end_matches('\r'));
+                from += i + 1;
+            }
+        }
+        if from < all.len() {
+            live(&String::from_utf8_lossy(&all[from..]));
+        }
+        all
+    })
 }
 
 pub fn edit_file(path: &str, old_text: &str, new_text: &str) -> (bool, String) {
@@ -667,6 +689,91 @@ fn collapse(s: &str) -> String {
     out.trim().to_string()
 }
 
+// ---- shell -------------------------------------------------------------------
+
+/// What every command runs in: run_command, run_background, and the TUI's
+/// `!` / `!!`. Resolved once per process.
+pub struct Shell {
+    pub program: String,
+    pub flag: &'static str,
+    prefix: String,
+}
+
+static SHELL: OnceLock<Shell> = OnceLock::new();
+
+/// Startup, with the config's `shell` and `shell_command_prefix`. A process
+/// that never calls it (--self-test) resolves with no settings on first use.
+pub fn set_shell(setting: Option<&str>, prefix: Option<&str>) {
+    let _ = SHELL.set(pick_shell(setting, bash_candidates(), prefix.unwrap_or_default()));
+}
+
+pub fn current_shell() -> &'static Shell {
+    SHELL.get_or_init(|| pick_shell(None, bash_candidates(), ""))
+}
+
+/// The `shell` setting (a leading ~ is the home folder), else the first
+/// candidate that exists, else cmd /C on Windows and sh -c elsewhere. The
+/// setting is not checked: a wrong path should fail on the first command,
+/// not quietly run everything somewhere the user did not ask for.
+fn pick_shell(setting: Option<&str>, candidates: Vec<std::path::PathBuf>, prefix: &str) -> Shell {
+    let program = match setting.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => expand_home(s),
+        None => candidates.into_iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| if cfg!(windows) { "cmd" } else { "sh" }.into()),
+    };
+    let cmd = Path::new(&program).file_stem().is_some_and(|s| s.eq_ignore_ascii_case("cmd"));
+    Shell { flag: if cmd { "/C" } else { "-c" }, program, prefix: prefix.trim().to_string() }
+}
+
+/// Git Bash where its installer puts it (Windows only), then bash on PATH.
+fn bash_candidates() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    if cfg!(windows) {
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(d) = std::env::var_os(var) {
+                v.push(Path::new(&d).join("Git").join("bin").join("bash.exe"));
+            }
+        }
+    }
+    let exe = if cfg!(windows) { "bash.exe" } else { "bash" };
+    if let Some(path) = std::env::var_os("PATH") {
+        v.extend(std::env::split_paths(&path).map(|d| d.join(exe)));
+    }
+    v
+}
+
+fn expand_home(s: &str) -> String {
+    match s.strip_prefix('~').filter(|rest| rest.is_empty() || rest.starts_with(['/', '\\'])) {
+        Some(rest) => {
+            let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default();
+            format!("{}{rest}", home.to_string_lossy())
+        }
+        None => s.to_string(),
+    }
+}
+
+impl Shell {
+    /// The command with shell_command_prefix in front, on its own line; cmd
+    /// reads only the first line of /C, so there it is `&`-joined instead.
+    fn line(&self, cmd: &str) -> String {
+        match (self.prefix.is_empty(), self.flag) {
+            (true, _) => cmd.to_string(),
+            (false, "/C") => format!("{} & {cmd}", self.prefix),
+            _ => format!("{}\n{cmd}", self.prefix),
+        }
+    }
+
+    fn command(&self, cmd: &str) -> Command {
+        let mut c = Command::new(&self.program);
+        c.args([self.flag, &self.line(cmd)]);
+        c
+    }
+}
+
+fn shell(cmd: &str) -> Command {
+    current_shell().command(cmd)
+}
+
 // ---- background jobs -------------------------------------------------------
 // ponytail: jobs outlive the agent process if not stopped; the system prompt tells
 // the model to job_stop what it started. A Windows job object would auto-kill them.
@@ -680,18 +787,6 @@ struct Job {
 static JOBS: Mutex<Vec<(u32, Job)>> = Mutex::new(Vec::new());
 static NEXT_JOB: AtomicUsize = AtomicUsize::new(1);
 const JOB_BUF: usize = 1 << 20; // keep the last 1 MB of output
-
-fn shell(cmd: &str) -> Command {
-    if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", cmd]);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.args(["-c", cmd]);
-        c
-    }
-}
 
 fn pump(mut r: impl std::io::Read + Send + 'static, buf: Arc<Mutex<Vec<u8>>>) {
     std::thread::spawn(move || {
@@ -751,7 +846,7 @@ pub fn job_stop(id: u32) -> (bool, String) {
     let (_, mut j) = jobs.remove(pos);
     let was = status(&mut j.child);
     if cfg!(windows) {
-        // cmd /C wraps the real process; taskkill /T takes the whole tree down
+        // the shell wraps the real process; taskkill /T takes the whole tree down
         let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &j.child.id().to_string()])
             .stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
@@ -925,5 +1020,37 @@ mod tests {
         assert!(got > 0, "a zero-byte clip is a failure, not an image");
         assert!(path.ends_with(".png"));
         println!("clipboard_image -> {path} ({got} bytes)");
+    }
+
+    /// Shell order: the setting (as given, ~ expanded), then the first
+    /// candidate that exists (Git Bash, then PATH), then the platform shell.
+    /// And the prefix really runs first, in whichever shell this machine has.
+    #[test]
+    fn shell_resolution_order_and_prefix() {
+        let dir = std::env::temp_dir().join(format!("rusti_shell_{}", std::process::id()));
+        let (a, b) = (dir.join("a").join("bash.exe"), dir.join("b").join("bash.exe"));
+        for f in [&a, &b] {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, "").unwrap();
+        }
+        let missing = dir.join("nope").join("bash.exe");
+        let cands = || vec![missing.clone(), a.clone(), b.clone()];
+
+        let sh = pick_shell(Some("/opt/zsh"), cands(), "");
+        assert_eq!((sh.program.as_str(), sh.flag), ("/opt/zsh", "-c"), "the setting wins, unchecked");
+        assert!(!pick_shell(Some("~/bin/bash"), cands(), "").program.starts_with('~'), "~ is the home folder");
+        assert_eq!(pick_shell(Some("C:/Windows/System32/cmd.exe"), cands(), "").flag, "/C", "cmd keeps /C");
+        assert_eq!(pick_shell(Some("  "), cands(), "").program, a.to_string_lossy(), "blank setting is unset");
+        assert_eq!(pick_shell(None, cands(), "").program, a.to_string_lossy(), "first existing candidate, missing skipped");
+        let native = pick_shell(None, vec![missing.clone()], "");
+        assert_eq!((native.program.as_str(), native.flag), if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") });
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(pick_shell(None, vec![], "").line("ls"), "ls", "no prefix, command untouched");
+        assert_eq!(pick_shell(Some("bash"), vec![], "set -e").line("ls"), "set -e\nls");
+        assert_eq!(pick_shell(Some("cmd"), vec![], "chcp 65001").line("dir"), "chcp 65001 & dir");
+        let out = pick_shell(None, bash_candidates(), "echo pre").command("echo cmd").output().unwrap();
+        let out = String::from_utf8_lossy(&out.stdout);
+        assert!(out.find("pre").zip(out.find("cmd")).is_some_and(|(p, c)| p < c), "prefix runs first: {out:?}");
     }
 }

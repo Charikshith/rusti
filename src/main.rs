@@ -41,6 +41,9 @@ overrides the global one for this project. Flags and env override both.
 \"mcp\" lists MCP servers to start, each with a command, optional args/env,
 and \"enabled\". Their tools join the built-in ones as mcp__<server>__<tool>, are always
 permission-gated, and are refused in plan mode. Toggle them live with /mcp.
+\"shell\" is the path of the shell every command runs in (~ is your home folder); unset, it is
+Git Bash (Windows), then bash on PATH, then cmd /C or sh -c. \"shell_command_prefix\" is
+put in front of every command, on its own line.
 
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   list, switch and name sessions
@@ -49,7 +52,8 @@ slash commands (--tui)
   /export         transcript to markdown      /reload           rebuild and relaunch
   /settings       show/hide status-line parts  /mcp              MCP servers on/off
   /themes         pick the colour palette     /quit
-  !CMD            run a shell command; its output goes to the model too
+  !CMD            run a shell command, output streamed; it goes to the model too
+  !!CMD           the same, but the output is shown to you only
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
 ";
 
@@ -119,6 +123,7 @@ fn main() {
         eprintln!("⚠ {e}\n  running with defaults: no saved models, permissions or MCP servers, and saving is off");
     }
     ai_core::allow_from_config(&saved.allow);
+    ai_core::tools::set_shell(saved.shell.as_deref(), saved.shell_command_prefix.as_deref());
     if let Some(n) = saved.max_iters {
         ai_core::set_max_iters(n);
     }
