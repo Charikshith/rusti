@@ -2,6 +2,7 @@
 
 Minimal coding agent in Rust: async core (tokio + reqwest), custom ANSI
 TUI (no ratatui), ~2.2 MB release binary.
+How it compares with the Pi coding agent: [docs/rusti-vs-pi.md](docs/rusti-vs-pi.md).
 
 ## Install
 
