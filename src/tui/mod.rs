@@ -594,11 +594,11 @@ mod tests {
             vec![
                 "1› first task".to_string(),
                 "Let me look.".to_string(),
-                "  ✓ src/main.rs".to_string(),   // summary + outcome, paired in call order
+                "  ✓ read src/main.rs".to_string(),   // summary + outcome, paired in call order
                 // a resumed turn carries its output too, so Ctrl+O works on it:
                 // the success tail marked hidden, the failure tail plainly visible
                 format!("{}  · fn main…", app::HIDDEN),
-                "  ✗ cargo test".to_string(),
+                "  ✗ run cargo test".to_string(),
                 "  · [exit 101]".to_string(),
                 "done".to_string(),
                 String::new(), // the turn ended on prose
@@ -617,7 +617,7 @@ mod tests {
         // failure, so it does not get to push its tail on screen unasked
         assert_eq!(
             render_history(&old).0,
-            vec!["1› q".to_string(), "  · *.rs".to_string(), format!("{}  · x", app::HIDDEN)]
+            vec!["1› q".to_string(), "  · glob *.rs".to_string(), format!("{}  · x", app::HIDDEN)]
         );
     }
 

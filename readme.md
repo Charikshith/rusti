@@ -200,6 +200,13 @@ them as if it mutates. `[a]lways` works on them like any other tool.
 
 ## TUI
 
+The transcript marks what needs your eye with a background: your own message (grey), a failed
+tool (red) and a tool waiting for your permission (amber). Other tool rows get only a thin
+coloured edge: green when done, the spinner colour while running. A run of file reads folds
+into one row, the model's narration between tools is dimmed under a rail, and a tool's time
+leaves out the time you spent answering its permission prompt. On a light terminal set
+`"light": true` in `~/.rusti/config.json` for pale tints instead of dark ones.
+
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
 binary small (~2.2 MB) and the rendering fast — full-screen redraw with

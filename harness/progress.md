@@ -953,3 +953,15 @@ through the session"):
 - `enrich-harness --apply` installed `.githooks/pre-commit` and an init.sh block that sets `core.hooksPath`: a commit
   touching files outside harness/ now needs harness/progress.md and harness/memory/journal.md staged with it.
 - Open gap (manual, validator 94/100): some lessons in harness/memory/ lack a Why and a Source line.
+
+## Session 2026-10-01: feat-076 — transcript design D
+
+- The user found the tool section of a turn hard to read (screenshot: pwd failing on Windows). Built a mock-up with
+  four options on a real terminal frame (scratchpad/transcript-styles.html, via Lavish); they picked C's tidy layout
+  with B's edge bars, named D. The mock-up first assumed a dark terminal; their screenshot was white, so it gained a
+  light mode, and that became the "light" config setting.
+- Backgrounds only where the eye should go: user message, failed tool, pending permission. Edges for the rest.
+- Permission prompt is the tool row itself; failures are one row with the reason; reads fold; narration dims.
+  Tool time now excludes the user's decision time (the "pwd 8.2s" in the screenshot).
+- Verified by driving the release build in Windows Terminal (SendKeys + window screenshots), dark and light schemes.
+- `cargo test` 43 passed (three new) · release build clean.

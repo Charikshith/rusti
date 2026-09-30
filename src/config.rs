@@ -87,6 +87,10 @@ pub struct Config {
     /// loses an entry must not silently restyle the terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// The terminal has a light background: row tints use pale washes instead
+    /// of dark blocks. rusti cannot detect it, so it is a setting.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub light: bool,
     /// BTreeMap, not HashMap: the tool list sent to the model must be in a
     /// stable order, or every run reshuffles it and defeats prompt caching.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]

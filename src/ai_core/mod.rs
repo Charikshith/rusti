@@ -451,8 +451,11 @@ pub async fn run_agent(
         for tc in &res.tool_calls {
             let summary = tool_summary(&tc.name, &tc.arguments);
             emit(Event::ToolStart(summary.clone()));
+            // the clock starts after the permission prompt: time spent deciding is
+            // the user's, and counting it made `pwd` read as an 8-second command
+            let permit = permitted(&tc.name, &summary).await;
             let t0 = std::time::Instant::now();
-            let (ok, result) = match permitted(&tc.name, &summary).await {
+            let (ok, result) = match permit {
                 Ok(()) => dispatch(client, &tc.name, &tc.arguments, cancel).await,
                 Err(e) => (false, e),
             };
@@ -508,6 +511,22 @@ pub fn fail_tail(output: &str) -> Vec<String> {
     out
 }
 
+/// The one line that says why a tool failed, for the ✗ row itself: the first
+/// line that is not the "[exit N]" header, cut to fit. The whole output stays
+/// behind Ctrl+O.
+pub fn fail_reason(output: &str) -> String {
+    let line = output
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !(l.starts_with("[exit ") && l.ends_with(']')))
+        .unwrap_or("");
+    let mut r: String = line.chars().take(70).collect();
+    if line.chars().count() > 70 {
+        r.push('…');
+    }
+    r
+}
+
 /// The "+3 -1" an edit tool puts at the end of its first result line, so the
 /// ✓ row can show what a change cost without opening the diff behind Ctrl+O.
 /// None for every other tool, whose row is then left exactly as it was.
@@ -523,20 +542,25 @@ pub fn edit_stat(result: &str) -> Option<&str> {
 }
 
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
+/// Verb first, so a row reads on its own ("run cd", "read x"), and the TUI can
+/// fold a run of reads into one row by the verb alone.
 pub fn tool_summary(name: &str, args: &Value) -> String {
+    let path = || args["path"].as_str().unwrap_or("?");
     match name {
-        "read_file" | "write_file" | "edit_file" | "list_dir" =>
-            args["path"].as_str().unwrap_or("?").to_string(),
-        "multi_edit" => format!("{} ({} edits)", args["path"].as_str().unwrap_or("?"),
+        "read_file" => format!("read {}", path()),
+        "write_file" => format!("write {}", path()),
+        "edit_file" => format!("edit {}", path()),
+        "list_dir" => format!("list {}", path()),
+        "multi_edit" => format!("edit {} ({} edits)", path(),
             args["edits"].as_array().map_or(0, |a| a.len())),
-        "run_command" => args["command"].as_str().unwrap_or("?").to_string(),
-        "grep" => format!("\"{}\" in {}", args["pattern"].as_str().unwrap_or("?"),
+        "run_command" => format!("run {}", args["command"].as_str().unwrap_or("?")),
+        "grep" => format!("grep \"{}\" in {}", args["pattern"].as_str().unwrap_or("?"),
             args["path"].as_str().filter(|p| !p.is_empty()).unwrap_or(".")),
-        "glob" => args["pattern"].as_str().unwrap_or("?").to_string(),
+        "glob" => format!("glob {}", args["pattern"].as_str().unwrap_or("?")),
         "run_background" => format!("(background) {}", args["command"].as_str().unwrap_or("?")),
         "job_output" | "job_stop" => format!("job {}", args["id"].as_u64().unwrap_or(0)),
-        "delete_file" => args["path"].as_str().unwrap_or("?").to_string(),
-        "move_file" => format!("{} -> {}", args["from"].as_str().unwrap_or("?"), args["to"].as_str().unwrap_or("?")),
+        "delete_file" => format!("delete {}", path()),
+        "move_file" => format!("move {} -> {}", args["from"].as_str().unwrap_or("?"), args["to"].as_str().unwrap_or("?")),
         "todo" => format!("todo ({} items)", args["items"].as_array().map_or(0, |a| a.len())),
         "delegate" => format!("delegate: {}", args["task"].as_str().unwrap_or("?").chars().take(80).collect::<String>()),
         "web_fetch" => args["url"].as_str().unwrap_or("?").to_string(),

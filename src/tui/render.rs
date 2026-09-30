@@ -144,7 +144,14 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     for (st, row) in &all[start..end] {
         // markdown rows are already wrapped and styled; truncating would cut
         // an escape sequence in half
-        frame.push(if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w), spin) });
+        let styled = if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w), spin) };
+        let t = theme::tints();
+        frame.push(match st {
+            b'u' => band(t.user, &styled, w),
+            b'x' => band(t.fail, &styled, w),
+            b'a' => band(t.ask, &styled, w),
+            _ => styled,
+        });
     }
 
     frame.push(String::new()); // blank spacer
@@ -358,6 +365,12 @@ fn line_style(l: &str) -> u8 {
         b'+' // an added one
     } else if l.starts_with("  · ") {
         b's' // turn stats
+    } else if l.starts_with("  ┆ ") {
+        b'n' // the model's narration between tool calls
+    } else if l.starts_with("  ✗ ") {
+        b'x' // a failed tool: the one tool row that gets a background
+    } else if l.starts_with("  ? ") {
+        b'a' // a tool waiting on the user's permission
     } else if is_user_line(l) {
         b'u' // split from b'k': the query stays bright, tool rows do not
     } else if MARKERS.iter().any(|p| l.starts_with(p)) {
@@ -374,6 +387,23 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         // the │ is an internal sentinel for line_style, never drawn: italic grey
         // carries the block on its own, the way the reference terminals do it
         b't' => return format!("  {think}{}{RESET}", s.strip_prefix("  │ ").unwrap_or(s)),
+        // narration: dim italic under a thin rail, so the answer is the only
+        // prose at full brightness. The sentinel is as wide as what replaces it
+        b'n' => return format!("  {dim}│{RESET} {think}{}{RESET}", s.strip_prefix("  ┆ ").unwrap_or(s)),
+        // a failed tool sits on the fail tint (band() in draw); its text stays
+        // readable rather than dim, since it is the row that needs reading
+        b'x' => {
+            return match s.strip_prefix("  ✗ ") {
+                Some(rest) => format!("{f}▎{RESET} {f}✗{RESET} {rest}", f = t.fail),
+                None => format!("  {s}"),
+            };
+        }
+        b'a' => {
+            return match s.strip_prefix("  ? ") {
+                Some(rest) => format!("{w}▎{RESET} {BOLD}?{RESET} {rest}", w = t.warn),
+                None => format!("  {s}"),
+            };
+        }
         b's' => return format!("{dim}{s}{RESET}"),
         // the sign is what the eye should catch, so it keeps full colour while
         // the code itself stays dim — a hunk is context, not the answer
@@ -405,11 +435,12 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         // "running" and "finished a while ago" cannot be confused at a glance.
         // ToolEnd rewrites this row to ✓/✗, which lands in the dim branches
         // below — that swap is what un-bolds it.
-        format!("  {}{spin}{RESET} {BOLD}{rest}{RESET}", t.warn)
+        // The ▎ edge takes the indent's first column, so rows stay aligned:
+        // a thin mark of state instead of a filled row, which a long run of
+        // successful tools would turn into a wall of colour.
+        format!("{w}▎{RESET} {w}{spin}{RESET} {BOLD}{rest}{RESET}", w = t.warn)
     } else if let Some(rest) = s.strip_prefix("  ✓ ") {
-        format!("  {}✓{RESET} {dim}{rest}{RESET}", t.ok)
-    } else if let Some(rest) = s.strip_prefix("  ✗ ") {
-        format!("  {}✗{RESET} {dim}{rest}{RESET}", t.fail)
+        format!("{o}▎{RESET} {o}✓{RESET} {dim}{rest}{RESET}", o = t.ok)
     } else if let Some(rest) = s.strip_prefix("  ⚠ ") {
         format!("  {}⚠{RESET} {dim}{rest}{RESET}", t.warn)
     } else if let Some(rest) = s.strip_prefix("  ℹ ") {
@@ -417,6 +448,24 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
     } else {
         format!("  {dim}{s}{RESET}") // wrapped continuation of a tool row
     }
+}
+
+/// Fill a styled row with a background across the terminal. Every RESET inside
+/// would drop the background mid-row, so the tint is re-applied after each one.
+/// One column short of the edge: writing the last column makes some terminals
+/// wrap onto the next row.
+fn band(bg: &str, row: &str, w: usize) -> String {
+    let mut vis = 0;
+    let mut esc = false;
+    for c in row.chars() {
+        match c {
+            '\x1b' => esc = true,
+            c if esc => esc = !c.is_ascii_alphabetic(),
+            _ => vis += 1,
+        }
+    }
+    let body = row.replace(RESET, &format!("{RESET}{bg}"));
+    format!("{bg}{body}{}{RESET}", " ".repeat(w.saturating_sub(1).saturating_sub(vis)))
 }
 
 // ── markdown for model prose ────────────────────────────────────────────────
@@ -925,5 +974,32 @@ mod tests {
         assert_eq!(open.len(), 4);
         assert_eq!(open[1], "  · 27 passed", "the marker must be stripped, not drawn");
         assert!(!open.iter().any(|r| r.contains(app::HIDDEN)));
+    }
+
+    /// The three rows that get a background keep it across the whole row, even
+    /// past the RESETs their own colouring emits; every other row has none.
+    #[test]
+    fn user_failure_and_permission_rows_are_banded() {
+        let bg = "\x1b[48;2;1;2;3m";
+        let row = colorize_row(line_style("  ✗ run pwd  not found"), "  ✗ run pwd  not found", '⠋');
+        let b = band(bg, &row, 40);
+        assert!(b.starts_with(bg) && b.ends_with(RESET));
+        assert_eq!(b.matches(RESET).count(), row.matches(RESET).count() + 1);
+        assert!(b.replace(RESET, "").matches(bg).count() >= row.matches(RESET).count(), "tint re-applied after each reset");
+        let visible: String = {
+            let mut out = String::new();
+            let mut esc = false;
+            for c in b.chars() {
+                match c { '\x1b' => esc = true, c if esc => esc = !c.is_ascii_alphabetic(), c => out.push(c) }
+            }
+            out
+        };
+        assert_eq!(visible.chars().count(), 39, "padded to one short of the terminal edge");
+        assert_eq!(line_style("1› hi"), b'u');
+        assert_eq!(line_style("  ✗ run pwd"), b'x');
+        assert_eq!(line_style("  ? run pwd  allow?"), b'a');
+        assert_eq!(line_style("  ┆ narration"), b'n');
+        assert_eq!(line_style("  ✓ read x"), b'k', "a success gets an edge, not a band");
+        assert!(colorize_row(b'k', "  ✓ read x", '⠋').contains('▎'));
     }
 }

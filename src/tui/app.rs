@@ -133,6 +133,8 @@ pub struct App {
     pub hist_idx: Option<usize>,
     pub tool_line: Option<usize>, // index of the active "⠋" tool line
     pub ask_line: Option<usize>,  // index of the pending question's line
+    pub hand: bool,               // the running tool waited on the user's permission
+    pub fold: Option<(usize, Vec<String>)>, // the row a run of reads folds into, and its files
     pub retry_line: Option<usize>, // index of the counting "⚠ … retry n/3" line
     /// Transient confirmation shown on the status line. Session bookkeeping
     /// ("resumed …", "exported …") is not part of the conversation, so it does
@@ -172,6 +174,22 @@ const ARM_WINDOW: Duration = Duration::from_secs(2);
 const NOTICE_TTL: Duration = Duration::from_secs(3);
 
 impl App {
+    pub fn new(model: String, session: String, lines: Vec<String>, history: Vec<String>, msg_num: usize,
+               footer: crate::config::Footer) -> App {
+        App {
+            lines, current: String::new(),
+            ask: None, input: String::new(), cursor: 0, done: true, model, session,
+            msg_num, spinner: 0, scroll_up: 0,
+            history, hist_idx: None, tool_line: None, ask_line: None, hand: false, fold: None, retry_line: None,
+            notice: None, exit_armed: None,
+            footer,
+            turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
+            sess_tok: 0, branch: String::new(),
+            thinking: false,
+            menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
+            pick: None, expand: false,
+        }
+    }
     /// True while a second Ctrl+C would exit.
     pub fn armed(&self) -> bool {
         self.exit_armed.map(|t| t.elapsed() < ARM_WINDOW).unwrap_or(false)
@@ -316,19 +334,8 @@ pub fn ui_loop(
     // a saved palette that is no longer in the table keeps the default and says
     // so below, rather than leaving the user wondering why /themes did nothing
     let bad_theme = cfg.theme.as_deref().filter(|n| !super::theme::set(n)).map(String::from);
-    let mut app = App {
-        lines: seed_lines, current: String::new(),
-        ask: None, input: String::new(), cursor: 0, done: true, model, session,
-        msg_num: seed_msg_num, spinner: 0, scroll_up: 0,
-        history: seed_history, hist_idx: None, tool_line: None, ask_line: None, retry_line: None,
-        notice: None, exit_armed: None,
-        footer: cfg.footer.clone(),
-        turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
-        sess_tok: 0, branch: String::new(),
-        thinking: false,
-        menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
-        pick: None, expand: false,
-    };
+    super::theme::set_light(cfg.light);
+    let mut app = App::new(model, session, seed_lines, seed_history, seed_msg_num, cfg.footer.clone());
     // stderr is invisible under the alternate screen, so this goes in the
     // transcript — and stays there, a warning you must act on can't expire
     if let Some(e) = &cfg.err {
@@ -609,22 +616,14 @@ pub fn ui_loop(
                 }
                 ai_core::Event::Text(t) => { app.flush(); app.lines.push(t); }
                 ai_core::Event::ToolStart(t) => {
+                    narrate(&mut app);
                     app.flush();
                     app.thinking = false;
+                    app.hand = false;
                     app.lines.push(format!("  ⠋ {t}"));
                     app.tool_line = Some(app.lines.len() - 1);
                 }
-                ai_core::Event::ToolEnd { summary, ok, ms, output } => {
-                    let line = format!("  {} {summary}  {}", if ok { "✓" } else { "✗" }, ai_core::took(ms));
-                    match app.tool_line.take() {
-                        Some(i) if i < app.lines.len() && app.lines[i].starts_with("  ⠋ ") => app.lines[i] = line,
-                        _ => app.lines.push(line),
-                    }
-                    // "  · " rows render dim like the stats line. A success tail
-                    // is kept but marked hidden; Ctrl+O is what reveals it
-                    app.lines.extend(ai_core::fail_tail(&output).into_iter()
-                        .map(|r| if ok { format!("{HIDDEN}{r}") } else { r }));
-                }
+                ai_core::Event::ToolEnd { summary, ok, ms, output } => tool_end(&mut app, summary, ok, ms, &output),
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,
                 ai_core::Event::Notice(t) => app.notice = Some((t, std::time::Instant::now())),
@@ -668,8 +667,21 @@ pub fn ui_loop(
                 }
                 ai_core::Event::Ask { question, choices, reply } => {
                     app.flush();
-                    app.lines.push(format!("  ℹ {question}"));
-                    app.ask_line = Some(app.lines.len() - 1);
+                    // A permission prompt belongs to the tool row it gates: that row
+                    // turns into the question and back, leaving nothing behind. A
+                    // question the model asks (no fixed choices) keeps its own row.
+                    let tool = app.tool_line.filter(|&i| !choices.is_empty() && i < app.lines.len());
+                    match tool.and_then(|i| app.lines[i].strip_prefix("  ⠋ ").map(|t| (i, t.to_string()))) {
+                        Some((i, t)) => {
+                            app.lines[i] = format!("  ? {t}  allow?");
+                            app.ask_line = Some(i);
+                            app.hand = true;
+                        }
+                        None => {
+                            app.lines.push(format!("  ℹ {question}"));
+                            app.ask_line = Some(app.lines.len() - 1);
+                        }
+                    }
                     app.ask = Some((question.clone(), reply));
                     // a fixed set of answers is a choice, not a sentence to type:
                     // it opens the picker that /model and /resume already use
@@ -698,6 +710,7 @@ pub fn ui_loop(
                         app.lines.push(line);
                     }
                     app.thinking = false;
+                    app.fold = None;
                     if let Some(l) = app.turn_stats() {
                         app.lines.push(l);
                     }
@@ -820,10 +833,62 @@ fn close_ask(app: &mut App, ans: &str) -> Option<tokio::sync::oneshot::Sender<St
     let (question, reply) = app.ask.take()?;
     if let Some(i) = app.ask_line.take() {
         if i < app.lines.len() {
-            app.lines[i] = format!("  ℹ {question} → {ans}");
+            // a tool's own permission row goes back to running; ToolEnd settles it
+            app.lines[i] = match app.lines[i].strip_prefix("  ? ") {
+                Some(t) => format!("  ⠋ {}", t.strip_suffix("  allow?").unwrap_or(t)),
+                None => format!("  ℹ {question} → {ans}"),
+            };
         }
     }
     Some(reply)
+}
+
+/// Prose streamed before a tool call is the model narrating what it is about
+/// to do, not its answer: it is set dim under a rail, so the answer is the only
+/// prose at full brightness. Backticks are dropped, since narration is not run
+/// through markdown.
+fn narrate(app: &mut App) {
+    if app.thinking || app.current.trim().is_empty() {
+        return;
+    }
+    let text = std::mem::take(&mut app.current).replace('`', "");
+    let rows: Vec<String> = text.trim().lines().map(|l| format!("  ┆ {l}")).collect();
+    app.lines.push(rows.join("\n"));
+}
+
+/// Settle a tool's row: ✓ or ✗ with the reason, time only when it is worth
+/// reading, ✋ when the user approved it. Output stays behind Ctrl+O. A run of
+/// successful reads folds into one row, since each on its own says little.
+pub fn tool_end(app: &mut App, summary: String, ok: bool, ms: u128, output: &str) {
+    let time = if ms >= 100 { format!("  {}", ai_core::took(ms)) } else { String::new() };
+    let hand = if std::mem::take(&mut app.hand) { "  ✋" } else { "" };
+    let tail: Vec<String> = ai_core::fail_tail(output).into_iter().map(|r| format!("{HIDDEN}{r}")).collect();
+    let line = if ok {
+        format!("  ✓ {summary}{time}{hand}")
+    } else {
+        let why = ai_core::fail_reason(output);
+        let more = if tail.len() > 1 { "  (ctrl+o)" } else { "" };
+        format!("  ✗ {summary}  {why}{time}{hand}{more}")
+    };
+    let row = app.tool_line.take().filter(|&i| i < app.lines.len() && app.lines[i].starts_with("  ⠋ "));
+    let read = summary.strip_prefix("read ").filter(|_| ok).map(|p| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string());
+    let fold = app.fold.take();
+    match (row, read) {
+        // this read follows the last one with nothing visible between them
+        (Some(i), Some(file)) if fold.as_ref().is_some_and(|(j, _)| *j < i && app.lines[j + 1..i].iter().all(|l| l.starts_with(HIDDEN))) => {
+            let (j, mut files) = fold.unwrap();
+            files.push(file);
+            app.lines[j] = format!("  ✓ read {} files  {}", files.len(), files.join(" · "));
+            app.lines.remove(i);
+            app.fold = Some((j, files));
+        }
+        (Some(i), read) => {
+            app.lines[i] = line;
+            app.fold = read.map(|f| (i, vec![f]));
+        }
+        (None, _) => app.lines.push(line),
+    }
+    app.lines.extend(tail);
 }
 
 /// The cursor one line up (-1) or down (+1) in a multi-line input, keeping the
@@ -1235,4 +1300,79 @@ fn pick_model(app: &mut App) {
         top,
         filter: String::new(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        App::new("m".into(), "s".into(), vec![], vec![], 0, Default::default())
+    }
+    fn start(app: &mut App, t: &str) {
+        app.lines.push(format!("  ⠋ {t}"));
+        app.tool_line = Some(app.lines.len() - 1);
+    }
+    fn shown(app: &App) -> Vec<&str> {
+        app.lines.iter().filter(|l| !l.starts_with(HIDDEN)).map(String::as_str).collect()
+    }
+
+    /// Design D's tool rows: a run of reads is one row, a failure is one row
+    /// carrying its reason with the output behind Ctrl+O, a permission prompt
+    /// is the tool's own row and leaves nothing behind, and the time shown is
+    /// the command's, not the user's thinking time.
+    #[test]
+    fn tool_rows_fold_reads_and_carry_their_own_outcome() {
+        let mut a = app();
+        start(&mut a, "read harness/feature_list.json");
+        tool_end(&mut a, "read harness/feature_list.json".into(), true, 13, "{...}");
+        start(&mut a, "read harness/progress.md");
+        tool_end(&mut a, "read harness/progress.md".into(), true, 11, "# Progress");
+        start(&mut a, "read AGENTS.md");
+        tool_end(&mut a, "read AGENTS.md".into(), true, 9, "x");
+        assert_eq!(shown(&a), vec!["  ✓ read 3 files  feature_list.json · progress.md · AGENTS.md"]);
+        assert_eq!(a.lines.iter().filter(|l| l.starts_with(HIDDEN)).count(), 3, "each read's output stays behind Ctrl+O");
+
+        // a visible row between two reads ends the fold
+        a.lines.push("  ┆ now the log".into());
+        start(&mut a, "read x.md");
+        tool_end(&mut a, "read x.md".into(), true, 5, "x");
+        assert_eq!(shown(&a).last(), Some(&"  ✓ read x.md"), "under 100ms shows no time");
+
+        // permission: the row becomes the question, then settles in place
+        let mut a = app();
+        start(&mut a, "run pwd");
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        a.lines[0] = "  ? run pwd  allow?".into();
+        a.ask_line = Some(0);
+        a.ask = Some(("allow run_command run pwd?".into(), tx));
+        a.hand = true;
+        close_ask(&mut a, "yes");
+        assert_eq!(a.lines, vec!["  ⠋ run pwd"], "answering restores the running row, no ℹ line left behind");
+        tool_end(&mut a, "run pwd".into(), false, 16,
+            "[exit 1]\n'pwd' is not recognized as an internal or external command,\noperable program or batch file.");
+        assert_eq!(shown(&a), vec!["  ✗ run pwd  'pwd' is not recognized as an internal or external command,  ✋  (ctrl+o)"]);
+        assert!(a.lines.len() > 1, "the full output is kept for Ctrl+O");
+
+        // time only when it is worth reading
+        let mut a = app();
+        start(&mut a, "run cargo test");
+        tool_end(&mut a, "run cargo test".into(), true, 4200, "ok");
+        assert_eq!(shown(&a), vec!["  ✓ run cargo test  4.2s"]);
+    }
+
+    /// Prose streamed before a tool call is narration: it goes dim under the
+    /// rail, and the answer after the last tool stays ordinary prose.
+    #[test]
+    fn prose_before_a_tool_is_narration() {
+        let mut a = app();
+        a.current = "Let me try `cd` instead.\nThen read the files.".into();
+        narrate(&mut a);
+        assert_eq!(a.lines, vec!["  ┆ Let me try cd instead.\n  ┆ Then read the files."]);
+        assert!(a.current.is_empty());
+        a.thinking = true;
+        a.current = "  │ reasoning".into();
+        narrate(&mut a);
+        assert_eq!(a.lines.len(), 1, "reasoning is not narration; it keeps its own style");
+    }
 }

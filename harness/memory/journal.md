@@ -70,3 +70,8 @@
 - Surprise: GitHub's macos-13 runners queued for hours; cross-building x86_64-apple-darwin on macos-latest took minutes.
 - Surprise: `npx skills update` failed silently-ish because upstream renamed the skill; a rename upstream needs add-new + remove-old.
 - Would do differently: plain `rusti` should have opened the TUI from the first release — check the bare-command experience before tagging.
+## 2026-10-01 - transcript design D
+- Mock-up before code paid off twice: the user combined two options into one, and their screenshot showed a white terminal the mock-up had assumed was black.
+- Surprise: Start-Process and conhost both hand off to Windows Terminal on Windows 11, so MainWindowHandle is 0. Launch with `wt -w new --title X --suppressApplicationTitle` and find the window by title; close it with WM_CLOSE, never by killing WindowsTerminal (every open terminal shares that process).
+- Surprise: Start-Process -ArgumentList splits an array element that contains spaces; quote it inside the string ('"One Half Light"').
+- Would do differently: check the user's terminal background before choosing any colour.

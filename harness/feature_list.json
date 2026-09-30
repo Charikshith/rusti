@@ -969,6 +969,26 @@
         "Terminal detection reuses is-terminal, already a dependency. Piped stdin keeps one-shot so scripts and the self-test path are unchanged.",
         "--tree is excluded: it has its own browser and prompt. --resume with no task now opens the TUI resumed, instead of prompting on stdin."
       ]
+    },
+    {
+      "id": "feat-076",
+      "name": "Transcript design D: tinted rows for what needs your eye, edges for the rest",
+      "description": "Chosen from a four-option mock-up (scratchpad/transcript-styles.html). Your message sits on a grey band; a failed tool is one red-banded row carrying its reason, with the output behind Ctrl+O; a permission prompt turns the tool's own row amber ('? run pwd  allow?') and back, leaving no extra line; running and successful tools get only a thin coloured ▎ edge. Consecutive successful reads fold into one row ('read 3 files  a · b · c'). Prose streamed before a tool call is narration, set dim under a rail, so the answer is the only full-brightness prose. Tool summaries lead with a verb (read, run, list, edit, grep, glob). A tool's time starts after its permission prompt and is shown only from 100ms. \"light\": true in the config picks pale tints for a light terminal.",
+      "dependencies": [
+        "feat-059",
+        "feat-068",
+        "feat-070"
+      ],
+      "status": "done",
+      "evidence": "cargo test 43 passed (three new: tool rows fold reads, carry their own outcome and leave no permission line behind; prose before a tool becomes narration and reasoning does not; user/failure/permission rows are banded across the full width with the tint re-applied after every RESET). Driven live in Windows Terminal with SendKeys and screenshotted in a dark and a light (One Half Light) scheme: grey user band, amber '? run pwd  allow?' row, red 'run pwd  'pwd' is not recognized...  ✋  (ctrl+o)' row, 'read 2 files  AGENTS.md · a.txt' folded with a green edge, narration under the rail, the answer at full brightness.",
+      "decisions": [
+        "Only three rows get a background: your message, a failure, a question for you. A filled row always means 'look here'; a long run of successful tools stays a column of thin edges, not a wall of green.",
+        "Tints live apart from the palettes and are chosen by 'light', because what reads as subtle depends on the terminal's own background, which rusti cannot see: a pale wash on white is a dark block on black. No OSC 11 query - Windows terminals answer it unreliably and crossterm would swallow the reply.",
+        "A failure's tail now hides behind Ctrl+O like a success's (reversing feat-031's always-visible tail): the row carries the first real error line instead, marked (ctrl+o) when there is more. Resumed sessions still render the old way.",
+        "The permission question is folded only when it has fixed choices and a tool row is running - a question the model asks via ask_user keeps its own ℹ row.",
+        "Narration drops backticks rather than going through markdown: it is dim context, and the markdown pass is for the answer.",
+        "Reads fold only with reads, and only when nothing visible sits between them, so a fold never hides an ordering the user would want to see."
+      ]
     }
   ]
 }
