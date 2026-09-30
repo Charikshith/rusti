@@ -65,3 +65,8 @@
 - What settled it: logging the raw user content the proxy transform received. pi's request carried `(image omitted: model does not support images)` as plain text — proof the client, not the proxy, had dropped it.
 - The model's explanation ("this model has no image support") read as self-knowledge and was in fact it paraphrasing the placeholder string it had been handed. Never take a model's account of its own capabilities as evidence about the wire.
 - Test-target lesson: the first `_bands.png` run "passed" because the agent inflated the PNG with node and read the pixels. A vision test has to forbid decoding, or it tests the wrong thing.
+## 2026-09-30 - install, docs pointer, harness skill update
+- Shipped feat-072..075: ~/.rusti config, one-line installers + release workflow (v0.1.0..v0.1.3), docs pointer, bare `rusti` opens the TUI.
+- Surprise: GitHub's macos-13 runners queued for hours; cross-building x86_64-apple-darwin on macos-latest took minutes.
+- Surprise: `npx skills update` failed silently-ish because upstream renamed the skill; a rename upstream needs add-new + remove-old.
+- Would do differently: plain `rusti` should have opened the TUI from the first release — check the bare-command experience before tagging.

@@ -1,17 +1,17 @@
 {
   "version": 1,
   "skills": {
-    "harness-creator-v4": {
+    "harness": {
       "source": "Charikshith/harness",
       "sourceType": "github",
       "skillPath": "version-4/SKILL.md",
-      "computedHash": "ed422dcb25fa9dfc6e3f56db795cefccfe13950ec5a2ce5dffc1c7649e7d20f8"
+      "computedHash": "b2c3312d0bf806b87e102a885bdc11c83cf03a8524da31e51c11aba524243bba"
     },
     "lavish": {
       "source": "kunchenguid/lavish-axi",
       "sourceType": "github",
       "skillPath": "skills/lavish/SKILL.md",
-      "computedHash": "5ff18ff1fb92bda3049037e08d1f7db31f7667bc90635677c37dcf620fd0c1a4"
+      "computedHash": "7a82385996353d525e181bbcef8d95c4d43bfdbc666cd4e91d073d32201c5dcd"
     }
   }
 }

@@ -1,6 +1,17 @@
 #!/bin/bash
 set -e
 
+# Activates .githooks/pre-commit on every run (added by enrich-harness.mjs).
+if [ -f .githooks/pre-commit ] && git rev-parse --git-dir >/dev/null 2>&1; then
+  hooks_path="$(git config --get core.hooksPath 2>/dev/null || true)"
+  if [ -z "$hooks_path" ]; then
+    git config core.hooksPath .githooks
+  elif [ "$hooks_path" != ".githooks" ]; then
+    echo "note: core.hooksPath is $hooks_path (another hook manager); .githooks/pre-commit is not active"
+  fi
+fi
+
+
 echo "=== Harness Initialization ==="
 
 # Environment contract runs before anything else and reports separately from test output:

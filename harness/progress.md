@@ -941,3 +941,15 @@ through the session"):
   task is given; a task argument or piped stdin is still one-shot. Released as v0.1.3.
 - Tripped once on the way: `"task"` inside the HELP string literal ended it early — written as TASK instead.
 - `cargo test` 40 passed · bare rusti alive in its own console · piped stays one-shot.
+
+## Recommended Next Step
+
+- [ ] Run the Intel Mac binary (`rusti-macos-x86_64`) on a real Intel Mac → verify: `rusti --version` prints the release version and bare `rusti` opens the TUI
+
+### harness skill v0.4.0 -> v0.4.7, pre-commit hook installed
+
+- Upstream renamed the skill `harness-creator-v4` -> `harness`, so `npx skills update` failed on it; installed
+  `harness` and removed the old copy. skills-lock.json follows.
+- `enrich-harness --apply` installed `.githooks/pre-commit` and an init.sh block that sets `core.hooksPath`: a commit
+  touching files outside harness/ now needs harness/progress.md and harness/memory/journal.md staged with it.
+- Open gap (manual, validator 94/100): some lessons in harness/memory/ lack a Why and a Source line.
