@@ -24,4 +24,4 @@ if (($path -split ';') -notcontains $bin) {
 }
 $env:Path = "$env:Path;$bin"
 Write-Host "installed $(& $exe --version) -> $exe"
-Write-Host "run: rusti --tui"
+Write-Host "run: rusti"

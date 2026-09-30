@@ -34,4 +34,4 @@ case ":$PATH:" in
     ;;
 esac
 echo "installed $("$bin/rusti" --version) -> $bin/rusti"
-echo "run: rusti --tui"
+echo "run: rusti"

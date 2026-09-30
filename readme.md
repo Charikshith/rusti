@@ -34,9 +34,9 @@ cargo build --release            # when working on rusti itself
 ./target/release/rusti --use <name>      # switch default
 ./target/release/rusti --add             # add another profile interactively
 
-# TUI mode (custom ANSI renderer, streaming transcript, Esc quits)
-# auto-falls back to plain stream when stdin is piped
-./target/release/rusti --tui "your task"
+# TUI (custom ANSI renderer, streaming transcript, Esc quits): bare `rusti` in a
+# terminal opens it; --tui forces it. A task argument or piped stdin is a one-shot run.
+rusti
 
 # session tree (pi-style branching)
 ./target/release/rusti --tree            # browse + branch from earlier entries

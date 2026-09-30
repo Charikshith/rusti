@@ -15,11 +15,11 @@ mod tui;
 const HELP: &str = "\
 rusti — minimal coding agent
 
-usage: rusti [flags] [task]
-       rusti --tui [flags]        interactive terminal UI
+usage: rusti [flags]              interactive terminal UI
+       rusti [flags] TASK         one-shot: run the task, print the answer, exit
 
 flags
-  --tui                  interactive UI (falls back to a plain stream when stdin is piped)
+  --tui                  force the UI (bare `rusti` in a terminal already opens it)
   --session NAME         use .rusti/sessions/NAME.json instead of ./session.json
   --resume               continue the session from its active leaf
   --tree                 browse the session tree and branch from an earlier entry
@@ -143,7 +143,10 @@ fn main() {
     }
     let (url, key, model) = resolve_model(&args);
     let task_arg = task_arg(&args);
-    let tui_mode = args.iter().any(|a| a == "--tui");
+    // bare `rusti` (or `rusti --resume`) in a terminal opens the TUI, like other
+    // coding agents; a task argument or piped stdin stays a one-shot run
+    let tui_mode = args.iter().any(|a| a == "--tui")
+        || (task_arg.is_none() && !args.iter().any(|a| a == "--tree") && is_terminal::is_terminal(std::io::stdin()));
 
     // session + task first (so --tree can be cancelled before any model config)
     // --session NAME → .rusti/sessions/NAME.json, else the root session.json
