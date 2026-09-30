@@ -30,7 +30,8 @@ pub fn name_of(path: &str) -> String {
 pub struct Info {
     pub name: String,
     pub path: String,
-    pub entries: usize,
+    pub msgs: usize,     // numbered user messages on the active path: what resuming shows
+    pub branches: usize, // leaves in the tree; resuming shows only the active one
     pub age_s: u64,
     pub head: String, // latest user message on the active path
 }
@@ -72,7 +73,8 @@ fn info(path: &str) -> Option<Info> {
     Some(Info {
         name: name_of(path),
         path: path.to_string(),
-        entries: s.entries.len(),
+        msgs: s.msgs(),
+        branches: s.branches(),
         age_s,
         head,
     })
@@ -83,6 +85,11 @@ fn info(path: &str) -> Option<Info> {
 pub fn valid_name(name: &str) -> bool {
     let n = name.chars().count();
     n >= 1 && n <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// "1 msg", "3 msgs": the picker's counts read as words, not a bare number.
+pub fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 /// Coarse relative time for the picker: "2m ago", "3h ago", "4d ago".
@@ -237,6 +244,20 @@ impl Session {
         out
     }
 
+    /// User messages on the active path, counted as the transcript numbers
+    /// them (N›): an attached image rides as a user entry nobody typed.
+    pub fn msgs(&self) -> usize {
+        self.path().iter().filter(|e| e.role == "user" && e.image.is_none()).count()
+    }
+
+    /// Leaves of the tree: one per branch left behind by /undo, /tree or
+    /// compaction, plus the one being continued.
+    pub fn branches(&self) -> usize {
+        let parents: std::collections::HashSet<&str> =
+            self.entries.iter().filter_map(|e| e.parent.as_deref()).collect();
+        self.entries.iter().filter(|e| !parents.contains(e.id.as_str())).count()
+    }
+
     /// Active path in OpenAI message format.
     pub fn path_messages(&self) -> Vec<Value> {
         self.path().iter().map(|e| e.to_message()).collect()
@@ -307,7 +328,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn info_reports_entry_count_and_latest_user_message() {
+    fn info_reports_message_count_and_latest_user_message() {
         let p = std::env::temp_dir().join("rusti_info_test.json");
         let path = p.to_string_lossy().into_owned();
         let mut s = Session::with_path("m".into(), &path);
@@ -318,7 +339,7 @@ second".into()), Some(sys));
         s.save().unwrap();
 
         let i = info(&path).unwrap();
-        assert_eq!(i.entries, 3);
+        assert_eq!((i.msgs, i.branches), (1, 1)); // the system prompt and reply are not messages you typed
         assert_eq!(i.head, "first second");
         assert_eq!(i.name, "rusti_info_test");
         std::fs::remove_file(&path).ok();
@@ -326,6 +347,9 @@ second".into()), Some(sys));
         assert!(valid_name("tui-colors") && valid_name("a.b_c9"));
         assert!(!valid_name("") && !valid_name("has space") && !valid_name("../etc"));
         assert!(!valid_name(&"x".repeat(41)) && valid_name(&"x".repeat(40)));
+
+        assert_eq!(count(1, "msg", "msgs"), "1 msg");
+        assert_eq!(count(3, "branch", "branches"), "3 branches");
 
         assert_eq!(ago(30), "just now");
         assert_eq!(ago(600), "10m ago");

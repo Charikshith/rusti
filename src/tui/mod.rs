@@ -272,6 +272,17 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
     (lines, history, n)
 }
 
+/// Status-line confirmation of a resume, in the picker's terms: the messages
+/// now on screen, and where the rest of the tree went when it has branches.
+fn resumed_notice(session: &Session, path: &str) -> String {
+    use crate::session::count;
+    let msgs = count(session.msgs(), "msg", "msgs");
+    match session.branches() {
+        b if b > 1 => format!("resumed {path} ({msgs}; 1 of {b} branches, /tree to switch)"),
+        _ => format!("resumed {path} ({msgs})"),
+    }
+}
+
 /// Move the leaf to `id` pi-style and rebuild the transcript: a user entry
 /// rewinds to its parent and offers its text for editing, an assistant entry
 /// continues right after it.
@@ -334,13 +345,12 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     if loaded.is_empty() {
                         let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ nothing to resume in {path}")));
                     } else {
-                        let n = loaded.entries.len();
-                        let leaf = loaded.active.clone().unwrap_or_default();
+                        let notice = resumed_notice(&loaded, &path);
                         let (lines, history, msg_num) = render_history(&loaded);
                         session = loaded;
                         let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
                         let _ = event_tx.send(ai_core::Event::SessionName(crate::session::name_of(&path)));
-                        let _ = event_tx.send(ai_core::Event::Notice(format!("resumed {path} ({n} entries, leaf {leaf})")));
+                        let _ = event_tx.send(ai_core::Event::Notice(notice));
                     }
                 }
                 Ok(Job::Reload) => {
@@ -642,6 +652,46 @@ mod tests {
 
         assert_eq!(s.select(&a1), Some("ok".into())); // assistant: continue right after it
         assert_eq!(s.active.as_deref(), Some(a1.as_str()));
+    }
+
+    #[test]
+    fn resume_picker_counts_what_resuming_shows() {
+        // the reported case: one question asked three times, the first two
+        // /undo'd, each a tool turn. The picker used to say "13 entries" —
+        // the whole tree, system prompt, tool results and abandoned branches
+        // included — while resuming showed a single numbered message.
+        let mut s = Session::new("m".into());
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        for i in 0..3 {
+            let u = s.add(Entry::new("user", format!("try {i}")), Some(sys.clone()));
+            let mut a = Entry::new("assistant", String::new());
+            a.tool_calls = Some(serde_json::json!([{"function": {"name": "read_file", "arguments": "{\"path\":\"a\"}"}}]));
+            let a = s.add(a, Some(u.clone()));
+            let t = s.add(Entry::new("tool", "x".into()), Some(a));
+            s.add(Entry::new("assistant", "answer".into()), Some(t));
+            if i < 2 {
+                s.select(&u); // what /undo does
+            }
+        }
+        let mut img = Entry::new("user", "[image: a.png]".into());
+        img.image = Some("data:image/png;base64,".into()); // attached, not typed: no number
+        let last = s.active.clone();
+        s.add(img, last);
+
+        let (lines, _, n) = render_history(&s);
+        assert_eq!(lines[0], "1› try 2");
+        assert_eq!((s.msgs(), s.branches()), (n, 3)); // picker's count == the last N› on screen
+        assert_eq!(resumed_notice(&s, "x.json"), "resumed x.json (1 msg; 1 of 3 branches, /tree to switch)");
+
+        // /undo of the only turn leaves the leaf on the system prompt: an
+        // empty screen, and the picker now says so instead of "N entries"
+        let mut e = Session::new("m".into());
+        let sys = e.add(Entry::new("system", "sys".into()), None);
+        let u = e.add(Entry::new("user", "q".into()), Some(sys));
+        e.add(Entry::new("assistant", "a".into()), Some(u.clone()));
+        e.select(&u);
+        assert_eq!((render_history(&e).2, e.msgs(), e.branches()), (0, 0, 1));
+        assert_eq!(resumed_notice(&e, "x.json"), "resumed x.json (0 msgs)");
     }
 
     #[test]
