@@ -302,11 +302,6 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
     }
 }
 
-/// Entry point: spawns agent in background thread, renders TUI or plain stream.
-/// Rows a `!` command may stream into the transcript; the rest is counted.
-/// ponytail: a fixed cap keeps a `!cat huge.log` from swamping the renderer.
-const BASH_ROWS: usize = 500;
-
 /// "!cmd" / "!!cmd": run it in run_command's shell, each output line landing
 /// in the transcript as it arrives. `!` then records the output in the session,
 /// so the model reads it next turn; `!!` output never leaves the screen.
@@ -314,17 +309,10 @@ fn run_bash(session: &mut Session, cmd: &str, to_model: bool, event_tx: &mpsc::S
     let summary = format!("$ {cmd}");
     let _ = event_tx.send(ai_core::Event::ToolStart(summary.clone()));
     let t0 = std::time::Instant::now();
-    let rows = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (tx, n) = (event_tx.clone(), rows.clone());
+    let tx = event_tx.clone();
     let (ok, out) = ai_core::tools::run_command_live(cmd, 0, Arc::new(move |l: &str| {
-        if n.fetch_add(1, Ordering::Relaxed) < BASH_ROWS {
-            let _ = tx.send(ai_core::Event::Text(format!("  · {l}")));
-        }
+        let _ = tx.send(ai_core::Event::Text(format!("  · {l}")));
     }));
-    let more = rows.load(Ordering::Relaxed).saturating_sub(BASH_ROWS);
-    if more > 0 {
-        let _ = event_tx.send(ai_core::Event::Text(format!("  · … {more} more lines")));
-    }
     // the output is already on screen; the row keeps only the "[exit N]" / "timed out" line
     let why = if ok { "" } else { out.lines().next().unwrap_or("").trim_matches(['[', ']']) };
     let _ = event_tx.send(ai_core::Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output: why.into() });
@@ -334,6 +322,7 @@ fn run_bash(session: &mut Session, cmd: &str, to_model: bool, event_tx: &mpsc::S
     }
 }
 
+/// Entry point: spawns agent in background thread, renders TUI or plain stream.
 pub fn run(cfg: TuiConfig) -> io::Result<()> {
     let TuiConfig { client, session, model, cli_args } = cfg;
     let (mut seed_lines, seed_history, seed_msg_num) = render_history(&session);
