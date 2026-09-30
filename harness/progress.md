@@ -965,3 +965,11 @@ through the session"):
   Tool time now excludes the user's decision time (the "pwd 8.2s" in the screenshot).
 - Verified by driving the release build in Windows Terminal (SendKeys + window screenshots), dark and light schemes.
 - `cargo test` 43 passed (three new) · release build clean.
+
+## Session 2026-09-30: Fix — /resume picker count disagreed with the resumed view (feat-077)
+- Reported: a session listed with "3 …" opened on one or two lines. The number was `Info.entries` =
+  `entries.len()` of the whole tree: system prompt, tool results and every /undo//tree/compaction branch.
+  Resume itself was right — it renders the active path, the same leaf /tree marks ◀.
+- Fix: the row now reads `N msg(s)` (`Session::msgs`, numbered user messages on the active path — the last
+  N› after resume) plus `M branches` (`Session::branches`, leaves) when > 1; the resume notice matches.
+- Verification: `./init.sh`, cargo test 41 passed (new: resume_picker_counts_what_resuming_shows).

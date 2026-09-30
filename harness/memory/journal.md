@@ -75,3 +75,7 @@
 - Surprise: Start-Process and conhost both hand off to Windows Terminal on Windows 11, so MainWindowHandle is 0. Launch with `wt -w new --title X --suppressApplicationTitle` and find the window by title; close it with WM_CLOSE, never by killing WindowsTerminal (every open terminal shares that process).
 - Surprise: Start-Process -ArgumentList splits an array element that contains spaces; quote it inside the string ('"One Half Light"').
 - Would do differently: check the user's terminal background before choosing any colour.
+
+## 2026-09-30 (2) - /resume count vs resumed view
+- The picker's "entries" was entries.len() over the whole tree; one question retried twice with a tool call each is 13 entries and 1 message on screen.
+- Resume restore was correct; the count was measuring a different thing than the view. Check what a label counts against what the next screen shows.

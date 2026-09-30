@@ -1112,9 +1112,11 @@ fn resume(app: &mut App, job_tx: &Sender<Job>, arg: &str) {
             .map(|s| {
                 (
                     format!(
-                        "{:<15}{:>3} entries  {:<11}{}",
+                        "{:<15}{:<9}{:<13}{:<11}{}",
                         s.name,
-                        s.entries,
+                        crate::session::count(s.msgs, "msg", "msgs"),
+                        // resuming shows one branch; say when there are others
+                        if s.branches > 1 { crate::session::count(s.branches, "branch", "branches") } else { String::new() },
                         crate::session::ago(s.age_s),
                         s.head
                     ),

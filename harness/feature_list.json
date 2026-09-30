@@ -989,6 +989,18 @@
         "Narration drops backticks rather than going through markdown: it is dim context, and the markdown pass is for the answer.",
         "Reads fold only with reads, and only when nothing visible sits between them, so a fold never hides an ordering the user would want to see."
       ]
+    },
+    {
+      "id": "feat-077",
+      "name": "/resume picker counts what resuming shows",
+      "description": "The /resume picker printed `N entries`: entries.len() over the whole session tree, including the hidden system prompt, every tool result, and every branch left behind by /undo, /tree or compaction. Resuming renders only the active path, so a row reading '13 entries' opened on one numbered message. The row now reads `N msg(s)` (numbered user messages on the active path, the same count as the last N› shown after resume) and `M branches` when the tree has more than one leaf; the resume notice uses the same terms and points at /tree for the other branches.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "Reproduced first: three /undo'd tool turns gave Info.entries = 13 while render_history showed msg_num 1. Regression test tui::tests::resume_picker_counts_what_resuming_shows asserts msgs() == render_history's count, branches() == 3, and the notice text; also the /undo-of-the-only-turn case (0 msgs). cargo test 41 passed via ./init.sh.",
+      "decisions": [
+        "The resume restore path was correct (active leaf, same as /tree's marker); only the count was wrong, so resume still restores the active path.",
+        "Branches = leaves (entries no other entry names as parent); shown only when > 1 so a linear session reads as before."
+      ]
     }
   ]
 }
