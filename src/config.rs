@@ -95,6 +95,13 @@ pub struct Config {
     /// stable order, or every run reshuffles it and defeats prompt caching.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub mcp: std::collections::BTreeMap<String, McpServer>,
+    /// The shell every command runs in, as a path (a leading ~ is the home
+    /// folder). Unset: Git Bash, then bash on PATH, then cmd /C or sh -c.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// Put in front of every shell command, on its own line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_command_prefix: Option<String>,
     /// Per-project defaults for --max-iters / --context; flags and env win.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iters: Option<usize>,

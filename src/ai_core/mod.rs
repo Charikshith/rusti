@@ -205,7 +205,8 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
 const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
 permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line (help.txt, readme.md § TUI), \
 sessions, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
-AGENTS.md (readme.md § project instructions), delegate and background jobs (readme.md § sub-agents and background jobs), \
+AGENTS.md (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
+\"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
 /reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
 
 fn docs_section(dir: &str) -> String {
@@ -232,6 +233,11 @@ fn docs_block() -> Option<&'static str> {
 
 fn system_prompt() -> String {
     let mut p = SYSTEM_PROMPT.to_string();
+    let sh = tools::current_shell();
+    p.push_str(&format!(
+        "\n\n# Shell\nrun_command and run_background run `{} {} <command>` on {}; write commands in that shell's syntax.",
+        sh.program, sh.flag, std::env::consts::OS
+    ));
     // before project instructions: about rusti itself, its own docs are the authority
     if let Some(d) = docs_block() {
         p.push_str("\n\n");

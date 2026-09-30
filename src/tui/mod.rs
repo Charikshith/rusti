@@ -70,7 +70,7 @@ pub enum Job {
     Tree,               // send the selectable tree rows for the picker
     Select(String),     // move the active leaf to this entry (pi-style branch)
     Undo,               // put back the files the last turn changed, then rewind to before it
-    Bash(String),       // "!cmd": run it here, show the output, and let the model see it
+    Bash { cmd: String, to_model: bool }, // "!cmd" / "!!cmd": run it here, stream the output; "!" lets the model see it
     Export(Option<String>), // write the active path out as markdown
     Reload,
 }
@@ -303,6 +303,37 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
 }
 
 /// Entry point: spawns agent in background thread, renders TUI or plain stream.
+/// Rows a `!` command may stream into the transcript; the rest is counted.
+/// ponytail: a fixed cap keeps a `!cat huge.log` from swamping the renderer.
+const BASH_ROWS: usize = 500;
+
+/// "!cmd" / "!!cmd": run it in run_command's shell, each output line landing
+/// in the transcript as it arrives. `!` then records the output in the session,
+/// so the model reads it next turn; `!!` output never leaves the screen.
+fn run_bash(session: &mut Session, cmd: &str, to_model: bool, event_tx: &mpsc::Sender<ai_core::Event>) {
+    let summary = format!("$ {cmd}");
+    let _ = event_tx.send(ai_core::Event::ToolStart(summary.clone()));
+    let t0 = std::time::Instant::now();
+    let rows = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (tx, n) = (event_tx.clone(), rows.clone());
+    let (ok, out) = ai_core::tools::run_command_live(cmd, 0, Arc::new(move |l: &str| {
+        if n.fetch_add(1, Ordering::Relaxed) < BASH_ROWS {
+            let _ = tx.send(ai_core::Event::Text(format!("  · {l}")));
+        }
+    }));
+    let more = rows.load(Ordering::Relaxed).saturating_sub(BASH_ROWS);
+    if more > 0 {
+        let _ = event_tx.send(ai_core::Event::Text(format!("  · … {more} more lines")));
+    }
+    // the output is already on screen; the row keeps only the "[exit N]" / "timed out" line
+    let why = if ok { "" } else { out.lines().next().unwrap_or("").trim_matches(['[', ']']) };
+    let _ = event_tx.send(ai_core::Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output: why.into() });
+    if to_model && !session.is_empty() {
+        session.add(crate::session::Entry::new("user", format!("I ran `{cmd}` myself:\n{out}")), session.active.clone());
+        let _ = session.save();
+    }
+}
+
 pub fn run(cfg: TuiConfig) -> io::Result<()> {
     let TuiConfig { client, session, model, cli_args } = cfg;
     let (mut seed_lines, seed_history, seed_msg_num) = render_history(&session);
@@ -431,19 +462,8 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     };
                     let _ = event_tx.send(ev);
                 }
-                Ok(Job::Bash(cmd)) => {
-                    let summary = format!("$ {cmd}");
-                    let _ = event_tx.send(ai_core::Event::ToolStart(summary.clone()));
-                    let t0 = std::time::Instant::now();
-                    let (ok, out) = ai_core::tools::run_command(&cmd, 0);
-                    // output on success too: seeing it is the whole point of "!"
-                    let _ = event_tx.send(ai_core::Event::ToolEnd {
-                        summary, ok, ms: t0.elapsed().as_millis(), output: out.clone(),
-                    });
-                    if !session.is_empty() {
-                        session.add(crate::session::Entry::new("user", format!("I ran `{cmd}` myself:\n{out}")), session.active.clone());
-                        let _ = session.save();
-                    }
+                Ok(Job::Bash { cmd, to_model }) => {
+                    run_bash(&mut session, &cmd, to_model, &event_tx);
                     let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
                 }
                 Ok(Job::Undo) => {
@@ -574,6 +594,31 @@ mod tests {
         // blank and all-space lines survive unchanged
         assert_eq!(word_wrap("", 80), vec![""]);
         assert_eq!(word_wrap("  ", 80), vec!["  "]);
+    }
+
+    /// `!` output streams to the screen and joins the session for the model;
+    /// `!!` output streams the same way and the session never sees it.
+    #[test]
+    fn bang_bang_output_never_reaches_the_model() {
+        let path = std::env::temp_dir().join(format!("rusti_bang_{}.json", std::process::id()));
+        let mut s = Session::with_path("m".into(), path.to_str().unwrap());
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        s.add(Entry::new("user", "hi".into()), Some(sys));
+        let (tx, rx) = mpsc::channel();
+        let texts = |rx: &mpsc::Receiver<ai_core::Event>| -> Vec<String> {
+            rx.try_iter().filter_map(|e| match e { ai_core::Event::Text(t) => Some(t), _ => None }).collect()
+        };
+
+        run_bash(&mut s, "echo secret-out", false, &tx);
+        assert!(texts(&rx).iter().any(|t| t.trim_end() == "  · secret-out"), "!! still shows the output");
+        assert_eq!(s.entries.len(), 2, "!! adds nothing to the session");
+        assert!(!s.path_messages().iter().any(|m| m.to_string().contains("secret-out")));
+
+        run_bash(&mut s, "echo shared-out", true, &tx);
+        assert!(texts(&rx).iter().any(|t| t.trim_end() == "  · shared-out"));
+        assert_eq!(s.entries.len(), 3);
+        assert!(s.path_messages().iter().any(|m| m.to_string().contains("shared-out")), "! reaches the model");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

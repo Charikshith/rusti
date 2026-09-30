@@ -79,3 +79,8 @@
 ## 2026-09-30 (2) - /resume count vs resumed view
 - The picker's "entries" was entries.len() over the whole tree; one question retried twice with a tool call each is 13 entries and 1 message on screen.
 - Resume restore was correct; the count was measuring a different thing than the view. Check what a label counts against what the next screen shows.
+
+## 2026-09-30 (3) - shell commands like Pi's
+- Surprise: PowerShell passes `$null` to a P/Invoke string parameter as "", so FindWindow($null, title) never matches; use [NullString]::Value.
+- Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
+- Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.

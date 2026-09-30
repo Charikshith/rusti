@@ -507,9 +507,13 @@ pub fn ui_loop(
                                     return Ok(Exit::Quit);
                                 }
                             } else if let Some(cmd) = raw.strip_prefix('!') {
-                                let cmd = cmd.trim().to_string();
+                                // "!!cmd": the same, but the output is for the user only
+                                let (cmd, to_model) = match cmd.strip_prefix('!') {
+                                    Some(c) => (c.trim().to_string(), false),
+                                    None => (cmd.trim().to_string(), true),
+                                };
                                 if cmd.is_empty() {
-                                    app.lines.push("  ✗ usage: !<shell command>".into());
+                                    app.lines.push("  ✗ usage: !<shell command> (!!<shell command> keeps it from the model)".into());
                                 } else if !app.done {
                                     app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
                                 } else {
@@ -519,7 +523,7 @@ pub fn ui_loop(
                                     if app.history.last().map(|h| h != &raw).unwrap_or(true) {
                                         app.history.push(raw.clone());
                                     }
-                                    let _ = job_tx.send(Job::Bash(cmd));
+                                    let _ = job_tx.send(Job::Bash { cmd, to_model });
                                 }
                             } else {
                                 start_task(&mut app, job_tx, raw);

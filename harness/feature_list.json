@@ -1001,6 +1001,22 @@
         "The resume restore path was correct (active leaf, same as /tree's marker); only the count was wrong, so resume still restores the active path.",
         "Branches = leaves (entries no other entry names as parent); shown only when > 1 so a linear session reads as before."
       ]
+    },
+    {
+      "id": "feat-078",
+      "name": "Shell commands run like Pi's: Git Bash, shell/shell_command_prefix settings, !!cmd, live ! output",
+      "description": "Every command (run_command, run_background, !cmd, !!cmd) runs in one shell resolved once at startup: the \"shell\" path in ~/.rusti/config.json (leading ~ expanded), else Git Bash under Program Files / Program Files (x86) on Windows, else bash on PATH, else cmd /C (Windows) or sh -c. \"shell_command_prefix\" is prepended to every command on its own line (& under cmd). !!cmd runs like !cmd but its output never enters the session. !/!! output streams into the transcript line by line while the command runs. The system prompt names the shell; HELP and readme describe it.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "cargo test 46 passed via ./init.sh (new: tools::tests::shell_resolution_order_and_prefix, tui::tests::bang_bang_output_never_reaches_the_model). Launched from PowerShell, a one-shot --yolo model run_command of `uname -s; echo \"$0\"; ls /usr/bin/bash; echo \"pfx=$RUSTI_PFX\"` printed MINGW64_NT-10.0-26200, /usr/bin/bash and pfx=prefix-ran (prefix set in ./model.json). Driven in Windows Terminal: `!ls` listed a.txt b.txt through bash, `!!echo only-for-me` showed its output, and a 5 s `for ... sleep 1` loop showed tick-1..3 under the running spinner mid-run.",
+      "decisions": [
+        "The shell setting is used unchecked: a wrong path fails on the first command instead of silently running somewhere else.",
+        "A setting whose file stem is cmd keeps /C (and & for the prefix); everything else gets -c, as Pi does.",
+        "No bash at all falls back to cmd /C / sh -c rather than erroring (Pi errors on Windows).",
+        "Streamed rows are capped at 500 per command with a '… N more lines' row; the model still gets run_command's usual 20k-char result.",
+        "The finished row keeps only the exit/timeout line, since the output is already on screen above it.",
+        "MCP servers and utc_offset_min keep their own cmd /C: they are not shell commands."
+      ]
     }
   ]
 }

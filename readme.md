@@ -54,8 +54,8 @@ In the TUI: `/plan` toggles plan mode (the agent reads and proposes but every wr
 command is refused), `/tree` browses and branches the session, `/undo` puts back the files
 the last turn changed, `/commit` stages and commits the work, `/export` writes the
 transcript out as markdown, `/settings` chooses which status-line segments are shown,
-`/mcp` switches MCP servers on and off, and `!cargo test` runs a shell command whose output the model
-sees on the next turn. `/resume` with no argument lists saved sessions and switches to the
+`/mcp` switches MCP servers on and off, `!cargo test` runs a shell command whose output the model
+sees on the next turn, and `!!git log` runs one whose output only you see. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
 plan mode, the session, model, git branch, tokens used and how full the context is.
 
@@ -132,6 +132,21 @@ streams into the same transcript. `run_background` starts a server or watcher an
 returns a job id; `job_output` reads what it has printed so far, `job_stop` kills the
 whole process tree. Jobs outlive the agent if not stopped. `todo` lets the model keep
 a visible checklist for multi-step work.
+
+## shell commands
+
+The model's `run_command` and `run_background` and your own `!cmd` / `!!cmd` all run in one
+shell, chosen once at startup: the `"shell"` path in `~/.rusti/config.json` (a leading `~` is
+your home folder), else on Windows Git Bash under Program Files or Program Files (x86), else
+`bash` on PATH, else `cmd /C` on Windows and `sh -c` elsewhere. Bash runs as `bash -c <cmd>`.
+The system prompt tells the model which shell that is. `"shell_command_prefix"` is put in front
+of every command, on its own line (joined with `&` under cmd):
+```json
+{"shell": "~/scoop/apps/git/current/bin/bash.exe", "shell_command_prefix": "shopt -s expand_aliases"}
+```
+
+`!cmd` and `!!cmd` stream their output into the transcript as it arrives. `!cmd`'s output is
+then added to the conversation for the model; `!!cmd`'s never is.
 
 ## project instructions
 
