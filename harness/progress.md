@@ -926,3 +926,18 @@ through the session"):
 - Live check both ways: a rusti question read help.txt and readme.md before answering; an unrelated coding
   question made no tool calls. `cargo test` 40 passed.
 - Skipped the prompt-sections struct and diffing from the write-up: one prompt builder, no extensions.
+
+### feat-073 follow-up — Intel Mac build, and a real uninstall/reinstall
+
+- `macos-13` runners sat queued for hours on v0.1.0 and v0.1.1. The Intel binary is now cross-built on the Apple
+  Silicon runner (`--target x86_64-apple-darwin`); v0.1.2 shipped all four assets in minutes. The Intel binary has
+  not yet run on a real Intel Mac.
+- Uninstall/reinstall done on this machine with v0.1.3: `~/.rusti/bin`, `~/.rusti/docs` and the PATH entry removed
+  (config.json kept: it holds the models and keys), then the one-liner reinstalled and a fresh shell found rusti.
+
+### feat-075 — bare `rusti` opens the TUI
+
+- Plain `rusti` used to run a one-shot "say hello" and exit. Now it opens the TUI when stdin is a terminal and no
+  task is given; a task argument or piped stdin is still one-shot. Released as v0.1.3.
+- Tripped once on the way: `"task"` inside the HELP string literal ended it early — written as TASK instead.
+- `cargo test` 40 passed · bare rusti alive in its own console · piped stays one-shot.

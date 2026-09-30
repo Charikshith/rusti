@@ -930,12 +930,14 @@
         "feat-072"
       ],
       "status": "done",
-      "evidence": "v0.1.0 tagged; release run 36618463256 built and passed tests on Windows, Linux and macOS arm64 (macOS x86_64 was still queued for a runner at the time of writing). The real one-liner, run on this Windows machine, installed rusti 0.1.0 to C:\\Users\\Chakri\\.rusti\\bin, added it to the user PATH, and --version ran from %TEMP%.",
+      "evidence": "v0.1.0 tagged; release run 36618463256 built and passed tests on Windows, Linux and macOS arm64 (macOS x86_64 was still queued for a runner at the time of writing). The real one-liner, run on this Windows machine, installed rusti 0.1.0 to C:\\Users\\Chakri\\.rusti\\bin, added it to the user PATH, and --version ran from %TEMP%. FIXED 2026-09-30: macos-13 (Intel) runners sat queued for hours on v0.1.0 and v0.1.1; release.yml now cross-builds x86_64-apple-darwin on macos-latest (tests run on the native arm64 job, a cross-built binary cannot run there). v0.1.2 built all four assets in minutes. Full uninstall/reinstall verified on this machine with v0.1.3: removed ~/.rusti/bin, ~/.rusti/docs and the PATH entry (config.json kept - it holds the models and keys), a fresh shell no longer found rusti; the one-liner then reinstalled 0.1.3, a fresh shell resolved rusti to ~/.rusti/bin, and bare rusti opened the TUI.",
       "decisions": [
         "Download a prebuilt binary, not cargo install: the tools users compare against (Claude Code, Codex, pi) need no toolchain. cargo install --git stays documented as the from-source path.",
         "releases/latest/download/<asset> URLs, so the scripts never call the GitHub API and never need a token.",
         "Windows update renames the running rusti.exe aside before downloading: a running exe cannot be overwritten but can be renamed. install.sh downloads to rusti.new and mv's it over for the same reason.",
-        "/reload in a downloaded binary fails with cargo's 'manifest path does not exist' - it only makes sense in a source checkout, and that message says so well enough."
+        "/reload in a downloaded binary fails with cargo's 'manifest path does not exist' - it only makes sense in a source checkout, and that message says so well enough.",
+        "Intel Mac is cross-compiled on the Apple Silicon runner rather than waiting on macos-13 runners. Its binary is untested until someone runs it on a real Intel Mac.",
+        "Uninstall = delete ~/.rusti/bin and the PATH entry; ~/.rusti/config.json stays unless the user asks, since it holds their models and API keys."
       ]
     },
     {
@@ -952,6 +954,20 @@
         "One doc file plus help.txt, not a docs/ tree. readme.md is 12KB, under read_file's 20KB cap, so 'read the whole file' works in one call. Split into docs/ when readme outgrows that cap.",
         "The topic map points at readme headings in the user's words, and a test fails CI if a heading it names is renamed - the rot mode the pi guide calls #1.",
         "Skipped from the pi write-up: prompt sections struct, section diffing, extension overrides, any search/RAG. rusti has one prompt builder and no extensions."
+      ]
+    },
+    {
+      "id": "feat-075",
+      "name": "Bare `rusti` opens the TUI",
+      "description": "Typing plain `rusti` ran a one-shot 'say hello' and exited, so the interactive UI needed --tui - unlike claude or codex. Now tui_mode is --tui, or no task argument (and not --tree) with stdin a terminal. A task argument or piped stdin stays a one-shot run. --help, readme and the installers' 'run:' hint now say `rusti`.",
+      "dependencies": [
+        "feat-073"
+      ],
+      "status": "done",
+      "evidence": "cargo test 40 passed. Local build: bare rusti in its own console window was alive after 5s (TUI); `echo | rusti` with no task still ran one-shot. Released as v0.1.3 (all four assets); after a clean uninstall and one-liner reinstall, bare rusti from a fresh shell opened the TUI.",
+      "decisions": [
+        "Terminal detection reuses is-terminal, already a dependency. Piped stdin keeps one-shot so scripts and the self-test path are unchanged.",
+        "--tree is excluded: it has its own browser and prompt. --resume with no task now opens the TUI resumed, instead of prompting on stdin."
       ]
     }
   ]
