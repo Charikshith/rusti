@@ -562,7 +562,7 @@ fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, follow_links: b
         out.push((rel, is_dir));
         if !is_dir {
             *files -= 1;
-        } else if depth + 1 < max_depth && (follow_links || e.file_type().map_or(false, |t| t.is_dir())) {
+        } else if depth + 1 < max_depth && (follow_links || e.file_type().is_ok_and(|t| t.is_dir())) {
             walk(root, &p, max_depth, depth + 1, follow_links, files, out);
         }
     }
