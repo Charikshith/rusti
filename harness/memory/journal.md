@@ -89,3 +89,6 @@
 - Every config reader calls Config::load, so gating there covered mcp, /settings and allow_tool at once.
 - Surprise: "ignore untrusted keys" alone would let the next save drop them from model.json; they have to be held and written back.
 - An end-to-end test can read stderr until the first LLM retry line and kill the child; no fake server needed.
+
+## 2026-10-01 (3) - Ctrl+T thinking toggle
+- word_wrap measures bytes, so "…" and "│" count 3 each: a 30-col test wrapped the fold row; use realistic widths in tests.

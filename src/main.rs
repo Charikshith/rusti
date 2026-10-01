@@ -61,6 +61,7 @@ slash commands (--tui)
   !CMD            run a shell command, output streamed; it goes to the model too
   !!CMD           the same, but the output is shown to you only
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
+  ctrl+t          hide/show the model's thinking (saved as \"hide_thinking\" in config.json)
 ";
 
 fn main() {

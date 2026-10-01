@@ -991,3 +991,10 @@ through the session"):
 - Held keys are written back untouched on save, so an untrusted session cannot erase the project's settings.
 - Resources (prompts, skills, themes, SYSTEM.md) are detected for the question only; later phases call trusted().
 - Verification: `./init.sh`, cargo test 49 passed (new: two config tests, tests/trust.rs end to end).
+
+## Session 2026-10-01 (3): feat-080 — Ctrl+T hides thinking, two-row live preview
+- Plan item F02 (captain: toggle, plus a 2-line preview while hidden; D13: visible by default).
+- `render::visible()` folds each `"  │ "` reasoning line to `thinking… (N lines · ctrl+t)` when `hide_thinking`;
+  the live block draws that row + its last two non-blank rows (`thinking_preview`). Ctrl+T saves `"hide_thinking"`
+  to the global config. HELP, readme § TUI, DOC_TOPICS updated.
+- Verification: `./init.sh`, cargo test 49 + 1 passed after merging master (one new render test, config round-trip extended).

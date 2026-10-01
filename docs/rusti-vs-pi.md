@@ -93,11 +93,11 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Bare command opens UI | **yes**: bare `rusti` on a TTY (feat-075, `main.rs`) | **yes**: `pi` | Same |
 | Other front ends | **yes**: plain stream fallback when not a TTY (`tui/plain.rs`) | **yes**: print, json and rpc modes | See area 10 |
 | Slash command menu | **yes**: `/` opens a filterable menu (`tui/app.rs`) | **yes**: autocomplete for built-ins, templates, skills and extensions | Pi's list is user-extensible |
-| Keybindings | **yes, fixed**: Esc interrupt, Ctrl+C twice to quit, Ctrl+D, Ctrl+O output, Ctrl+V/Alt+V image, Shift/Alt+Enter, history, PgUp/PgDn, mouse wheel (`tui/app.rs`) | **yes, configurable**: `~/.pi/agent/keybindings.json`, kill ring, undo, word navigation (`docs/keybindings.md`) | rusti bindings cannot be rebound |
+| Keybindings | **yes, fixed**: Esc interrupt, Ctrl+C twice to quit, Ctrl+D, Ctrl+O output, Ctrl+T thinking, Ctrl+V/Alt+V image, Shift/Alt+Enter, history, PgUp/PgDn, mouse wheel (`tui/app.rs`) | **yes, configurable**: `~/.pi/agent/keybindings.json`, kill ring, undo, word navigation (`docs/keybindings.md`) | rusti bindings cannot be rebound |
 | Editor features | **partial**: multi-line and history. No autocomplete or `$EDITOR` (open-work) | **yes**: `@` fuzzy file refs, Tab path completion, Ctrl+G `$EDITOR` (`docs/usage.md`) | Pi ahead |
 | Markdown rendering | **yes**: headings, bold, code, bullets, fenced blocks, aligned tables, own highlighter (`tui/render.rs`) | **yes** (`docs/tui.md`) | Similar |
 | Transcript tinting | **yes**: user, failed-tool and permission rows banded; reads folded; narration dimmed (feat-076, `tui/render.rs`) | partial: tool expand (Ctrl+O), thinking collapse (Ctrl+T) | Different styling approach |
-| Thinking display | **yes**: italic block, no toggle (`ai_core/llm.rs`) | **yes**: Ctrl+T collapse, `hideThinkingBlock` | Pi can hide it |
+| Thinking display | **yes**: italic block; Ctrl+T folds it, keeping a two-row live preview, saved as `hide_thinking` (feat-080, `tui/render.rs`) | **yes**: Ctrl+T collapse, `hideThinkingBlock` | Pi also toggles one block by click |
 | Themes | **yes**: 15 built-in palettes, `/themes`, `light` flag (`tui/theme.rs`) | **yes**: system, dark and light themes plus custom JSON with hot reload (`docs/themes.md`) | Pi's are user-authored |
 | Image input | **partial**: clipboard paste to a file path, `read_file` attaches it; last hop unverified (feat-061/062) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi direct; rusti goes through a tool call |
 | Queue while streaming | **no**: open-work "Follow-Up Queue" | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Notable gap |

@@ -159,7 +159,6 @@ Where: new ai_core/mcp.rs, config.rs, ai_core/mod.rs tool registry
 
 ## TUI Experience Low Priority (defer indefinitely)
 - External editor (Ctrl+G), clipboard copy (Ctrl+X), paste image (Alt+V)
-- Thinking-block expand/collapse (Ctrl+T) — only if models emit reasoning
 - Startup help header, changelog, retry/compaction indicators, taskbar progress
 
 ### Boxed Full-Screen Pickers
