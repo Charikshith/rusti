@@ -449,7 +449,7 @@ pub fn grep(pattern: &str, path: &str, glob: &str) -> (bool, String) {
         vec![path.to_string()]
     } else {
         let mut v = Vec::new();
-        walk(root, root, usize::MAX, 0, &mut v);
+        walk(root, root, usize::MAX, 0, &mut usize::MAX, &mut v);
         v.into_iter().filter(|(_, d)| !d).map(|(p, _)| p).collect()
     };
     let mut out = String::new();
@@ -488,7 +488,7 @@ pub fn glob(pattern: &str, path: &str) -> (bool, String) {
     }
     let root = Path::new(path);
     let mut v = Vec::new();
-    walk(root, root, usize::MAX, 0, &mut v);
+    walk(root, root, usize::MAX, 0, &mut usize::MAX, &mut v);
     let out: String = v.into_iter().filter(|(p, d)| !d && glob_match(pattern, p)).map(|(p, _)| p + "\n").collect();
     if out.is_empty() { (true, "no files matched".into()) } else { (true, truncate(&out, MAX_RESULT)) }
 }
@@ -501,7 +501,7 @@ pub fn list_dir(path: &str, depth: usize) -> (bool, String) {
         return (false, format!("not a directory: {path}"));
     }
     let mut v = Vec::new();
-    walk(root, root, if depth == 0 { 1 } else { depth }, 0, &mut v);
+    walk(root, root, if depth == 0 { 1 } else { depth }, 0, &mut usize::MAX, &mut v);
     if v.is_empty() {
         return (true, "(empty)".into());
     }
@@ -533,24 +533,25 @@ pub fn project_files(cap: usize) -> Vec<(String, bool)> {
             return dirs.into_iter().map(|d| (d, true)).chain(files.into_iter().map(|f| (f, false))).collect();
         }
     }
-    // ponytail: the fallback walks the whole tree before capping; a cap inside walk if that ever bites
     let root = Path::new(".");
     let mut out = Vec::new();
-    walk(root, root, usize::MAX, 0, &mut out);
+    walk(root, root, usize::MAX, 0, &mut { cap }, &mut out);
     for e in &mut out {
         e.0 = e.0.trim_start_matches("./").to_string();
     }
-    let mut n = 0;
-    out.retain(|(_, d)| *d || { n += 1; n <= cap });
     out
 }
 
-/// Collect (relative path with '/', is_dir) under `dir`, sorted, skipping SKIP_DIRS.
-fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, out: &mut Vec<(String, bool)>) {
+/// Collect (relative path with '/', is_dir) under `dir`, sorted, skipping SKIP_DIRS,
+/// until `files` more files are in. Symlinked folders are listed but not entered.
+fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, files: &mut usize, out: &mut Vec<(String, bool)>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
+        if *files == 0 {
+            return;
+        }
         let p = e.path();
         let is_dir = p.is_dir();
         let name = e.file_name().to_string_lossy().into_owned();
@@ -559,8 +560,10 @@ fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, out: &mut Vec<(
         }
         let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
         out.push((rel, is_dir));
-        if is_dir && depth + 1 < max_depth {
-            walk(root, &p, max_depth, depth + 1, out);
+        if !is_dir {
+            *files -= 1;
+        } else if depth + 1 < max_depth && e.file_type().map_or(false, |t| t.is_dir()) {
+            walk(root, &p, max_depth, depth + 1, files, out);
         }
     }
 }
