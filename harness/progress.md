@@ -982,3 +982,17 @@ through the session"):
   tui::run_bash), every line shown (no row cap). The system prompt now names the shell; HELP, readme § shell commands updated.
 - Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
   `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.
+
+## Session 2026-10-01 (2): feat-079 — prompt caching C1+C2 (stable prefix, real usage)
+- `system_prompt()` lost its `# Git` and `# Plan mode` blocks. `turn_context()` builds them per turn and run_agent
+  stores the result on the new user entry (`Entry.context`); `to_message` appends it after the typed text. Stored,
+  so every earlier message replays byte-identically. Plan mode turning off is said once (`PLAN_OFF`), since the ON
+  notice stays in the history.
+- `llm.rs`: `stream_options.include_usage` on every request; a 400 naming stream_options retries once without it
+  and the Client stops sending it. `cached_tokens()` reads OpenAI / DeepSeek / Kimi field names into
+  `Event::Usage.cached`.
+- TUI: footer `cache N%` (new `cache` toggle in /settings; `Footer` is now `serde(default)` so older files load),
+  stats row `· cached N`. C3 (explicit markers) left in open-work.
+- Verification: `./init.sh`, cargo test 50 passed (new: the_prompt_prefix_stays_stable_and_stream_options_falls_back,
+  plan_mode_rides_on_the_turn, turn_context_is_sent_but_not_shown, cache_hits_read_under_each_providers_name);
+  `rusti --self-test` OK.

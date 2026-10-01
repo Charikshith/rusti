@@ -24,6 +24,26 @@ pub struct Client {
     pub key: String,
     pub model: String,
     http: reqwest::Client,
+    /// Set once this server has rejected `stream_options` with a 400. A Client
+    /// is one profile, so the profile stops sending it until rusti restarts.
+    no_stream_options: AtomicBool,
+}
+
+/// A 400 that blames `stream_options`: the server does not take the field,
+/// so the request is worth one more try without it.
+pub fn rejects_stream_options(status: u16, body: &str) -> bool {
+    status == 400 && body.contains("stream_options")
+}
+
+/// Prompt tokens the provider served from its prefix cache, under whichever
+/// name it reports them: OpenAI's details object, DeepSeek's hit count, or
+/// Kimi's top-level field. None when the server says nothing about caching.
+pub fn cached_tokens(usage: &Value) -> Option<u64> {
+    usage
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .or_else(|| usage.get("prompt_cache_hit_tokens"))
+        .or_else(|| usage.get("cached_tokens"))
+        .and_then(|x| x.as_u64())
 }
 
 impl Client {
@@ -32,7 +52,7 @@ impl Client {
         // a pooled connection reused next turn is dead -> "error sending request".
         // No pooling = fresh connection per request (localhost handshake is free).
         let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
-        Client { url, key, model, http }
+        Client { url, key, model, http, no_stream_options: AtomicBool::new(false) }
     }
 
     pub async fn chat_stream(
@@ -44,6 +64,10 @@ impl Client {
         let mut body = json!({ "model": self.model, "messages": messages, "stream": true });
         if let Some(t) = tools {
             body["tools"] = Value::Array(t.to_vec());
+        }
+        // without it OpenAI streams no usage at all, so every count is a guess
+        if !self.no_stream_options.load(Ordering::Relaxed) {
+            body["stream_options"] = json!({"include_usage": true});
         }
         // retries cover only the connect + status phase: once content has
         // streamed, replaying would duplicate output in the transcript
@@ -59,6 +83,12 @@ impl Client {
                     let status = r.status();
                     let text = r.text().await.unwrap_or_default();
                     let msg = format!("HTTP {status}: {}", truncate(&text, 500));
+                    // once: the field is gone after this, so a second 400 is a real error
+                    if body.get("stream_options").is_some() && rejects_stream_options(status.as_u16(), &text) {
+                        self.no_stream_options.store(true, Ordering::Relaxed);
+                        body.as_object_mut().unwrap().remove("stream_options");
+                        continue;
+                    }
                     if !retryable(status.as_u16()) {
                         return Err(msg);
                     }
@@ -91,6 +121,7 @@ impl Client {
         let mut first: Option<Instant> = None;
         let mut usage: Option<u64> = None;
         let mut prompt: Option<u64> = None;
+        let mut cached: Option<u64> = None;
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err("interrupted".into());
@@ -99,7 +130,7 @@ impl Client {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
                     for ev in take_sse_events(&mut buf) {
-                        handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt)?;
+                        handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
                     }
                 }
                 Some(Err(e)) => return Err(format!("stream error: {e}")),
@@ -109,7 +140,7 @@ impl Client {
         if !buf.is_empty() {
             // server closed without a trailing blank line
             let ev = String::from_utf8_lossy(&buf).into_owned();
-            handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt)?;
+            handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
         }
 
         // usage when the server volunteers it (many OpenAI-compatible ones
@@ -121,6 +152,7 @@ impl Client {
             prompt: prompt_tokens,
             est: usage.is_none() || prompt.is_none(),
             gen_ms: first.map(|t| t.elapsed().as_millis()).unwrap_or(0),
+            cached,
         });
 
         let tool_calls: Vec<ToolCall> = calls
@@ -167,6 +199,7 @@ fn handle_event(
     first: &mut Option<Instant>,
     usage: &mut Option<u64>,
     prompt: &mut Option<u64>,
+    cached: &mut Option<u64>,
 ) -> Result<(), String> {
     for line in ev.lines() {
         let data = match line.trim_start().strip_prefix("data:") {
@@ -185,6 +218,9 @@ fn handle_event(
         }
         if let Some(p) = v.pointer("/usage/prompt_tokens").and_then(|x| x.as_u64()) {
             *prompt = Some(p);
+        }
+        if let Some(c) = v.get("usage").and_then(cached_tokens) {
+            *cached = Some(c);
         }
         let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else { continue };
         if let Some(delta) = choice.get("delta") {
@@ -258,5 +294,23 @@ fn truncate(s: &str, n: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..n])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_hits_read_under_each_providers_name() {
+        assert_eq!(cached_tokens(&json!({"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 80}})), Some(80));
+        assert_eq!(cached_tokens(&json!({"prompt_cache_hit_tokens": 64, "prompt_cache_miss_tokens": 36})), Some(64)); // DeepSeek
+        assert_eq!(cached_tokens(&json!({"cached_tokens": 12})), Some(12)); // Kimi
+        assert_eq!(cached_tokens(&json!({"prompt_tokens": 100})), None, "silence is not a 0% hit rate");
+        assert_eq!(cached_tokens(&Value::Null), None);
+
+        assert!(rejects_stream_options(400, r#"{"error":"Unrecognized request argument supplied: stream_options"}"#));
+        assert!(!rejects_stream_options(400, "model not found"), "only the field's own rejection drops it");
+        assert!(!rejects_stream_options(500, "stream_options"));
     }
 }

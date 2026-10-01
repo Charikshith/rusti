@@ -84,3 +84,8 @@
 - Surprise: PowerShell passes `$null` to a P/Invoke string parameter as "", so FindWindow($null, title) never matches; use [NullString]::Value.
 - Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
 - Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.
+
+## 2026-10-01 (2) - prompt caching C1+C2
+- self_test() is not run by cargo test (only `--self-test`); a behavioural check needs its own #[test].
+- A fake server that reads one 64 KB chunk can miss the body: AGENTS.md alone puts the system prompt near 15 KB, so read to Content-Length.
+- Footer needed `#[serde(default)]` on the struct: adding a field would otherwise make every saved footer fail to parse.

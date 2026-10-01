@@ -150,6 +150,8 @@ pub struct App {
     pub sess_tok: u64,  // tokens generated across the whole session
     pub branch: String, // current git branch, refreshed after every job
     pub turn_est: bool, // tokens were estimated, not reported by the server
+    pub turn_cached: Option<u64>, // prompt tokens read from the provider's cache this turn; None: never reported
+    pub cache_pct: Option<u64>,   // share of the last call's prompt that was a cache hit
     pub thinking: bool, // currently accumulating a "  │ " reasoning block
     // slash-command menu
     pub menu_idx: usize,
@@ -184,6 +186,7 @@ impl App {
             notice: None, exit_armed: None,
             footer,
             turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
+            turn_cached: None, cache_pct: None,
             sess_tok: 0, branch: String::new(),
             thinking: false,
             menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
@@ -207,7 +210,7 @@ impl App {
     /// The per-turn stats row: tokens, tokens/sec over generation time only
     /// (tool waits don't dilute it), and wall clock for the whole turn.
     pub fn turn_stats(&self) -> Option<String> {
-        stats_row(self.turn_tok, self.turn_ctx, self.turn_est, self.turn_gen_ms, self.turn_t0.elapsed().as_secs_f64())
+        stats_row(self.turn_tok, self.turn_ctx, self.turn_cached, self.turn_est, self.turn_gen_ms, self.turn_t0.elapsed().as_secs_f64())
     }
 
     /// Reset the selection when the filter text changed, then keep the
@@ -303,15 +306,17 @@ pub fn utc_offset_min() -> i64 {
     })
 }
 
-pub fn stats_row(tok: u64, ctx: u64, est: bool, gen_ms: u128, wall_s: f64) -> Option<String> {
+pub fn stats_row(tok: u64, ctx: u64, cached: Option<u64>, est: bool, gen_ms: u128, wall_s: f64) -> Option<String> {
     if tok == 0 {
         return None;
     }
     let tps = if gen_ms > 0 { tok as f64 * 1000.0 / gen_ms as f64 } else { 0.0 };
     let e = if est { "~" } else { "" };
     let done = clock(crate::session::epoch_secs(), utc_offset_min());
+    // cache reads summed over the turn's calls: what the provider bills at the cheap rate
+    let cached = cached.map(|c| format!(" · cached {}", kilo(c))).unwrap_or_default();
     Some(format!(
-        "  · worked {} · done {done} · {e}{tok} tok · {tps:.1} tps · ctx {e}{}",
+        "  · worked {} · done {done} · {e}{tok} tok · {tps:.1} tps · ctx {e}{}{cached}",
         human_dur(wall_s), kilo(ctx)))
 }
 
@@ -661,13 +666,19 @@ pub fn ui_loop(
                     app.msg_num = msg_num;
                     app.scroll_up = 0;
                     app.sess_tok = 0; // a different session's totals aren't ours
+                    app.cache_pct = None;
                 }
-                ai_core::Event::Usage { tokens, prompt, est, gen_ms } => {
+                ai_core::Event::Usage { tokens, prompt, est, gen_ms, cached } => {
                     app.turn_tok += tokens;
                     app.sess_tok += tokens;
                     app.turn_ctx = prompt;
                     app.turn_gen_ms += gen_ms;
                     app.turn_est |= est;
+                    if let Some(c) = cached {
+                        app.turn_cached = Some(app.turn_cached.unwrap_or(0) + c);
+                    }
+                    // kept across turns, unlike ctx: it describes the last call, which is still the last call
+                    app.cache_pct = cached.map(|c| c * 100 / prompt.max(1));
                 }
                 ai_core::Event::Ask { question, choices, reply } => {
                     app.flush();
@@ -944,6 +955,7 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
     app.turn_ctx = 0;
     app.turn_gen_ms = 0;
     app.turn_est = false;
+    app.turn_cached = None;
     if app.history.last().map(|h| h != &raw).unwrap_or(true) {
         app.history.push(raw.clone());
     }
@@ -955,7 +967,7 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
 /// decoration, so hiding it would hide the reason writes are being refused.
 pub fn footer_right(
     f: &crate::config::Footer, plan: bool, session: &str, model: &str, branch: &str,
-    sess_tok: u64, ctx: u64, limit: u64,
+    sess_tok: u64, ctx: u64, limit: u64, cache_pct: Option<u64>,
 ) -> String {
     let mut parts = Vec::new();
     if plan {
@@ -977,6 +989,10 @@ pub fn footer_right(
     // gating made the reading vanish exactly when you were watching it
     if f.context {
         parts.push(format!("ctx {}%", ctx * 100 / limit.max(1)));
+    }
+    // a server that never reports cache hits gets no segment, not a false 0%
+    if let (true, Some(p)) = (f.cache, cache_pct) {
+        parts.push(format!("cache {p}%"));
     }
     parts.join(" · ")
 }
@@ -1207,6 +1223,7 @@ fn pick_settings(app: &mut App) {
         row("branch", f.branch, "git branch"),
         row("tokens", f.tokens, "tokens generated this session"),
         row("context", f.context, "how full the context window is"),
+        row("cache", f.cache, "share of the last prompt read from the provider's cache"),
     ];
     let (idx, top, filter) = match app.pick.take() {
         Some(p) if p.kind == PickKind::Settings => (p.idx, p.top, p.filter),
@@ -1270,6 +1287,7 @@ fn toggle_footer(app: &mut App, key: &str) {
         "branch" => f.branch = !f.branch,
         "tokens" => f.tokens = !f.tokens,
         "context" => f.context = !f.context,
+        "cache" => f.cache = !f.cache,
         _ => return,
     }
     let mut cfg = crate::config::Config::load();

@@ -190,7 +190,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     let footer = app::footer_right(
         &app.footer, crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
-        app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(),
+        app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(), app.cache_pct,
     );
     frame.push(format!("{}{}{RESET}", theme::current().dim, truncate_str(&footer, w)));
 
