@@ -264,6 +264,13 @@ The model's thinking is shown in italic grey. Ctrl+T hides it: each finished blo
 that row, so you can see the model working. The choice is saved as `"hide_thinking": true` in
 `~/.rusti/config.json`; press Ctrl+T again to show it.
 
+You can type while the agent works. Enter queues a **steer**: it is sent as soon as the current
+batch of tool calls finishes, before the next model request, and everything queued goes as one
+message. Ctrl+Q queues a **follow-up**: when the task ends successfully, the first one runs as its
+own task, then the next. A steer typed just as the task ends becomes the first follow-up. Queued
+messages show as dim `↳ steer:` / `↳ next:` rows above the input; Alt+Up (or Alt+Q) puts them all
+back in the draft, and Esc does the same when it interrupts. Slash and `!` commands still wait.
+
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
 binary small (~2.2 MB) and the rendering fast — full-screen redraw with

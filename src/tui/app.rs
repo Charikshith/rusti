@@ -167,6 +167,9 @@ pub struct App {
     /// Ctrl+T: fold each reasoning block to one row (the live one keeps a
     /// two-row preview). Saved as "hide_thinking" in the global config.
     pub hide_thinking: bool,
+    /// Ctrl+Q while working: each runs as its own task after this one ends.
+    /// Steers (Enter while working) live in ai_core, which delivers them.
+    pub follow: std::collections::VecDeque<String>,
 }
 
 /// Prefix on a transcript row that is present but not drawn until Ctrl+O.
@@ -194,7 +197,7 @@ impl App {
             sess_tok: 0, branch: String::new(),
             thinking: false,
             menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
-            pick: None, expand: false, hide_thinking: false,
+            pick: None, expand: false, hide_thinking: false, follow: Default::default(),
         }
     }
     /// True while a second Ctrl+C would exit.
@@ -392,6 +395,9 @@ pub fn ui_loop(
                         (code, m) if app.pick.is_some() && !m.contains(KeyModifiers::CONTROL) => {
                             picker_key(&mut app, code, job_tx)
                         }
+                        // Alt+Up (Alt+Q where the terminal takes Alt+Up): queued
+                        // messages back into the input; with none queued it is plain Up
+                        (KeyCode::Up, m) | (KeyCode::Char('q'), m) if m.contains(KeyModifiers::ALT) && dequeue(&mut app) => {}
                         // ── slash-command menu (open while input is a lone "/word") ──
                         (KeyCode::Up, _) if !menu_items(&app).is_empty() => {
                             app.menu_idx = app.menu_idx.saturating_sub(1);
@@ -419,6 +425,7 @@ pub fn ui_loop(
                         (KeyCode::Esc, _) => {
                             if !app.done {
                                 cancel.store(true, Ordering::Relaxed);
+                                dequeue(&mut app); // pi: an abort hands the queue back
                                 // dismiss a pending question so the agent unblocks
                                 if let Some(reply) = close_ask(&mut app, "interrupted") {
                                     let _ = reply.send("interrupted".into());
@@ -474,6 +481,23 @@ pub fn ui_loop(
                             app.expand = !app.expand;
                             let what = if app.expand { "shown" } else { "hidden" };
                             app.notice = Some((format!("tool output {what}"), std::time::Instant::now()));
+                        }
+                        // Ctrl+Q: a follow-up, run as its own task when this one ends
+                        // (Alt+Enter is the newline fallback, so it cannot be this key)
+                        (KeyCode::Char('q'), KeyModifiers::CONTROL) if app.ask.is_none() => {
+                            let raw = app.input.trim().to_string();
+                            if raw.starts_with('/') || raw.starts_with('!') {
+                                app.notice = Some(("only a message can be queued".into(), std::time::Instant::now()));
+                            } else if !raw.is_empty() {
+                                app.fresh = false;
+                                app.input.clear();
+                                app.cursor = 0;
+                                if app.done {
+                                    start_task(&mut app, job_tx, raw);
+                                } else {
+                                    app.follow.push_back(raw);
+                                }
+                            }
                         }
                         // Ctrl+T folds reasoning blocks; like Ctrl+O it is only a redraw
                         (KeyCode::Char('t'), KeyModifiers::CONTROL) => toggle_thinking(&mut app),
@@ -537,6 +561,9 @@ pub fn ui_loop(
                                     }
                                     let _ = job_tx.send(Job::Bash { cmd, to_model });
                                 }
+                            } else if !app.done {
+                                // a steer: shown as pending until the agent takes it
+                                ai_core::steer(raw);
                             } else {
                                 start_task(&mut app, job_tx, raw);
                             }
@@ -719,6 +746,14 @@ pub fn ui_loop(
                     }
                 }
                 ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
+                ai_core::Event::Delivered(t) => {
+                    app.flush();
+                    app.msg_num += 1;
+                    app.lines.push(format!("{}› {t}", app.msg_num));
+                    if app.history.last() != Some(&t) {
+                        app.history.push(t);
+                    }
+                }
                 ai_core::Event::TaskEnd { ok, error } => {
                     app.flush();
                     // success is self-evident (the answer ends the turn);
@@ -741,6 +776,7 @@ pub fn ui_loop(
                     if !app.lines.is_empty() {
                         app.lines.push(String::new());
                     }
+                    next_queued(&mut app, ok, job_tx);
                 }
             }
         }
@@ -955,6 +991,36 @@ pub fn move_line(input: &str, cursor: usize, delta: isize) -> usize {
             next_end += 1;
         }
         next + col.min(next_end - next)
+    }
+}
+
+/// Alt+Up / Esc: every queued message, steers first, back into the input
+/// above the draft, blank-line separated. False when nothing was queued.
+fn dequeue(app: &mut App) -> bool {
+    let mut q = ai_core::take_steers();
+    q.extend(app.follow.drain(..));
+    if q.is_empty() {
+        return false;
+    }
+    if !app.input.trim().is_empty() {
+        q.push(std::mem::take(&mut app.input));
+    }
+    app.input = q.join("\n\n");
+    app.cursor = app.input.chars().count();
+    true
+}
+
+/// TaskEnd: a steer that arrived as the task finished missed its delivery
+/// point, so it goes to the front of the follow-ups; after a success the
+/// first follow-up starts. A failure leaves the queue showing for Alt+Up.
+fn next_queued(app: &mut App, ok: bool, job_tx: &Sender<Job>) {
+    for s in ai_core::take_steers().into_iter().rev() {
+        app.follow.push_front(s);
+    }
+    if ok {
+        if let Some(t) = app.follow.pop_front() {
+            start_task(app, job_tx, t);
+        }
     }
 }
 
@@ -1427,5 +1493,33 @@ mod tests {
         a.current = "  │ reasoning".into();
         narrate(&mut a);
         assert_eq!(a.lines.len(), 1, "reasoning is not narration; it keeps its own style");
+    }
+
+    /// A steer still queued when its task ends missed its delivery point: it
+    /// starts next, ahead of the Ctrl+Q follow-ups, so nothing typed is lost.
+    /// A failure starts nothing, and Alt+Up / Esc hand the whole queue back.
+    #[test]
+    fn a_late_steer_becomes_the_next_follow_up() {
+        let _q = ai_core::STEER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        ai_core::take_steers();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut a = app();
+        a.follow.push_back("then commit".into());
+        ai_core::steer("use tabs".into()); // Enter pressed as the task finished
+        next_queued(&mut a, true, &tx);
+        assert!(matches!(rx.try_recv(), Ok(Job::Task(t)) if t == "use tabs"));
+        assert_eq!(a.lines.last().map(String::as_str), Some("1› use tabs"));
+        assert!(!a.done && ai_core::steers().is_empty());
+        assert_eq!(a.follow, ["then commit"]);
+
+        next_queued(&mut a, false, &tx);
+        assert!(rx.try_recv().is_err(), "a failed task does not run the queue");
+
+        ai_core::steer("no, spaces".into());
+        a.input = "draft".into();
+        assert!(dequeue(&mut a));
+        assert_eq!(a.input, "no, spaces\n\nthen commit\n\ndraft");
+        assert!(a.follow.is_empty() && ai_core::steers().is_empty());
+        assert!(!dequeue(&mut a), "nothing queued: Alt+Up stays history recall");
     }
 }

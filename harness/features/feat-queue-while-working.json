@@ -1,0 +1,14 @@
+{
+  "id": "feat-queue-while-working",
+  "name": "Queue messages while the agent works: steer, follow-up, dequeue (F04)",
+  "description": "Typing while a task runs no longer starts a second task mid-stream. Enter queues a steer in ai_core::STEER; run_agent takes every queued steer after a tool batch (after all results and any pending image, top level only) as one user entry and emits Event::Delivered, and only then does the TUI print the N> row. Ctrl+Q queues a follow-up (App.follow); after a successful TaskEnd the first one starts as its own task. A steer still queued when the task ends becomes the first follow-up. Dim '-> steer:' / '-> next:' rows sit above the input; Alt+Up (alias Alt+Q) and an Esc interrupt move every queued message back into the draft. Slash and ! commands keep their 'finish or Esc-interrupt first' rule.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: ai_core::a_steer_lands_after_every_tool_result (fake server, two tool calls: the second request is system, user, assistant, tool, tool, user with both steers joined, and the first request carries none); tui::app::tests::a_late_steer_becomes_the_next_follow_up (late steer starts ahead of a Ctrl+Q follow-up, a failure starts nothing, dequeue returns steers, follow-ups and the draft in order); tui::render::tests::pending_rows_list_steers_then_follow_ups. ./init.sh passed.",
+  "decisions": [
+    "Keys per captain decision D3: Enter = steer, Ctrl+Q = follow-up (Alt+Enter is the newline fallback and Windows Terminal's fullscreen key), Alt+Up / Alt+Q = edit queued. Steer delivers all at once, follow-up one at a time.",
+    "All steers go in ONE user entry joined by blank lines rather than one entry each: no back-to-back user messages for strict chat templates, and a resumed transcript shows the same single N> row the live one did.",
+    "ai_core::STEER is the only store for steers; the renderer reads it each frame, so the agent taking one and Alt+Up taking one cannot both win.",
+    "A failed (non-interrupt) task leaves follow-ups queued and visible instead of running them into the failure; Ctrl+C does not dequeue, it only clears the draft as before."
+  ]
+}

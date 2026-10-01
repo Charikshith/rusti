@@ -94,6 +94,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // bottom is pinned: blank spacer, panel (picker or slash menu), hint, input,
     // footer. The input is as tall as the draft — Shift+Enter puts newlines in it.
     let panel = panel_rows(app, w);
+    let pending = pending_rows(&crate::ai_core::steers(), &app.follow, w);
     // While a picker is open the filter IS the draft: it types at the prompt,
     // not in the picker header. The real draft is hidden until Esc restores it.
     let (draft, caret) = match &app.pick {
@@ -101,7 +102,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         None => (app.input.as_str(), app.cursor),
     };
     let input = input_rows(draft, caret, w.saturating_sub(3));
-    let bottom_rows = 3 + input.len() + panel.len();
+    let bottom_rows = 3 + input.len() + panel.len() + pending.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
     // (style, row). The style is read from the logical line ONCE and carried to
@@ -183,6 +184,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
 
     frame.push(String::new()); // blank spacer
 
+    frame.extend(pending);
     frame.extend(panel);
 
     // Two rows, not one: the hint rides ABOVE the input because it is what
@@ -268,6 +270,24 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     state.prev_lines = frame;
     state.prev_rows = h;
     Ok(())
+}
+
+/// Messages typed while the agent works, one dim row each above the panel:
+/// steers (delivered after the current tool batch) then follow-ups (each its
+/// own task later). The last row says how to take them back.
+fn pending_rows(steers: &[String], follow: &std::collections::VecDeque<String>, w: usize) -> Vec<String> {
+    let rows = steers.iter().map(|t| ("steer", t)).chain(follow.iter().map(|t| ("next", t)));
+    let mut out: Vec<String> = rows
+        .map(|(kind, t)| {
+            let first = t.lines().next().unwrap_or("");
+            let more = if t.contains('\n') { " …" } else { "" };
+            format!("  ↳ {kind}: {first}{more}")
+        })
+        .collect();
+    if let Some(last) = out.last_mut() {
+        last.push_str("  · alt+↑ edit");
+    }
+    out.into_iter().map(|r| format!("{}{}{RESET}", theme::current().dim, truncate_str(&r, w))).collect()
 }
 
 /// The row block between transcript and input: the open session picker, or
@@ -813,6 +833,16 @@ mod tests {
             }
         }
         out
+    }
+
+    /// Queued messages show above the input in queue order, a multi-line one
+    /// by its first line, and the last row carries the way to edit them.
+    #[test]
+    fn pending_rows_list_steers_then_follow_ups() {
+        let follow: std::collections::VecDeque<String> = ["then commit".to_string()].into();
+        let rows: Vec<String> = pending_rows(&["use tabs\nand spaces".into()], &follow, 80).iter().map(|r| bare(r)).collect();
+        assert_eq!(rows, ["  ↳ steer: use tabs …", "  ↳ next: then commit  · alt+↑ edit"]);
+        assert!(pending_rows(&[], &Default::default(), 80).is_empty(), "nothing queued, no rows");
     }
 
     /// The separator row is what makes it a table: without it, a line of prose

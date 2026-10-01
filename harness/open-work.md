@@ -53,11 +53,6 @@ When: feat-037 shows session tokens and context %, but not money
 What: price-per-token on the model profile, multiplied into a session cost figure; needs prompt/completion split kept separately
 Where: config.rs profile, tui/app.rs footer_right
 
-### Follow-Up Queue
-When: User wants to type next message while agent streams
-What: Alt+Enter queues message, Alt+Up edits queued; tasks already serialize in job channel
-Where: tui/app.rs Enter handler
-
 ## Agent Capability (from 2026-09-09 review) — ★ = start here
 
 ### Retry Follow-ups
