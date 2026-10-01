@@ -182,7 +182,8 @@ is added after it. `--system-prompt X` and `--append-system-prompt X` (repeatabl
 those files; X is read as a file when one exists at that path, else used as the text itself.
 Only the base text is replaced: the shell line, the docs pointer, the project instructions
 above, git context and the plan-mode block always stay. Both files are re-read every turn,
-and startup prints `ℹ system prompt: …` naming whatever changed it. `/reload` keeps the
+and startup prints `ℹ system prompt: …` naming whatever changed it (an unreadable file is
+skipped and named there too). `/reload` keeps the
 flags. A project-level `.rusti/SYSTEM.md` is not read yet: it waits for project trust.
 
 ## markdown
