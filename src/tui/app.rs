@@ -48,7 +48,7 @@ pub const CMDS: &[Cmd] = &[
 pub const MENU_ROWS: usize = 5;
 
 /// /commit is a prompt macro — the model already has git and the tools; the
-/// system prompt already carries `git status --short`.
+/// user message already carries `git status --short`.
 const COMMIT_TASK: &str = "Review the working tree with git status and git diff, then stage the files \
 belonging to the work we just did and create one commit. Write a concise message saying why the change \
 was made, not just what changed. Do not push.";
