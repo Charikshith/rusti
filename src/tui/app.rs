@@ -1250,6 +1250,7 @@ fn next_queued(app: &mut App, ok: bool, job_tx: &Sender<Job>) {
 /// Show the message, reset the per-turn counters, hand it to the agent thread.
 fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
     app.flush();
+    drop_mcp_ok(app);
     app.msg_num += 1;
     app.lines.push(format!("{}› {raw}", app.msg_num));
     app.current.clear();
@@ -1265,6 +1266,22 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
         app.history.push(raw.clone());
     }
     let _ = job_tx.send(Job::Task(raw));
+}
+
+/// The "✓ mcp x: N tools" rows are a startup notice: once you have typed, you
+/// know what loaded. A ✗ row stays, since a server that failed needs acting on.
+/// They are seeded before any row an index points at, so every live index
+/// shifts by the number removed.
+fn drop_mcp_ok(app: &mut App) {
+    let before = app.lines.len();
+    app.lines.retain(|l| !(l.starts_with("  ✓ mcp ") && l.ends_with(" tools")));
+    let n = before - app.lines.len();
+    for i in [&mut app.tool_line, &mut app.ask_line, &mut app.retry_line].into_iter().flatten() {
+        *i -= n;
+    }
+    if let Some((i, _)) = &mut app.fold {
+        *i -= n;
+    }
 }
 
 /// The status line: what this session is, and how full it is. Every segment
@@ -1657,6 +1674,18 @@ mod tests {
     }
     fn shown(app: &App) -> Vec<&str> {
         app.lines.iter().filter(|l| !l.starts_with(HIDDEN)).map(String::as_str).collect()
+    }
+
+    /// The first message clears the startup "✓ mcp" rows but keeps a failure.
+    #[test]
+    fn first_message_clears_mcp_startup_rows() {
+        let mut a = App::new("m".into(), "s".into(),
+            vec!["  ✓ mcp mem: 15 tools".into(), "  ✗ mcp gh: spawn failed".into()], vec![], 0, Default::default());
+        start(&mut a, "run pwd");
+        let (tx, _rx) = std::sync::mpsc::channel();
+        start_task(&mut a, &tx, "hi".into());
+        assert_eq!(a.lines, vec!["  ✗ mcp gh: spawn failed", "  ⠋ run pwd", "1› hi"]);
+        assert_eq!(a.tool_line, Some(1), "a live index follows its row");
     }
 
     /// Design D's tool rows: a run of reads is one row, a failure is one row

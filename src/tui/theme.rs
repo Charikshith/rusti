@@ -143,24 +143,21 @@ pub const THEMES: &[Theme] = &[
 
 static IDX: AtomicUsize = AtomicUsize::new(0);
 
-/// Row backgrounds for the three rows that mean "look here": your message, a
-/// failed tool, and a tool waiting on your answer. Everything else gets at most
-/// a coloured edge. Kept apart from the palettes because what reads as subtle
+/// Row backgrounds for the two rows that mean "look here": a failed tool and a
+/// tool waiting on your answer. Your own message gets bold text, no fill.
+/// Everything else gets at most a coloured edge. Kept apart from the palettes because what reads as subtle
 /// depends on the terminal's own background, which rusti cannot see: a pale
 /// wash on white is a dark block on black. "light": true in the config picks
 /// the pale set.
 pub struct Tints {
-    pub user: &'static str,
     pub fail: &'static str,
     pub ask: &'static str,
 }
 const DARK: Tints = Tints {
-    user: "\x1b[48;2;38;38;38m",
     fail: "\x1b[48;2;42;22;24m",
     ask: "\x1b[48;2;42;36;20m",
 };
 const LIGHT: Tints = Tints {
-    user: "\x1b[48;2;236;239;243m",
     fail: "\x1b[48;2;249;230;230m",
     ask: "\x1b[48;2;251;241;214m",
 };
