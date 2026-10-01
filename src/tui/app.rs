@@ -737,7 +737,8 @@ pub fn ui_loop(
 }
 
 /// Slash commands: /use <name> switches model, /model (no arg) lists saved
-/// profiles or (with a name) switches like /use, /resume loads session.json,
+/// profiles or (with a name) switches like /use, /resume loads a saved session,
+/// /new starts an empty one,
 /// /tree dumps the current session path, /reload rebuilds + relaunches,
 /// /quit exits. Returns true when the TUI should exit.
 fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
