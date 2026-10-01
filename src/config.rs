@@ -133,18 +133,21 @@ pub struct ModelProfile {
 
 /// Which status-line segments are drawn. All on by default; /settings toggles
 /// them and writes the result back here, so the choice outlives the process.
+/// `serde(default)`: a file saved before a segment existed still loads, with it on.
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Footer {
     pub session: bool,
     pub model: bool,
     pub branch: bool,
     pub tokens: bool,
     pub context: bool,
+    pub cache: bool,
 }
 
 impl Default for Footer {
     fn default() -> Self {
-        Self { session: true, model: true, branch: true, tokens: true, context: true }
+        Self { session: true, model: true, branch: true, tokens: true, context: true, cache: true }
     }
 }
 
@@ -426,6 +429,11 @@ mod tests {
         assert_eq!(back.default.as_deref(), Some("mimo"), "default must survive");
         assert_eq!(back.models.len(), 1, "models must survive");
         assert_eq!(back.allow, vec!["read"], "allow must survive");
+
+        // a footer saved before the cache segment existed: cache comes up on, the rest as saved
+        std::fs::write(p, r#"{"footer":{"session":true,"model":true,"branch":true,"tokens":true,"context":false}}"#).unwrap();
+        let old = Config::load_from(p);
+        assert!(old.footer.cache && !old.footer.context, "a missing segment defaults on, saved ones keep their value");
         let _ = std::fs::remove_file(p);
     }
 

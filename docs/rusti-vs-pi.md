@@ -101,7 +101,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Themes | **yes**: 15 built-in palettes, `/themes`, `light` flag (`tui/theme.rs`) | **yes**: system, dark and light themes plus custom JSON with hot reload (`docs/themes.md`) | Pi's are user-authored |
 | Image input | **partial**: clipboard paste to a file path, `read_file` attaches it; last hop unverified (feat-061/062) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi direct; rusti goes through a tool call |
 | Queue while streaming | **no**: open-work "Follow-Up Queue" | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Notable gap |
-| Footer | **yes**: plan, session, model, branch, tokens, ctx %; toggled with `/settings` (`tui/app.rs`) | **yes**: cwd, session, tokens, cache, cost, ctx, model | Pi shows cost |
+| Footer | **yes**: plan, session, model, branch, tokens, ctx %, cache %; toggled with `/settings` (`tui/app.rs`) | **yes**: cwd, session, tokens, cache, cost, ctx, model | Pi shows cost |
 | Clipboard copy of reply | **no** (open-work, low priority) | **yes**: `/copy` | |
 | Extension UI (widgets, overlays) | **no** | **yes** (`docs/tui.md`) | |
 | Unicode-width wrapping | **no**: byte-based (`tui/mod.rs`) | not stated in docs (presumably handled) | rusti's CJK and emoji wrapping is naive |
@@ -171,7 +171,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Local models | **yes**: any OpenAI-compatible server (Ollama example in `readme.md`) | **yes**: Ollama, LM Studio, vLLM, llama.cpp router (`docs/llama-cpp.md`) | |
 | Custom provider code | **no** | **yes**: `pi.registerProvider()`, virtual models (`docs/custom-provider.md`, `docs/virtual-models.md`) | |
 | Retry | **yes**: 3 tries with 1, 2 and 4 s backoff on 408, 429 and 5xx; no Retry-After (`ai_core/llm.rs`) | **yes**: configurable `retry.*` | |
-| Prompt caching | **no** (open-work) | **yes**: `PI_CACHE_RETENTION`; footer shows cache usage | |
+| Prompt caching | **partial**: stable system prompt (git status and plan mode ride on the user turn), `stream_options` usage, cache hits in footer and stats row; explicit cache markers still open-work (`ai_core/mod.rs`, `ai_core/llm.rs`) | **yes**: `PI_CACHE_RETENTION`; footer shows cache usage | |
 
 ## 6. Context and compaction
 
@@ -183,7 +183,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Compaction hook | **no** | **yes**: `session_before_compact` | |
 | Context files | **yes**: the first of AGENTS.md, RUSTI.md, CLAUDE.md in the cwd, re-read each turn | **yes**: all levels concatenated; `-nc` disables them | Pi walks parent directories |
 | System prompt override | **yes**: `~/.rusti/SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt`; replaces only the base text (readme.md § project instructions) | **yes**: `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt` | rusti reads no project `.rusti/SYSTEM.md` yet (waits for project trust) |
-| Git state in prompt | **yes**: branch and `git status --short` every turn (`ai_core/mod.rs`) | not in core | rusti ahead |
+| Git state in prompt | **yes**: branch and `git status --short` every turn, on the user message (`ai_core/mod.rs`) | not in core | rusti ahead |
 | Self-docs pointer | **yes**: the binary's docs are written to `~/.rusti/docs` (`ai_core/mod.rs`, feat-074) | **yes**: rusti ported this from Pi's `<docs>` pointer | Same |
 | Tokens and context % | **yes**: server usage, or a chars/4 estimate marked `~` | **yes** | |
 | Cost | **no** (open-work) | **yes** | |

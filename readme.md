@@ -60,7 +60,10 @@ transcript out as markdown, `/settings` chooses which status-line segments are s
 `/mcp` switches MCP servers on and off, `!cargo test` runs a shell command whose output the model
 sees on the next turn, and `!!git log` runs one whose output only you see. `/new [name]` saves the session and starts an empty one in place, keeping the model, plan mode, MCP servers and background jobs. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
-plan mode, the session, model, git branch, tokens used and how full the context is.
+plan mode, the session, model, git branch, tokens used, how full the context is and, when
+the provider reports it, how much of the last prompt came from its cache (`cache 82%`).
+The system prompt holds only what rarely changes; git status and plan mode travel on each
+user message instead, so a provider's prompt cache can reuse everything sent before.
 
 `model.json` example:
 ```json

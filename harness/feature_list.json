@@ -1076,6 +1076,22 @@
     },
     {
       "id": "feat-083",
+      "name": "Prompt caching C1+C2: stable system prompt, real usage and cache-hit statistics",
+      "description": "The system entry no longer carries git status or the plan-mode notice, so it changes only when AGENTS.md, the shell or rusti's docs do. That volatile part goes on the user entry as a stored context field (Entry.context), appended to its text in to_message and never shown in the transcript or export, so every earlier message is replayed byte-identically and a provider's prefix cache can hit. Turning plan mode off is announced once on the next turn. Requests send stream_options.include_usage; a 400 naming stream_options retries once without it and the Client (one profile) stops sending it. Cache hits are read from prompt_tokens_details.cached_tokens, DeepSeek prompt_cache_hit_tokens or Kimi cached_tokens; the footer shows 'cache N%' of the last prompt (toggle 'cache' in /settings) and the turn-stats row ends with '· cached N' when the server reported any.",
+      "dependencies": [
+        "feat-035"
+      ],
+      "status": "done",
+      "evidence": "cargo test 50 passed via ./init.sh, rusti --self-test OK. New: ai_core::the_prompt_prefix_stays_stable_and_stream_options_falls_back (two turns against a fake server, untracked file created between them: system message and first user turn byte-identical in both requests, the new turn's context names the file, first request carries stream_options, the 400 retry and the next turn do not), ai_core::plan_mode_rides_on_the_turn, session::image_tests::turn_context_is_sent_but_not_shown, llm::tests::cache_hits_read_under_each_providers_name; footer, stats-row and config-default tests extended.",
+      "decisions": [
+        "C3 (explicit cache_control / prompt_cache_key markers, per-profile opt-in) is not built here; it stays in open-work.",
+        "The stream_options fallback is remembered for the Client's lifetime, which is one profile until /model switches or rusti restarts; not persisted to config.",
+        "No cache segment when the server never reports cache hits: an absent number is not a 0% hit rate.",
+        "Git status reflects the start of each turn; the model knows what it changed since."
+      ]
+    },
+    {
+      "id": "feat-084",
       "name": "System prompt override: ~/.rusti/SYSTEM.md, APPEND_SYSTEM.md, --system-prompt, --append-system-prompt",
       "description": "~/.rusti/SYSTEM.md replaces only the built-in SYSTEM_PROMPT base text; ~/.rusti/APPEND_SYSTEM.md is added after it. --system-prompt X and repeatable --append-system-prompt X win over the files (X is a file's text when that path is a file, else literal). The shell line, docs pointer, project instructions, git context and plan-mode block always stay. Files are re-read every turn. Startup prints one 'ℹ system prompt: …' line (TUI transcript and one-shot stderr) naming the sources. /reload keeps the flags. The project-level .rusti/SYSTEM.md is deferred to the Phase 0 trust gate (hook comment in prompt_base).",
       "dependencies": [],
