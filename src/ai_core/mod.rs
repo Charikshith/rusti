@@ -211,7 +211,7 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
 const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
 permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking (help.txt, readme.md § TUI), \
 sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
-AGENTS.md (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
+AGENTS.md, SYSTEM.md, --system-prompt (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
 /reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
 
@@ -237,8 +237,105 @@ fn docs_block() -> Option<&'static str> {
         .as_deref()
 }
 
+/// --system-prompt and every --append-system-prompt, set once at startup.
+static PROMPT_FLAGS: OnceLock<(Option<String>, Vec<String>)> = OnceLock::new();
+
+pub fn set_prompt_flags(system: Option<String>, append: Vec<String>) {
+    let _ = PROMPT_FLAGS.set((system, append));
+}
+
+fn slash(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+/// A file's text, or the startup-note label saying why it was skipped.
+fn read_file(p: &std::path::Path) -> Result<String, String> {
+    std::fs::read_to_string(p).map_err(|e| format!("{} unreadable ({e}), ignored", slash(p)))
+}
+
+/// A flag value that names an existing file is that file's text; anything else
+/// is the text itself. Also returns the label for the startup note.
+fn flag_text(v: &str, flag: &str) -> (Option<String>, String) {
+    let p = std::path::Path::new(v);
+    if !p.is_file() {
+        return (Some(v.to_string()), flag.to_string());
+    }
+    match read_file(p) {
+        Ok(s) => (Some(s), slash(p)),
+        Err(e) => (None, e),
+    }
+}
+
+/// A non-empty ~/.rusti file's text and its label; a missing or empty file is neither.
+fn home_file(p: &std::path::Path) -> (Option<String>, Option<String>) {
+    if !p.is_file() {
+        return (None, None);
+    }
+    match read_file(p) {
+        Ok(s) if s.trim().is_empty() => (None, None),
+        Ok(s) => (Some(s.trim().to_string()), Some(slash(p))),
+        Err(e) => (None, Some(e)),
+    }
+}
+
+/// SYSTEM_PROMPT, or what replaces it, plus each addendum, and the names of
+/// whatever overrode the default (empty when nothing did). Flags win over the
+/// files in `dir` (~/.rusti); an unreadable source is skipped and named.
+/// Read every turn, so edits to the files are live.
+/// ponytail: the project's .rusti/SYSTEM.md (wins) and .rusti/APPEND_SYSTEM.md
+/// (after the global one) join here once the Phase 0 trust gate lands; until
+/// then an untrusted repo cannot rewrite the prompt.
+fn prompt_base(dir: &std::path::Path, system: Option<&str>, append: &[String]) -> (String, Vec<String>) {
+    let mut src = Vec::new();
+    let mut base = None;
+    if let Some(v) = system {
+        let (t, label) = flag_text(v, "--system-prompt");
+        src.push(label);
+        base = t;
+    }
+    let mut p = base.unwrap_or_else(|| {
+        let (t, label) = home_file(&dir.join("SYSTEM.md"));
+        src.extend(label);
+        t.unwrap_or_else(|| SYSTEM_PROMPT.to_string())
+    });
+    let mut adds = Vec::new();
+    if append.is_empty() {
+        let (t, label) = home_file(&dir.join("APPEND_SYSTEM.md"));
+        src.extend(label.map(|l| format!("+ {l}")));
+        adds.extend(t);
+    }
+    for a in append {
+        let (t, label) = flag_text(a, "--append-system-prompt");
+        src.push(format!("+ {label}"));
+        adds.extend(t);
+    }
+    for a in adds {
+        p.push_str("\n\n");
+        p.push_str(a.trim());
+    }
+    (p, src)
+}
+
+fn prompt_flags() -> (Option<&'static str>, &'static [String]) {
+    PROMPT_FLAGS.get().map_or((None, &[]), |(s, a)| (s.as_deref(), a.as_slice()))
+}
+
+/// One startup line naming what changed the system prompt, so it is never invisible.
+pub fn prompt_note() -> Option<String> {
+    let (sys, app) = prompt_flags();
+    let src = prompt_base(&crate::config::home_dir(), sys, app).1;
+    (!src.is_empty()).then(|| format!("  ℹ system prompt: {}", src.join(" ")))
+}
+
 fn system_prompt() -> String {
-    let mut p = SYSTEM_PROMPT.to_string();
+    let (sys, app) = prompt_flags();
+    build_system_prompt(sys, app)
+}
+
+fn build_system_prompt(sys: Option<&str>, app: &[String]) -> String {
+    // only the base text is replaceable: the shell line, docs pointer and project
+    // instructions below always stay, and git context and plan mode ride on the turn
+    let mut p = prompt_base(&crate::config::home_dir(), sys, app).0;
     let sh = tools::current_shell();
     p.push_str(&format!(
         "\n\n# Shell\nrun_command and run_background run `{} {} <command>` on {}; write commands in that shell's syntax.",
@@ -808,7 +905,8 @@ pub fn self_test() {
     std::fs::write(d.join("AGENTS.md"), "run cargo test").unwrap();
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();
-    assert!(system_prompt().starts_with(SYSTEM_PROMPT));
+    let (sys, app) = prompt_flags();
+    assert!(system_prompt().starts_with(&prompt_base(&crate::config::home_dir(), sys, app).0));
     // git context rides on the turn, not the prompt, and only inside a work tree
     assert_eq!(git_context().is_some(), git_branch().is_some());
     if git_branch().is_some() {
@@ -1012,6 +1110,50 @@ pub fn self_test() {
         write_docs(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("readme.md")).unwrap(), readme, "an upgrade refreshes stale docs");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    /// SYSTEM.md / --system-prompt replace only the base text: appends follow it
+    /// in order, and the shell, git and plan-mode blocks still ride along.
+    #[test]
+    fn system_prompt_override_replaces_base_and_appends_in_order() {
+        let dir = std::env::temp_dir().join(format!("rusti_sysprompt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let none: &[String] = &[];
+        assert_eq!(prompt_base(&dir, None, none), (SYSTEM_PROMPT.to_string(), vec![]), "no files, no flags: the default");
+
+        std::fs::write(dir.join("SYSTEM.md"), "  file base \n").unwrap();
+        std::fs::write(dir.join("APPEND_SYSTEM.md"), "file add").unwrap();
+        let (p, src) = prompt_base(&dir, None, none);
+        assert_eq!(p, "file base\n\nfile add");
+        assert!(src[0].ends_with("/SYSTEM.md") && src[1].ends_with("/APPEND_SYSTEM.md"), "{src:?}");
+
+        // flags win over both files; a value naming a file is read, anything else is text
+        let f = dir.join("extra.md");
+        std::fs::write(&f, "from file").unwrap();
+        let adds = vec!["one".to_string(), f.to_string_lossy().into_owned()];
+        let (p, src) = prompt_base(&dir, Some("flag base"), &adds);
+        assert_eq!(p, "flag base\n\none\n\nfrom file");
+        assert_eq!(src, vec!["--system-prompt".to_string(), "+ --append-system-prompt".to_string(), format!("+ {}", slash(&f))]);
+
+        // an unreadable (non-UTF-8) flag file is skipped and named, never an empty prompt
+        let bad = dir.join("utf16.md");
+        std::fs::write(&bad, [0xFF, 0xFE, b'h', 0, b'i', 0]).unwrap();
+        let bad_s = bad.to_string_lossy().into_owned();
+        let (p, src) = prompt_base(&dir, Some(&bad_s), std::slice::from_ref(&bad_s));
+        assert_eq!(p, "file base", "falls back to the next prompt source, with no empty addendum");
+        assert!(src[0].starts_with(&format!("{} unreadable", slash(&bad))) && src[1].ends_with("/SYSTEM.md"), "{src:?}");
+        assert!(src[2].starts_with(&format!("+ {} unreadable", slash(&bad))), "{src:?}");
+        std::fs::remove_file(dir.join("SYSTEM.md")).unwrap();
+        assert_eq!(prompt_base(&dir, Some(&bad_s), none).0, format!("{SYSTEM_PROMPT}\n\nfile add"));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // explicit flags, not set_prompt_flags: the global would leak into the
+        // parallel prompt-cache test, which compares two turns' system prompts
+        let p = build_system_prompt(Some("custom base"), &["custom add".to_string()]);
+        assert!(p.starts_with("custom base\n\ncustom add\n\n# Shell\n") && !p.contains(SYSTEM_PROMPT), "{p}");
+        // plan mode rides on the turn, so a replaced prompt cannot drop it
+        assert!(turn_context(true, false).unwrap().contains("# Plan mode\nThe user has turned plan mode ON"));
     }
 
     /// Two turns against a fake server that rejects stream_options once. The

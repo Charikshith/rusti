@@ -182,7 +182,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Structured summary | partial: a free-form prompt (`ai_core/mod.rs`) | **yes**: Goal, Constraints, Progress and similar sections, plus file lists | |
 | Compaction hook | **no** | **yes**: `session_before_compact` | |
 | Context files | **yes**: the first of AGENTS.md, RUSTI.md, CLAUDE.md in the cwd, re-read each turn | **yes**: all levels concatenated; `-nc` disables them | Pi walks parent directories |
-| System prompt override | **no** | **yes**: `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt` | |
+| System prompt override | **yes**: `~/.rusti/SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt`; replaces only the base text (readme.md § project instructions) | **yes**: `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt` | rusti reads no project `.rusti/SYSTEM.md` yet (waits for project trust) |
 | Git state in prompt | **yes**: branch and `git status --short` every turn, on the user message (`ai_core/mod.rs`) | not in core | rusti ahead |
 | Self-docs pointer | **yes**: the binary's docs are written to `~/.rusti/docs` (`ai_core/mod.rs`, feat-074) | **yes**: rusti ported this from Pi's `<docs>` pointer | Same |
 | Tokens and context % | **yes**: server usage, or a chars/4 estimate marked `~` | **yes** | |
@@ -213,7 +213,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Settings UI | partial: `/settings` (footer segments), `/themes`, `/mcp` | **yes**: `/settings`, `pi config` | |
 | Malformed-file safety | **yes**: reported, and saving is refused (`config.rs`) | not stated in docs | |
 | Env vars | `LLM_URL`, `LLM_KEY`, `LLM_MODEL`, `RUSTI_SESSION`, `RUSTI_MAX_ITERS`, `RUSTI_CONTEXT`, `RUSTI_YOLO`, `RUSTI_HOME` | about 15 `PI_*` variables plus provider keys (`docs/environment-variables.md`) | |
-| CLI flags | `--tui --session --resume --tree --url --key --model --use --list --add --max-iters --context --yolo --trust --self-test --help --version` (`main.rs`) | about 40 flags, plus `install`, `remove`, `update`, `list`, `config`, `mcp` and `auth` subcommands (`docs/cli.md`) | |
+| CLI flags | `--tui --session --resume --tree --url --key --model --use --list --add --max-iters --context --system-prompt --append-system-prompt --yolo --trust --self-test --help --version` (`main.rs`) | about 40 flags, plus `install`, `remove`, `update`, `list`, `config`, `mcp` and `auth` subcommands (`docs/cli.md`) | |
 | Iteration cap | **yes**: `--max-iters` (default 50) | not stated as a setting | |
 
 ## 9. Extensibility

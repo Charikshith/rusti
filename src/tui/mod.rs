@@ -360,6 +360,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
     // model's tool list is built per turn, and a half-connected server would
     // advertise nothing on the turn you just typed
     seed_lines.extend(ai_core::mcp::connect_all());
+    seed_lines.extend(ai_core::prompt_note());
     let seed_name = crate::session::name_of(&session.path);
 
     let (event_tx, event_rx) = mpsc::channel();
@@ -994,6 +995,11 @@ mod tests {
         let args = build_relaunch_args(&cli, "new-url", "new-key", "new-model", Some("renamed"), true);
         assert_eq!(args, vec!["--tui", "--url", "new-url", "--key", "new-key", "--model", "new-model",
                               "--session", "renamed", "--resume"]);
+
+        // prompt flags pass through untouched, so /reload keeps a custom system prompt
+        let cli: Vec<String> = ["--tui", "--system-prompt", "p.md", "--append-system-prompt", "a", "--append-system-prompt", "b"]
+            .iter().map(|s| s.to_string()).collect();
+        assert!(build_relaunch_args(&cli, "u", "k", "m", None, false).starts_with(&cli));
 
         let no_resume = build_relaunch_args(&["--tui".to_string()], "u", "k", "m", None, false);
         assert!(!no_resume.contains(&"--resume".to_string()));

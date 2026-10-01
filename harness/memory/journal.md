@@ -106,3 +106,7 @@
 - self_test() is not run by cargo test (only `--self-test`); a behavioural check needs its own #[test].
 - A fake server that reads one 64 KB chunk can miss the body: AGENTS.md alone puts the system prompt near 15 KB, so read to Content-Length.
 - Footer needed `#[serde(default)]` on the struct: adding a field would otherwise make every saved footer fail to parse.
+
+## 2026-10-01 - system prompt override
+- Repeat of 2026-09-30 (3): a Python-via-heredoc edit again turned Rust backslash and newline escapes into raw chars, and a backslash-zero became a literal NUL. That lesson is ready to promote to memory.
+- build_relaunch_args already passes unknown flags through, so /reload kept the new flags with no change; only a test was needed.

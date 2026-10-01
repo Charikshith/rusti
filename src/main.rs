@@ -28,6 +28,9 @@ flags
   --list                 list saved profiles      --add   add one interactively
   --max-iters N          tool rounds per task (default 50)
   --context N            compact the history once the prompt passes N tokens (default 100000)
+  --system-prompt X      replace the base system prompt (X is a file if one exists, else text;
+                         default ~/.rusti/SYSTEM.md, else the built-in one)
+  --append-system-prompt X  add X to it, repeatable (default ~/.rusti/APPEND_SYSTEM.md)
   --yolo                 no permission prompts, no project-root guard (does not imply --trust)
   --trust                trust this folder's model.json and .rusti without asking
   --self-test            offline check against a fake server
@@ -176,6 +179,7 @@ fn main() {
             _ => { eprintln!("--context needs a positive token count, got '{n}'"); std::process::exit(1); }
         }
     }
+    ai_core::set_prompt_flags(values(&args, "--system-prompt").pop(), values(&args, "--append-system-prompt"));
     let (url, key, model) = resolve_model(&args);
 
     // session + task first (so --tree can be cancelled before any model config)
@@ -228,7 +232,7 @@ fn main() {
 
     // plain mode connects too, so a one-shot run gets the same tools as the TUI;
     // status goes to stderr to keep stdout the answer alone for piping
-    for line in ai_core::mcp::connect_all() {
+    for line in ai_core::mcp::connect_all().into_iter().chain(ai_core::prompt_note()) {
         eprintln!("{}", line.trim_start());
     }
 
@@ -249,7 +253,7 @@ fn main() {
 }
 
 /// Flags that consume the next argument — their values are not the task.
-const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use", "--max-iters", "--context"];
+const VALUE_FLAGS: &[&str] = &["--url", "--key", "--model", "--session", "--use", "--max-iters", "--context", "--system-prompt", "--append-system-prompt"];
 
 /// The first bare argument that isn't some flag's value.
 fn task_arg(args: &[String]) -> Option<String> {
@@ -269,6 +273,11 @@ fn get(args: &[String], flag: &str, env: &str) -> Option<String> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1).cloned())
         .or_else(|| std::env::var(env).ok())
+}
+
+/// Every value of a repeatable flag, in order.
+fn values(args: &[String], flag: &str) -> Vec<String> {
+    args.windows(2).filter(|w| w[0] == flag).map(|w| w[1].clone()).collect()
 }
 
 /// Simple stdin prompt with a default kept on empty input.
@@ -320,5 +329,6 @@ mod tests {
         assert_eq!(super::task_arg(&a(&["--session", "smoke", "do it"])), Some("do it".into()));
         assert_eq!(super::task_arg(&a(&["--url", "http://x", "--tui"])), None);
         assert_eq!(super::task_arg(&a(&["do it"])), Some("do it".into()));
+        assert_eq!(super::task_arg(&a(&["--append-system-prompt", "be terse", "do it"])), Some("do it".into()));
     }
 }

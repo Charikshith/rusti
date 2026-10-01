@@ -186,6 +186,15 @@ If the working directory has an `AGENTS.md` (fallback `RUSTI.md`, then `CLAUDE.m
 its contents are appended to the system prompt. The file is re-read every turn, so
 edits take effect on the next message without a restart.
 
+`~/.rusti/SYSTEM.md` replaces rusti's built-in base prompt, and `~/.rusti/APPEND_SYSTEM.md`
+is added after it. `--system-prompt X` and `--append-system-prompt X` (repeatable) win over
+those files; X is read as a file when one exists at that path, else used as the text itself.
+Only the base text is replaced: the shell line, the docs pointer, the project instructions
+above, git context and the plan-mode block always stay. Both files are re-read every turn,
+and startup prints `ℹ system prompt: …` naming whatever changed it (an unreadable file is
+skipped and named there too). `/reload` keeps the
+flags. A project-level `.rusti/SYSTEM.md` is not read yet: it waits for project trust.
+
 ## markdown
 
 Model prose is rendered, not printed raw: ATX headings and `**bold**` come out bold,
