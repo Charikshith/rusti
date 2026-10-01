@@ -20,7 +20,7 @@ the cap. See [Memory Persistence](../references/memory-persistence-pattern.md) a
 
 ## What this file is not
 
-Not status. "Where the work stopped" belongs in `harness/progress.md` and `harness/feature_list.json`.
+Not status. "Where the work stopped" belongs in `harness/progress/` and `harness/features/` (older: `harness/progress.md`, `harness/feature_list.json`).
 This file holds only what was **learned**.
 
 ## Lessons
