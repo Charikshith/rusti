@@ -206,6 +206,10 @@ pub struct Config {
     pub max_iters: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<u64>,
+    /// Bytes one read_file returns before it cuts and says where to resume
+    /// (unset: 50 KB; 0: no cap, at the user's own risk).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_max_bytes: Option<usize>,
     /// Set when the file exists but could not be read or parsed. Save refuses
     /// while it is set: /settings and /mcp do load -> flip -> save, so without
     /// this a typo in model.json would be overwritten by these defaults and

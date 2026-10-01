@@ -1059,6 +1059,20 @@
         "The input history is sent with Job::New and handed back in Event::Resumed, so no new Event variant was needed.",
         "The /resume picker's name column widened from 15 to 18 so an auto name with a suffix still has a gap after it."
       ]
+    },
+    {
+      "id": "feat-082",
+      "name": "read_file pages: 2000 lines / 50 KB with a continuation notice, read_max_bytes setting",
+      "description": "read_file no longer cuts at the shared 20 KB MAX_RESULT with a bare …[truncated]. A read returns at most 2000 lines or 50 KB (whichever first); when cut it ends with `[Showing lines A-B of N. Use offset=B+1 to continue.]`. A single line over the byte cap returns `[Line N is X KB, over the Y KB read limit. Use run_command: sed -n 'Np' FILE | head -c Y]`. \"read_max_bytes\" (global or project config) sets the byte cap; 0 removes both caps. The tool description tells the model to keep reading from the given offset. Other tools keep MAX_RESULT.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "Tests written first: tools::tests::read_cap_names_the_next_offset (line cap, byte cap, notice numbers, following the notice, last page, the model's own limit is not a cut, CRLF verbatim), read_cap_long_line_points_at_sed, read_cap_zero_reads_everything. cargo test 49 passed via ./init.sh.",
+      "decisions": [
+        "Whole-file reads stay raw and byte-exact (CRLF and a missing final newline kept), so edit_file's exact-match text still matches what the model saw; ranged reads keep line numbers.",
+        "A limit the model asked for is not a cut and gets no notice; only the caps add one.",
+        "0 lifts the 2000-line cap too: it is the 'remove the cap' switch, and a line cap alone would still truncate.",
+        "Image resizing (F03) and the shared MAX_RESULT for grep/commands/web_fetch are out of scope."
+      ]
     }
   ]
 }

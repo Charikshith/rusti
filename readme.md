@@ -74,6 +74,12 @@ per-project defaults that flags and env still override:
 {"allow": ["read_file", "run_command"], "max_iters": 100, "context": 60000}
 ```
 
+`read_file` returns at most 2000 lines or 50 KB per call. A cut read ends with
+`[Showing lines 1-2000 of 5231. Use offset=2001 to continue.]`, so the model can page through
+the rest; a single line over the cap gets a `sed -n 'Np' FILE | head -c N` hint instead.
+`"read_max_bytes"` (in either file) changes the byte cap; `0` removes both caps, at your own
+risk: every result is re-sent on each later turn until compaction.
+
 ## architecture
 
 ```
