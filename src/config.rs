@@ -79,10 +79,10 @@ pub fn decide_trust(
     flag: bool,
     ask: Option<&mut dyn FnMut(&str) -> Option<String>>,
 ) -> bool {
-    if found.is_empty() || flag || always_trusted(trust_file, dir) {
+    if flag || always_trusted(trust_file, dir) {
         return true;
     }
-    let Some(ask) = ask else { return false };
+    let Some(ask) = ask.filter(|_| !found.is_empty()) else { return false };
     let (keys, res): (Vec<&str>, Vec<&str>) = found.iter().map(|s| s.as_str()).partition(|s| !s.starts_with(".rusti/"));
     let mut what = Vec::new();
     if !keys.is_empty() {
@@ -572,7 +572,9 @@ mod tests {
         assert_eq!(saved[key.as_str()], true, "Always is stored by canonical path");
         let other_spelling = dir.join("proj").join(".rusti").join("..");
         assert!(decide_trust(&other_spelling, &tf, &found, false, None), "Always trusts later runs, piped too");
-        assert!(decide_trust(&dir, &tf, &[], false, None), "nothing gated: nothing to ask");
+        let mut asked = false;
+        assert!(!decide_trust(&dir, &tf, &[], false, Some(&mut |_: &str| { asked = true; Some("y".into()) })), "nothing gated: not trusted");
+        assert!(!asked, "nothing gated: nothing to ask");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

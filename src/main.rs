@@ -137,7 +137,7 @@ fn main() {
     let ask: Option<&mut dyn FnMut(&str) -> Option<String>> = if interactive { Some(&mut ask) } else { None };
     let trusted = config::decide_trust(here, &config::trust_path(), &found, args.iter().any(|a| a == "--trust"), ask);
     config::set_trusted(trusted);
-    if !trusted {
+    if !trusted && !found.is_empty() {
         eprintln!("⚠ untrusted folder: ignoring {} (--trust, or answer [a]lways in the TUI, to use them)", found.join(", "));
     }
 
