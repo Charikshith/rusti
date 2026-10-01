@@ -84,3 +84,8 @@
 - Surprise: PowerShell passes `$null` to a P/Invoke string parameter as "", so FindWindow($null, title) never matches; use [NullString]::Value.
 - Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
 - Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.
+
+## 2026-10-01 (2) - project trust gate
+- Every config reader calls Config::load, so gating there covered mcp, /settings and allow_tool at once.
+- Surprise: "ignore untrusted keys" alone would let the next save drop them from model.json; they have to be held and written back.
+- An end-to-end test can read stderr until the first LLM retry line and kill the child; no fake server needed.
