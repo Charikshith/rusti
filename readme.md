@@ -223,6 +223,11 @@ into one row, the model's narration between tools is dimmed under a rail, and a 
 leaves out the time you spent answering its permission prompt. On a light terminal set
 `"light": true` in `~/.rusti/config.json` for pale tints instead of dark ones.
 
+The model's thinking is shown in italic grey. Ctrl+T hides it: each finished block becomes one
+`thinking… (N lines · ctrl+t)` row, and the block still streaming keeps its last two rows under
+that row, so you can see the model working. The choice is saved as `"hide_thinking": true` in
+`~/.rusti/config.json`; press Ctrl+T again to show it.
+
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
 binary small (~2.2 MB) and the rendering fast — full-screen redraw with

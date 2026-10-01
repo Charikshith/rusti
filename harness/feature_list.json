@@ -1017,6 +1017,19 @@
         "The finished row keeps only the exit/timeout line, since the output is already on screen above it.",
         "MCP servers and utc_offset_min keep their own cmd /C: they are not shell commands."
       ]
+    },
+    {
+      "id": "feat-080",
+      "name": "Ctrl+T hides the model's thinking, with a two-row live preview",
+      "description": "Ctrl+T flips App.hide_thinking, confirms 'thinking hidden'/'thinking shown' on the status line and saves \"hide_thinking\" in ~/.rusti/config.json (global, like footer). Hidden, every finished reasoning block draws as one italic-grey row `thinking… (N lines · ctrl+t)`; the block still streaming draws that row plus its last two non-blank rows, so the model is visibly working. Default stays visible (D13). The filter is render::visible(); HELP, readme § TUI and the docs topic map describe it.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "cargo test 47 passed via ./init.sh (new: tui::render::tests::hidden_thinking_folds_but_the_live_block_previews_two_rows; config::tests global-file round-trip extended for hide_thinking).",
+      "decisions": [
+        "The live preview is a fixed fold row + last two wrapped rows, so the block height stops changing once two rows exist (no flicker).",
+        "N counts non-blank logical lines of the thought: wrapped rows depend on terminal width.",
+        "No --hide-thinking flag for the plain path and no per-block mouse toggle: adjacent items, not asked for."
+      ]
     }
   ]
 }

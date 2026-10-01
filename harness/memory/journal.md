@@ -84,3 +84,7 @@
 - Surprise: PowerShell passes `$null` to a P/Invoke string parameter as "", so FindWindow($null, title) never matches; use [NullString]::Value.
 - Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
 - Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.
+
+## 2026-10-01 (2) - Ctrl+T thinking toggle
+- word_wrap measures bytes, so "…" and "│" count 3 each: a 30-col test wrapped the fold row; use realistic widths in tests.
+- `cargo clippy` already fails on ai_core/mod.rs:698 (unused_io_amount), unrelated; init.sh only runs cargo test.

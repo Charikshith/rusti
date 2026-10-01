@@ -982,3 +982,10 @@ through the session"):
   tui::run_bash), every line shown (no row cap). The system prompt now names the shell; HELP, readme § shell commands updated.
 - Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
   `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.
+
+## Session 2026-10-01 (2): feat-080 — Ctrl+T hides thinking, two-row live preview
+- Plan item F02 (captain: toggle, plus a 2-line preview while hidden; D13: visible by default).
+- `render::visible()` folds each `"  │ "` reasoning line to `thinking… (N lines · ctrl+t)` when `hide_thinking`;
+  the live block draws that row + its last two non-blank rows (`thinking_preview`). Ctrl+T saves `"hide_thinking"`
+  to the global config. HELP, readme § TUI, DOC_TOPICS updated.
+- Verification: `./init.sh`, cargo test 47 passed (one new render test, config round-trip extended).

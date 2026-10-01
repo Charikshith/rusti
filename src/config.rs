@@ -91,6 +91,10 @@ pub struct Config {
     /// of dark blocks. rusti cannot detect it, so it is a setting.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub light: bool,
+    /// Ctrl+T: draw each reasoning block as one folded row. Off by default,
+    /// so thinking shows unless you asked for it not to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_thinking: bool,
     /// BTreeMap, not HashMap: the tool list sent to the model must be in a
     /// stable order, or every run reshuffles it and defeats prompt caching.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -352,6 +356,11 @@ mod tests {
         cfg.save_pair(g, p).unwrap();
         assert!(!std::path::Path::new(p).exists(), "no project file for global settings");
         assert!(!Config::load_pair(g, p).footer.context);
+        // Ctrl+T's choice is global too, absent from a file that never set it
+        assert!(!cfg.hide_thinking && !read(g).contains("hide_thinking"), "thinking shows by default");
+        cfg.hide_thinking = true;
+        cfg.save_pair(g, p).unwrap();
+        assert!(!std::path::Path::new(p).exists() && Config::load_pair(g, p).hide_thinking);
 
         // a new allow goes to the project, not the global file
         cfg.allow.push("edit".into());
