@@ -4,7 +4,7 @@
 // Always-visible input field; model name in bottom status line.
 // Keyboard: Esc interrupts, Ctrl+C clears (twice quits), Ctrl+D quits when the
 // input is empty, Ctrl+O/Ctrl+T show or hide tool output/thinking, Enter submits, arrows edit input, Up/Down recall history,
-// PageUp/PageDown scroll transcript.
+// PageUp/PageDown scroll transcript, @ opens a file picker, Tab completes a path.
 // Slash: /use /model /new /resume /rename /tree /reload /quit.
 
 use std::io;
@@ -20,6 +20,7 @@ use super::Job;
 
 /// One row of the slash-command menu. `soon` marks a command that is queued in
 /// harness/open-work.md but not built yet, so the menu stays honest.
+#[derive(Debug, PartialEq)]
 pub struct Cmd {
     pub name: &'static str,
     pub desc: &'static str,
@@ -57,13 +58,195 @@ was made, not just what changed. Do not push.";
 /// Picker rows visible at once; up/down scrolls the window for long lists.
 pub const PICK_ROWS: usize = 8;
 
-/// Commands matching the input, while it is a lone "/word" — a space means the
-/// command is typed and its arguments have started, so the menu closes.
-pub fn menu_items(app: &App) -> Vec<&'static Cmd> {
+/// One row of the menu panel: a slash command, or a path to put in place of
+/// the chars `start..cursor` of the input (an `@` reference or a Tab completion).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Item {
+    Cmd(&'static Cmd),
+    Path { start: usize, insert: String, path: String, dir: bool },
+}
+
+/// Everything menu_items reads besides the pick/ask state, which forces a refresh.
+type MenuKey = (String, usize, bool, Option<String>, Option<String>);
+
+/// `@` picker rows shown at most, and files indexed at most.
+const FILE_ROWS: usize = 20;
+const FILE_CAP: usize = 50_000;
+
+/// What the panel offers for this input: the commands while it is a lone
+/// "/word" (a space means the arguments have started, so the menu closes), the
+/// list a Tab opened, or the files matching an `@` token at the cursor.
+pub fn menu_items(app: &App) -> Vec<Item> {
     if app.pick.is_some() || app.ask.is_some() || app.menu_off.as_deref() == Some(app.input.as_str()) {
         return Vec::new();
     }
-    filter_cmds(&app.input)
+    let cmds = filter_cmds(&app.input);
+    if !cmds.is_empty() {
+        return cmds.into_iter().map(Item::Cmd).collect();
+    }
+    if let Some((input, items)) = &app.tab {
+        if *input == app.input {
+            return items.clone();
+        }
+    }
+    match (at_token(&app.input, app.cursor), &app.files) {
+        (Some((start, q)), Some(files)) => score_files(files, &q)
+            .into_iter()
+            .map(|(path, dir)| Item::Path { start, insert: at_insert(&path, dir), path, dir })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The `@` token the cursor is in: (char index of the `@`, query typed after
+/// it). The `@` must start a token — line start, whitespace, `(`, `[` or a
+/// quote before it — so "me@host" stays an email. `@"` opens a quoted path,
+/// which may hold spaces; only the cursor's own line is looked at.
+pub fn at_token(input: &str, cursor: usize) -> Option<(usize, String)> {
+    let chars: Vec<char> = input.chars().take(cursor).collect();
+    let line = chars.iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    for i in (line..chars.len()).rev() {
+        if chars[i] != '@' || !(i == line || matches!(chars[i - 1], ' ' | '\t' | '(' | '[' | '"' | '\'' | '`')) {
+            continue;
+        }
+        let rest: String = chars[i + 1..].iter().collect();
+        return match rest.strip_prefix('"') {
+            Some(q) if !q.contains('"') => Some((i, q.to_string())),
+            None if !rest.contains(char::is_whitespace) && !rest.contains('"') => Some((i, rest)),
+            _ => None, // the nearest @ is closed or behind a space: not a reference being typed
+        };
+    }
+    None
+}
+
+/// What accepting a path inserts for an `@` reference. A folder keeps the
+/// picker open (no trailing space) so you can walk into it; a path with a
+/// space is quoted, and a quoted folder stays open-quoted for the same reason.
+pub fn at_insert(path: &str, dir: bool) -> String {
+    match (path.contains(' '), dir) {
+        (false, false) => format!("@{path} "),
+        (false, true) => format!("@{path}/"),
+        (true, false) => format!("@\"{path}\" "),
+        (true, true) => format!("@\"{path}/"),
+    }
+}
+
+/// The best `FILE_ROWS` files for an `@` query, Pi's scoring: name equal 100,
+/// name prefix 80, name substring 50, path substring 30, +10 for a folder;
+/// ties go to the shallower, then the shorter path. A query with a `/` is
+/// scoped to that folder and scores the part after it.
+pub fn score_files(files: &[(String, bool)], query: &str) -> Vec<(String, bool)> {
+    let q = query.to_lowercase();
+    let (scope, q) = match q.rsplit_once('/') {
+        Some((d, rest)) => (format!("{d}/"), rest.to_string()),
+        None => (String::new(), q),
+    };
+    let mut hits: Vec<(i32, usize, &String, bool)> = files
+        .iter()
+        .filter_map(|(path, dir)| {
+            let lower = path.to_lowercase();
+            let inside = lower.strip_prefix(&scope).filter(|r| !r.is_empty())?;
+            let name = inside.rsplit('/').next().unwrap_or(inside);
+            let score = if q.is_empty() || name == q {
+                100
+            } else if name.starts_with(&q) {
+                80
+            } else if name.contains(&q) {
+                50
+            } else if inside.contains(&q) {
+                30
+            } else {
+                return None;
+            };
+            Some((score + if *dir { 10 } else { 0 }, path.matches('/').count(), path, *dir))
+        })
+        .collect();
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.len().cmp(&b.2.len())).then(a.2.cmp(b.2)));
+    hits.into_iter().take(FILE_ROWS).map(|(_, _, p, d)| (p.clone(), d)).collect()
+}
+
+/// The path-like token before the cursor that Tab completes: (char index it
+/// starts at, text with `\` shown as `/`). It runs back to whitespace on the
+/// cursor's line. ponytail: no quoting, so a path with a space completes only
+/// up to the space; `@"…"` covers those.
+pub fn path_token(input: &str, cursor: usize) -> (usize, String) {
+    let chars: Vec<char> = input.chars().take(cursor).collect();
+    let start = chars.iter().rposition(|c| c.is_whitespace()).map_or(0, |i| i + 1);
+    (start, chars[start..].iter().collect::<String>().replace('\\', "/"))
+}
+
+/// Entries of the token's folder whose name starts with its last part, any
+/// case, folders first: (completed token, is_dir). `~` is the home folder.
+pub fn path_matches(token: &str) -> Vec<(String, bool)> {
+    let (dir, prefix) = match token.rsplit_once('/') {
+        Some((d, p)) => (format!("{d}/"), p),
+        None => (String::new(), token),
+    };
+    let home = || std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
+    let read = match dir.as_str() {
+        "" => ".".to_string(),
+        d if d == "~/" || d.starts_with("~/") => format!("{}/{}", home(), &d[2..]),
+        "/" => "/".to_string(),
+        d => d.to_string(),
+    };
+    let Ok(rd) = std::fs::read_dir(&read) else { return Vec::new() };
+    let p = prefix.to_lowercase();
+    let mut out: Vec<(String, bool)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.to_lowercase().starts_with(&p).then(|| (format!("{dir}{name}"), e.path().is_dir()))
+        })
+        .collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    out
+}
+
+/// The longest start every candidate shares, ignoring case; the first
+/// candidate's spelling wins.
+pub fn common_prefix(items: &[(String, bool)]) -> String {
+    let Some((first, _)) = items.first() else { return String::new() };
+    let mut n = first.chars().count();
+    for (s, _) in &items[1..] {
+        n = n.min(first.chars().zip(s.chars()).take_while(|(a, b)| a.to_lowercase().eq(b.to_lowercase())).count());
+    }
+    first.chars().take(n).collect()
+}
+
+/// Put `insert` in place of chars `start..cursor`; the cursor lands after it.
+pub fn replace_span(input: &str, start: usize, cursor: usize, insert: &str) -> (String, usize) {
+    let head: String = input.chars().take(start).collect();
+    let tail: String = input.chars().skip(cursor).collect();
+    (format!("{head}{insert}{tail}"), start + insert.chars().count())
+}
+
+/// Tab with no menu open: complete the path before the cursor. One match goes
+/// in outright, several fill what they share and open the list, none says so.
+fn tab_complete(app: &mut App) {
+    let (start, token) = path_token(&app.input, app.cursor);
+    let found = path_matches(&token);
+    let done = |(p, dir): &(String, bool)| if *dir { format!("{p}/") } else { format!("{p} ") };
+    match found.len() {
+        0 => app.notice = Some(("no match".into(), std::time::Instant::now())),
+        1 => (app.input, app.cursor) = replace_span(&app.input, start, app.cursor, &done(&found[0])),
+        _ => {
+            let shared = common_prefix(&found);
+            let fill = if shared.chars().count() > token.chars().count() { shared } else { token };
+            (app.input, app.cursor) = replace_span(&app.input, start, app.cursor, &fill);
+            let items = found
+                .iter()
+                .map(|f| Item::Path { start, insert: done(f), path: f.0.clone(), dir: f.1 })
+                .collect();
+            app.tab = Some((app.input.clone(), items));
+        }
+    }
+}
+
+/// Accept a path row: it replaces its token, and a folder `@` reference keeps
+/// the picker open on what is inside it.
+fn accept_path(app: &mut App, start: usize, insert: &str) {
+    (app.input, app.cursor) = replace_span(&app.input, start, app.cursor, insert);
+    app.tab = None;
 }
 
 /// Commands whose name completes `input`, or none when `input` isn't a lone
@@ -170,6 +353,17 @@ pub struct App {
     /// Ctrl+Q while working: each runs as its own task after this one ends.
     /// Steers (Enter while working) live in ai_core, which delivers them.
     pub follow: std::collections::VecDeque<String>,
+    /// The panel's rows, refreshed by sync_menu so a 50,000-file score runs
+    /// once per edit, not once per caller per frame.
+    pub menu: Vec<Item>,
+    menu_key: MenuKey,
+    /// Project files for the `@` picker, indexed once per draft on a thread
+    /// (`index` until it reports) and dropped when a turn ends, since the
+    /// agent may have created files.
+    pub files: Option<Vec<(String, bool)>>,
+    pub index: Option<Receiver<Vec<(String, bool)>>>,
+    /// The list a Tab opened, valid while the input is still what it filled in.
+    pub tab: Option<(String, Vec<Item>)>,
 }
 
 /// Prefix on a transcript row that is present but not drawn until Ctrl+O.
@@ -198,6 +392,7 @@ impl App {
             thinking: false,
             menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
             pick: None, expand: false, hide_thinking: false, follow: Default::default(),
+            menu: Vec::new(), menu_key: Default::default(), files: None, index: None, tab: None,
         }
     }
     /// True while a second Ctrl+C would exit.
@@ -228,7 +423,22 @@ impl App {
             self.menu_idx = 0;
             self.menu_top = 0;
         }
-        let n = menu_items(self).len();
+        if let Some(Ok(files)) = self.index.as_ref().map(|rx| rx.try_recv()) {
+            self.files = Some(files);
+            self.index = None;
+        }
+        if self.files.is_none() && self.index.is_none() && at_token(&self.input, self.cursor).is_some() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || { let _ = tx.send(ai_core::tools::project_files(FILE_CAP)); });
+            self.index = Some(rx);
+        }
+        let key = (self.input.clone(), self.cursor, self.files.is_some(),
+                   self.tab.as_ref().map(|t| t.0.clone()), self.menu_off.clone());
+        if key != self.menu_key || self.pick.is_some() || self.ask.is_some() {
+            self.menu = menu_items(self);
+            self.menu_key = key;
+        }
+        let n = self.menu.len();
         if n == 0 {
             return;
         }
@@ -399,21 +609,31 @@ pub fn ui_loop(
                         // messages back into the input; with none queued it is plain Up
                         (KeyCode::Up, m) | (KeyCode::Char('q'), m) if m.contains(KeyModifiers::ALT) && dequeue(&mut app) => {}
                         // ── slash-command menu (open while input is a lone "/word") ──
-                        (KeyCode::Up, _) if !menu_items(&app).is_empty() => {
+                        (KeyCode::Up, _) if !app.menu.is_empty() => {
                             app.menu_idx = app.menu_idx.saturating_sub(1);
                         }
-                        (KeyCode::Down, _) if !menu_items(&app).is_empty() => {
+                        (KeyCode::Down, _) if !app.menu.is_empty() => {
                             app.menu_idx += 1; // sync_menu clamps to the item count
                         }
-                        (KeyCode::Tab, _) if !menu_items(&app).is_empty() => {
-                            app.input = format!("{} ", menu_items(&app)[app.menu_idx].name);
-                            app.cursor = app.input.chars().count();
+                        // a path row: Tab and Enter both accept it, Enter never submits
+                        (KeyCode::Tab | KeyCode::Enter, _) if matches!(app.menu.get(app.menu_idx), Some(Item::Path { .. })) => {
+                            if let Some(Item::Path { start, insert, .. }) = app.menu.get(app.menu_idx).cloned() {
+                                accept_path(&mut app, start, &insert);
+                            }
                         }
-                        (KeyCode::Esc, _) if !menu_items(&app).is_empty() => {
+                        (KeyCode::Tab, _) if !app.menu.is_empty() => {
+                            if let Some(Item::Cmd(c)) = app.menu.get(app.menu_idx) {
+                                app.input = format!("{} ", c.name);
+                                app.cursor = app.input.chars().count();
+                            }
+                        }
+                        (KeyCode::Esc, _) if !app.menu.is_empty() => {
                             app.menu_off = Some(app.input.clone());
+                            app.tab = None;
                         }
-                        (KeyCode::Enter, _) if !menu_items(&app).is_empty() => {
-                            let cmd = menu_items(&app)[app.menu_idx].name.to_string();
+                        (KeyCode::Enter, _) if !app.menu.is_empty() => {
+                            let Some(Item::Cmd(c)) = app.menu.get(app.menu_idx) else { continue };
+                            let cmd = c.name.to_string();
                             app.fresh = false;
                             app.input.clear();
                             app.cursor = 0;
@@ -499,6 +719,8 @@ pub fn ui_loop(
                                 }
                             }
                         }
+                        // Tab with no menu open completes the path before the cursor
+                        (KeyCode::Tab, _) => tab_complete(&mut app),
                         // Ctrl+T folds reasoning blocks; like Ctrl+O it is only a redraw
                         (KeyCode::Char('t'), KeyModifiers::CONTROL) => toggle_thinking(&mut app),
                         // Ctrl+D exits, only when input is empty (pi: exit when editor empty)
@@ -768,6 +990,7 @@ pub fn ui_loop(
                     }
                     app.thinking = false;
                     app.fold = None;
+                    (app.files, app.index) = (None, None); // the turn may have made or removed files
                     if let Some(l) = app.turn_stats() {
                         app.lines.push(l);
                     }
@@ -1478,6 +1701,116 @@ mod tests {
         start(&mut a, "run cargo test");
         tool_end(&mut a, "run cargo test".into(), true, 4200, "ok");
         assert_eq!(shown(&a), vec!["  ✓ run cargo test  4.2s"]);
+    }
+
+    /// `@` opens only at a token boundary, on the cursor's own line, and a
+    /// quoted reference may hold spaces until its quote closes.
+    #[test]
+    fn at_token_starts_only_at_a_word_boundary() {
+        let at = |s: &str| at_token(s, s.chars().count());
+        assert_eq!(at("@"), Some((0, String::new())));
+        assert_eq!(at("look at @src/ma"), Some((8, "src/ma".into())));
+        assert_eq!(at("see (@foo"), Some((5, "foo".into())));
+        assert_eq!(at("mail me@host.com"), None, "an email is not a reference");
+        assert_eq!(at("@foo bar"), None, "a space ends the reference");
+        assert_eq!(at("first\n@x"), Some((6, "x".into())), "only the cursor's line");
+        assert_eq!(at("@\"my di"), Some((0, "my di".into())));
+        assert_eq!(at("@\"my dir/a.txt\" "), None, "a closed quote is a finished reference");
+        assert_eq!(at_token("@abc tail", 2), Some((0, "a".into())), "the query stops at the cursor");
+    }
+
+    /// Pi's ranking: exact name, then prefix, then substring, then path
+    /// substring, folders a step up; ties go shallower then shorter, and a
+    /// query with a `/` searches inside that folder.
+    #[test]
+    fn at_picker_ranks_files_and_scopes_to_a_folder() {
+        let f = |p: &str, d: bool| (p.to_string(), d);
+        let files = vec![
+            f("src", true), f("src/tui", true), f("src/main.rs", false), f("src/tui/app.rs", false),
+            f("docs/main-notes.md", false), f("domain.rs", false), f("readme.md", false),
+        ];
+        let paths = |q: &str| score_files(&files, q).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        assert_eq!(paths("main"), vec!["src/main.rs", "docs/main-notes.md", "domain.rs"]);
+        assert_eq!(paths("MAIN.RS")[0], "src/main.rs", "case does not matter");
+        assert_eq!(paths("tui"), vec!["src/tui", "src/tui/app.rs"], "a folder outranks a path hit");
+        assert_eq!(paths("src/"), vec!["src/tui", "src/main.rs", "src/tui/app.rs"], "scoped, shallow first, folder first");
+        assert_eq!(paths("src/tui/a"), vec!["src/tui/app.rs"]);
+        assert!(paths("zzz").is_empty());
+        let many: Vec<_> = (0..40).map(|i| f(&format!("f{i}.rs"), false)).collect();
+        assert_eq!(score_files(&many, "").len(), FILE_ROWS);
+    }
+
+    /// Accepting a row replaces the `@` token; a folder keeps the picker
+    /// open, and a path with a space is quoted.
+    #[test]
+    fn accepting_an_at_row_inserts_the_reference() {
+        assert_eq!(at_insert("src/main.rs", false), "@src/main.rs ");
+        assert_eq!(at_insert("src", true), "@src/");
+        assert_eq!(at_insert("my dir/a b.txt", false), "@\"my dir/a b.txt\" ");
+        assert_eq!(at_insert("my dir", true), "@\"my dir/");
+
+        let mut a = app();
+        a.files = Some(vec![("src".into(), true), ("src/main.rs".into(), false), ("me@host".into(), false)]);
+        a.input = "read @sr please".into();
+        a.cursor = 8; // after "@sr"
+        a.sync_menu();
+        assert_eq!(a.menu.len(), 2, "{:?}", a.menu);
+        let Item::Path { start, insert, .. } = a.menu[0].clone() else { panic!("{:?}", a.menu) };
+        accept_path(&mut a, start, &insert);
+        assert_eq!((a.input.as_str(), a.cursor), ("read @src/ please", 10));
+        a.sync_menu();
+        assert_eq!(a.menu.len(), 1, "the folder's picker stays open on what is inside it");
+        let Item::Path { start, insert, .. } = a.menu[0].clone() else { panic!() };
+        accept_path(&mut a, start, &insert);
+        assert_eq!(a.input, "read @src/main.rs  please");
+        a.sync_menu();
+        assert!(a.menu.is_empty(), "a file closes the picker");
+
+        a.input = "/re".into();
+        a.cursor = 3;
+        a.sync_menu();
+        assert!(matches!(a.menu[0], Item::Cmd(_)), "the slash menu is unchanged");
+        a.menu_off = Some(a.input.clone());
+        a.sync_menu();
+        assert!(a.menu.is_empty(), "Esc closes it");
+    }
+
+    /// Tab with no menu: one match is inserted, several fill their shared
+    /// start and open the list (folders first), none says so; `\` reads as `/`.
+    #[test]
+    fn tab_completes_the_path_before_the_cursor() {
+        let dir = std::env::temp_dir().join(format!("rusti_tab_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Notes")).unwrap();
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        std::fs::write(dir.join("only.md"), "").unwrap();
+        let base = dir.to_string_lossy().replace('\\', "/");
+
+        let mut a = app();
+        a.input = format!("cat {base}/on");
+        a.cursor = a.input.chars().count();
+        tab_complete(&mut a);
+        assert_eq!(a.input, format!("cat {base}/only.md "));
+        assert!(a.tab.is_none());
+
+        a.input = format!("cat {}\\no", dir.to_string_lossy());
+        a.cursor = a.input.chars().count();
+        tab_complete(&mut a);
+        assert_eq!(a.input, format!("cat {base}/Notes"), "shared start, any case (first row spells it), / for \\");
+        a.sync_menu();
+        let rows: Vec<String> = a.menu.iter().map(|i| match i { Item::Path { insert, .. } => insert.clone(), _ => panic!() }).collect();
+        assert_eq!(rows, vec![format!("{base}/Notes/"), format!("{base}/notes.txt ")], "folders first");
+        let Item::Path { start, insert, .. } = a.menu[1].clone() else { panic!() };
+        accept_path(&mut a, start, &insert);
+        assert_eq!(a.input, format!("cat {base}/notes.txt "));
+
+        a.input = format!("{base}/zz");
+        a.cursor = a.input.chars().count();
+        tab_complete(&mut a);
+        assert_eq!(a.notice(), Some("no match"));
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(path_token("a b\\c", 5), (2, "b/c".into()));
+        assert_eq!(common_prefix(&[("Abc".into(), false), ("abd".into(), false)]), "Ab");
     }
 
     /// Prose streamed before a tool call is narration: it goes dim under the
