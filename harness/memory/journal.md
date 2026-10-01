@@ -97,3 +97,7 @@
 - Surprise: write_file refuses paths outside the project root, so a test that wants an undo snapshot must write a cwd-relative file (as self_test does), not one in temp_dir.
 - Surprise: no python3 on this box; bash heredocs to python fail, use the Edit tool.
 - Reused tui::app::utc_offset_min for local-time session names instead of a date crate.
+
+## 2026-10-01 (5) - read_file cap
+- Whole-file reads must stay byte-exact (CRLF, missing last newline): edit_file matches against what the model saw, so rebuilding from lines() would have broken CRLF files.
+- Repeated last session's mistake: Python-in-heredoc mangled Rust escapes again. The Edit tool first, always, for Rust.
