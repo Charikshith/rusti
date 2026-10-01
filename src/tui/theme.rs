@@ -144,8 +144,8 @@ pub const THEMES: &[Theme] = &[
 static IDX: AtomicUsize = AtomicUsize::new(0);
 
 /// Row backgrounds for the two rows that mean "look here": a failed tool and a
-/// tool waiting on your answer. Your own message gets bold text, no fill. Everything else gets at most
-/// a coloured edge. Kept apart from the palettes because what reads as subtle
+/// tool waiting on your answer. Your own message gets bold text, no fill.
+/// Everything else gets at most a coloured edge. Kept apart from the palettes because what reads as subtle
 /// depends on the terminal's own background, which rusti cannot see: a pale
 /// wash on white is a dark block on black. "light": true in the config picks
 /// the pale set.
