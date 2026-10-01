@@ -179,6 +179,10 @@ fn build_relaunch_args(
     if resume {
         args.push("--resume".into());
     }
+    // a [y]es answer covers this whole session, the relaunch included
+    if crate::config::trusted() && !args.iter().any(|a| a == "--trust") {
+        args.push("--trust".into());
+    }
     args
 }
 

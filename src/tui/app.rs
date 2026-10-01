@@ -3,7 +3,7 @@
 // buffer is untouched while the TUI runs.
 // Always-visible input field; model name in bottom status line.
 // Keyboard: Esc interrupts, Ctrl+C clears (twice quits), Ctrl+D quits when the
-// input is empty, Enter submits, arrows edit input, Up/Down recall history,
+// input is empty, Ctrl+O/Ctrl+T show or hide tool output/thinking, Enter submits, arrows edit input, Up/Down recall history,
 // PageUp/PageDown scroll transcript.
 // Slash: /use /model /new /resume /rename /tree /reload /quit.
 
@@ -162,6 +162,9 @@ pub struct App {
     /// Ctrl+O: show the tail of successful tool output too. Failures are
     /// always shown — a message you must read can't sit behind a keystroke.
     pub expand: bool,
+    /// Ctrl+T: fold each reasoning block to one row (the live one keeps a
+    /// two-row preview). Saved as "hide_thinking" in the global config.
+    pub hide_thinking: bool,
 }
 
 /// Prefix on a transcript row that is present but not drawn until Ctrl+O.
@@ -188,7 +191,7 @@ impl App {
             sess_tok: 0, branch: String::new(),
             thinking: false,
             menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
-            pick: None, expand: false,
+            pick: None, expand: false, hide_thinking: false,
         }
     }
     /// True while a second Ctrl+C would exit.
@@ -337,6 +340,7 @@ pub fn ui_loop(
     let bad_theme = cfg.theme.as_deref().filter(|n| !super::theme::set(n)).map(String::from);
     super::theme::set_light(cfg.light);
     let mut app = App::new(model, session, seed_lines, seed_history, seed_msg_num, cfg.footer.clone());
+    app.hide_thinking = cfg.hide_thinking;
     // stderr is invisible under the alternate screen, so this goes in the
     // transcript — and stays there, a warning you must act on can't expire
     if let Some(e) = &cfg.err {
@@ -466,6 +470,8 @@ pub fn ui_loop(
                             let what = if app.expand { "shown" } else { "hidden" };
                             app.notice = Some((format!("tool output {what}"), std::time::Instant::now()));
                         }
+                        // Ctrl+T folds reasoning blocks; like Ctrl+O it is only a redraw
+                        (KeyCode::Char('t'), KeyModifiers::CONTROL) => toggle_thinking(&mut app),
                         // Ctrl+D exits, only when input is empty (pi: exit when editor empty)
                         (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
                             if app.input.is_empty() {
@@ -1287,6 +1293,19 @@ fn toggle_footer(app: &mut App, key: &str) {
         app.notice = Some((format!("settings not saved: {e}"), std::time::Instant::now()));
     }
     pick_settings(app);
+}
+
+/// Flip hide_thinking and save it, the same load-then-save as toggle_footer.
+fn toggle_thinking(app: &mut App) {
+    app.hide_thinking = !app.hide_thinking;
+    let what = if app.hide_thinking { "hidden" } else { "shown" };
+    let mut cfg = crate::config::Config::load();
+    cfg.hide_thinking = app.hide_thinking;
+    let msg = match cfg.save() {
+        Ok(()) => format!("thinking {what}"),
+        Err(e) => format!("thinking {what}; not saved: {e}"),
+    };
+    app.notice = Some((msg, std::time::Instant::now()));
 }
 
 fn pick_model(app: &mut App) {

@@ -85,7 +85,15 @@
 - Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
 - Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.
 
-## 2026-10-01 - /new and auto-named sessions
+## 2026-10-01 (2) - project trust gate
+- Every config reader calls Config::load, so gating there covered mcp, /settings and allow_tool at once.
+- Surprise: "ignore untrusted keys" alone would let the next save drop them from model.json; they have to be held and written back.
+- An end-to-end test can read stderr until the first LLM retry line and kill the child; no fake server needed.
+
+## 2026-10-01 (3) - Ctrl+T thinking toggle
+- word_wrap measures bytes, so "…" and "│" count 3 each: a 30-col test wrapped the fold row; use realistic widths in tests.
+
+## 2026-10-01 (4) - /new and auto-named sessions
 - Surprise: write_file refuses paths outside the project root, so a test that wants an undo snapshot must write a cwd-relative file (as self_test does), not one in temp_dir.
 - Surprise: no python3 on this box; bash heredocs to python fail, use the Edit tool.
 - Reused tui::app::utc_offset_min for local-time session names instead of a date crate.

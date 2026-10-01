@@ -983,7 +983,23 @@ through the session"):
 - Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
   `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.
 
-## Session 2026-10-01: feat-079 — /new, auto-named sessions, undo stays in its session
+## Session 2026-10-01 (2): feat-079 — project trust gate (Phase 0 / T0, fixes A1)
+- A cloned repo's ./model.json could set mcp/shell/shell_command_prefix/allow and have them apply at startup.
+  Now Config::load_pair holds config::GATED_KEYS aside unless config::trusted(); main decides trust once, before
+  the first load (config::decide_trust): --trust, a saved Always in ~/.rusti/trust.json, or the TUI's
+  Yes / No / Always question. Piped and one-shot runs are untrusted without --trust; --yolo is not --trust.
+- Held keys are written back untouched on save, so an untrusted session cannot erase the project's settings.
+- Resources (prompts, skills, themes, SYSTEM.md) are detected for the question only; later phases call trusted().
+- Verification: `./init.sh`, cargo test 49 passed (new: two config tests, tests/trust.rs end to end).
+
+## Session 2026-10-01 (3): feat-080 — Ctrl+T hides thinking, two-row live preview
+- Plan item F02 (captain: toggle, plus a 2-line preview while hidden; D13: visible by default).
+- `render::visible()` folds each `"  │ "` reasoning line to `thinking… (N lines · ctrl+t)` when `hide_thinking`;
+  the live block draws that row + its last two non-blank rows (`thinking_preview`). Ctrl+T saves `"hide_thinking"`
+  to the global config. HELP, readme § TUI, DOC_TOPICS updated.
+- Verification: `./init.sh`, cargo test 49 + 1 passed after merging master (one new render test, config round-trip extended).
+
+## Session 2026-10-01 (4): feat-081 — /new, auto-named sessions, undo stays in its session
 - `/new [name]` (tui/mod.rs new_session, Job::New): saves the active session, starts an empty one with the same model;
   unnamed gets `s-YYYYMMDD-HHMM` under .rusti/sessions (session::auto_path). Bare launches use the same auto name (A2);
   bare `--resume`/`--tree` open the latest saved session (session::latest).
