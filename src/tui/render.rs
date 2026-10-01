@@ -318,32 +318,43 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
         return out;
     }
 
-    let menu = app::menu_items(app);
+    let menu = &app.menu;
     if menu.is_empty() {
+        // the @ picker waits on its index; say so rather than look broken
+        if app.index.is_some() && app::at_token(&app.input, app.cursor).is_some() {
+            return vec![sel_row("  indexing files…", false)];
+        }
         return Vec::new();
     }
     let pad = CMDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    // a path row is its name, then the whole path dim beside it
+    let name_pad = menu.iter().map(|it| match it {
+        app::Item::Path { path, dir, .. } => path.rsplit('/').next().unwrap_or(path).chars().count() + *dir as usize,
+        _ => 0,
+    }).max().unwrap_or(0);
     let mut out: Vec<String> = menu
         .iter()
         .enumerate()
         .skip(app.menu_top)
         .take(MENU_ROWS)
-        .map(|(i, c)| {
-            let row = format!(
-                "{}{:pad$}  {}{}",
-                if i == app.menu_idx { "▸ " } else { "  " },
-                c.name,
-                c.desc,
-                if c.soon { "  · soon" } else { "" },
-            );
+        .map(|(i, it)| {
+            let arrow = if i == app.menu_idx { "▸ " } else { "  " };
+            let row = match it {
+                app::Item::Cmd(c) => format!("{arrow}{:pad$}  {}{}", c.name, c.desc, if c.soon { "  · soon" } else { "" }),
+                app::Item::Path { path, dir, .. } => {
+                    let name = format!("{}{}", path.rsplit('/').next().unwrap_or(path), if *dir { "/" } else { "" });
+                    format!("{arrow}{name:name_pad$}  {path}")
+                }
+            };
             sel_row(&row, i == app.menu_idx)
         })
         .collect();
     if menu.len() > MENU_ROWS {
-        out.push(sel_row(
-            &format!("  ↑/↓ {}/{}  · tab completes · enter runs", app.menu_idx + 1, menu.len()),
-            false,
-        ));
+        let keys = match menu[0] {
+            app::Item::Cmd(_) => "tab completes · enter runs",
+            app::Item::Path { .. } => "tab/enter inserts · esc closes",
+        };
+        out.push(sel_row(&format!("  ↑/↓ {}/{}  · {keys}", app.menu_idx + 1, menu.len()), false));
     }
     out
 }

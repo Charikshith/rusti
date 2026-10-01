@@ -67,6 +67,8 @@ slash commands (--tui)
   !!CMD           the same, but the output is shown to you only
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
   ctrl+t          hide/show the model's thinking (saved as \"hide_thinking\" in config.json)
+  @PATH           pick a project file to name in the message (the model reads it)
+  tab             complete the path before the cursor
 ";
 
 fn main() {

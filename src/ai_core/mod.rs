@@ -100,6 +100,7 @@ Use todo to plan and track multi-step tasks. Writes and commands may need the us
 for that call: explain or ask_user, do not retry it. Use run_background for servers and watchers, and job_stop \
 what you started before finishing. Use delegate for a self-contained subtask whose details you do not need. \
 Never invent file contents, command output, or what an image shows — use tools to verify, and say when you cannot see something. \
+`@path` in a user message names a file; read it. \
 When the task is done, reply with a concise summary of what you changed.";
 
 /// Tool-call rounds per task. 50 fits a real read/edit/test/fix cycle; --max-iters overrides.
@@ -209,7 +210,7 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
 /// Topic -> where it is answered, in the user's words. Each § is a `## `
 /// heading in readme.md; a test pins that, so a renamed heading fails CI.
 const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
-permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking (help.txt, readme.md § TUI), \
+permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking, @ file references and Tab completion (help.txt, readme.md § TUI), \
 sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
 AGENTS.md, SYSTEM.md, --system-prompt (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \

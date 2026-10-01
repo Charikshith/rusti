@@ -264,6 +264,15 @@ The model's thinking is shown in italic grey. Ctrl+T hides it: each finished blo
 that row, so you can see the model working. The choice is saved as `"hide_thinking": true` in
 `~/.rusti/config.json`; press Ctrl+T again to show it.
 
+Typing `@` at the start of a word opens a file picker over the project (`rg --files`, so
+.gitignore is honoured; without ripgrep a walk that skips `.git`, `target`, `node_modules` and
+the like). Each character narrows it, ↑/↓ moves, Tab or Enter inserts `@path`, Esc closes it.
+A folder inserts `@dir/` and keeps the picker open on what is inside it; a path with a space
+becomes `@"path with space"`. The reference stays plain text: the model is told that `@path`
+names a file and reads it. The list is built once per draft and rebuilt after each turn.
+With no menu open, Tab completes the path before the cursor (`~` is your home folder): one
+match goes in outright, several fill what they share and open the list, folders first.
+
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
 binary small (~2.2 MB) and the rendering fast — full-screen redraw with
