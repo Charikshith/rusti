@@ -633,8 +633,9 @@ This message carries that file as an image part.                  If you cannot 
             session.add(ie, Some(parent));
         }
         // steers go here for the same reason as the image, all at once as one
-        // user entry; a sub-agent leaves them for its parent
-        let steered = if DEPTH.load(Ordering::Relaxed) == 0 { take_steers() } else { vec![] };
+        // user entry; a sub-agent leaves them for its parent, an interrupted
+        // turn for the TUI's follow-up queue
+        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) { take_steers() } else { vec![] };
         if !steered.is_empty() {
             let text = steered.join("\n\n");
             session.add(Entry::new("user", text.clone()), session.active.clone());
