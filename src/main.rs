@@ -28,7 +28,8 @@ flags
   --list                 list saved profiles      --add   add one interactively
   --max-iters N          tool rounds per task (default 50)
   --context N            compact the history once the prompt passes N tokens (default 100000)
-  --yolo                 no permission prompts, no project-root guard
+  --yolo                 no permission prompts, no project-root guard (does not imply --trust)
+  --trust                trust this folder's model.json and .rusti without asking
   --self-test            offline check against a fake server
   --help, --version
 
@@ -44,6 +45,11 @@ permission-gated, and are refused in plan mode. Toggle them live with /mcp.
 \"shell\" is the path of the shell every command runs in (~ is your home folder); unset, it is
 Git Bash (Windows), then bash on PATH, then cmd /C or sh -c. \"shell_command_prefix\" is
 put in front of every command, on its own line.
+trust: a folder whose model.json sets mcp, shell, shell_command_prefix, hooks, read_allow or
+allow (or whose .rusti has prompts, skills, themes or SYSTEM.md) is asked about once:
+[y]es for this run, [a]lways (saved by path in ~/.rusti/trust.json), or no. Untrusted, those
+are ignored with one warning; max_iters, context, theme and footer still apply. Piped and
+one-shot runs are untrusted unless --trust.
 
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   list, switch and name sessions
@@ -117,6 +123,24 @@ fn main() {
         return;
     }
 
+    let task_arg = task_arg(&args);
+    // bare `rusti` (or `rusti --resume`) in a terminal opens the TUI, like other
+    // coding agents; a task argument or piped stdin stays a one-shot run
+    let tui_mode = args.iter().any(|a| a == "--tui")
+        || (task_arg.is_none() && !args.iter().any(|a| a == "--tree") && is_terminal::is_terminal(std::io::stdin()));
+
+    // trust before the first load that applies gated keys: only the TUI asks
+    let here = std::path::Path::new(".");
+    let found = config::gated(here);
+    let mut ask = |q: &str| Some(prompt(q, ""));
+    let interactive = tui_mode && is_terminal::is_terminal(std::io::stdin());
+    let ask: Option<&mut config::Ask<'_>> = if interactive { Some(&mut ask) } else { None };
+    let trusted = config::decide_trust(here, &config::trust_path(), &found, args.iter().any(|a| a == "--trust"), ask);
+    config::set_trusted(trusted);
+    if !trusted && !found.is_empty() {
+        eprintln!("⚠ untrusted folder: ignoring {} (--trust, or answer [a]lways in the TUI, to use them)", found.join(", "));
+    }
+
     // project settings first, so flags and env below still override them
     let saved = config::Config::load();
     if let Some(e) = &saved.err {
@@ -147,11 +171,6 @@ fn main() {
         }
     }
     let (url, key, model) = resolve_model(&args);
-    let task_arg = task_arg(&args);
-    // bare `rusti` (or `rusti --resume`) in a terminal opens the TUI, like other
-    // coding agents; a task argument or piped stdin stays a one-shot run
-    let tui_mode = args.iter().any(|a| a == "--tui")
-        || (task_arg.is_none() && !args.iter().any(|a| a == "--tree") && is_terminal::is_terminal(std::io::stdin()));
 
     // session + task first (so --tree can be cancelled before any model config)
     // --session NAME → .rusti/sessions/NAME.json, else the root session.json

@@ -982,3 +982,12 @@ through the session"):
   tui::run_bash), every line shown (no row cap). The system prompt now names the shell; HELP, readme § shell commands updated.
 - Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
   `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.
+
+## Session 2026-10-01 (2): feat-079 — project trust gate (Phase 0 / T0, fixes A1)
+- A cloned repo's ./model.json could set mcp/shell/shell_command_prefix/allow and have them apply at startup.
+  Now Config::load_pair holds config::GATED_KEYS aside unless config::trusted(); main decides trust once, before
+  the first load (config::decide_trust): --trust, a saved Always in ~/.rusti/trust.json, or the TUI's
+  Yes / No / Always question. Piped and one-shot runs are untrusted without --trust; --yolo is not --trust.
+- Held keys are written back untouched on save, so an untrusted session cannot erase the project's settings.
+- Resources (prompts, skills, themes, SYSTEM.md) are detected for the question only; later phases call trusted().
+- Verification: `./init.sh`, cargo test 49 passed (new: two config tests, tests/trust.rs end to end).
