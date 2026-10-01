@@ -1066,6 +1066,7 @@ pub fn self_test() {
         assert_eq!(rt.block_on(run_agent(&client, &mut session, "first", &no)).unwrap(), "ok");
         std::fs::write(&dirty, "x").unwrap(); // the working tree changes between the turns
         let second = rt.block_on(run_agent(&client, &mut session, "second", &no));
+        let fits = git(&["status", "--short"]).is_some_and(|s| s.len() <= 2000);
         std::fs::remove_file(&dirty).ok();
         std::fs::remove_file(&path).ok();
         assert_eq!(second.unwrap(), "ok");
@@ -1083,7 +1084,11 @@ pub fn self_test() {
         if git_branch().is_some() {
             let (c1, c2) = (m1[1]["content"].as_str().unwrap(), m2[3]["content"].as_str().unwrap());
             assert!(c1.contains("# Git\nbranch: ") && !c1.contains(&dirty), "{c1}");
-            assert!(c2.contains(&dirty), "the new turn carries the tree as it is now: {c2}");
+            assert!(c2.contains("# Git
+branch: "), "{c2}");
+            if fits {
+                assert!(c2.contains(&dirty), "the new turn carries the tree as it is now: {c2}");
+            }
             assert!(!m2[0]["content"].as_str().unwrap().contains("# Git"));
         }
     }
