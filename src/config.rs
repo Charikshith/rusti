@@ -129,6 +129,10 @@ pub struct ModelProfile {
     pub key: String,
     #[serde(default)]
     pub model: String,
+    /// false: this model cannot see images, so rusti refuses to send them
+    /// instead of an endpoint dropping them silently. Unset means try.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
 }
 
 /// Which status-line segments are drawn. All on by default; /settings toggles
@@ -374,7 +378,7 @@ pub fn ask_profile() -> Option<ModelProfile> {
     let url = required("url (http://host:port/v1/chat/completions)", "")?;
     let key = prompt("api key (optional)", "")?;
     let model = prompt("model id", "gpt-4o-mini")?;
-    Some(ModelProfile { name, url, key, model })
+    Some(ModelProfile { name, url, key, model, vision: None })
 }
 
 fn prompt(label: &str, default: &str) -> Option<String> {

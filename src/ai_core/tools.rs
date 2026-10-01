@@ -36,14 +36,14 @@ fn sweep_clips(dir: &str) {
 /// Put the clipboard's image on disk and return its path, for the TUI to type
 /// into the input. A file COPIED in a file manager is not an image on the
 /// clipboard but a file-drop list, and that is how most people "copy a
-/// screenshot" — that path is returned as-is, with nothing written.
+/// screenshot" — every image path in it is returned as-is, with nothing written.
 ///
 /// One process, not a probe followed by a save: the script exits 1 when there
 /// is nothing to take, which is the same answer for a third of the latency.
 /// PowerShell must be `powershell -Sta`; the clipboard needs a single-threaded
 /// apartment and `pwsh` is MTA, where GetImage() returns null on a machine
 /// whose clipboard is perfectly fine.
-pub fn clipboard_image() -> Result<String, String> {
+pub fn clipboard_image() -> Result<Vec<String>, String> {
     let dir = CLIP_DIR;
     sweep_clips(dir);
     std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
@@ -56,9 +56,9 @@ pub fn clipboard_image() -> Result<String, String> {
             "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; \
              $i = [System.Windows.Forms.Clipboard]::GetImage(); \
              if ($null -ne $i) {{ $i.Save('{path}', [System.Drawing.Imaging.ImageFormat]::Png); '{path}'; exit 0 }} \
-             foreach ($f in [System.Windows.Forms.Clipboard]::GetFileDropList()) \
-             {{ if ($f -match '[.](png|jpg|jpeg|gif|webp)$') {{ $f; exit 0 }} }} \
-             exit 1");
+             $n = 0; foreach ($f in [System.Windows.Forms.Clipboard]::GetFileDropList()) \
+             {{ if ($f -match '[.](png|jpg|jpeg|gif|webp)$') {{ $f; $n++ }} }} \
+             if ($n) {{ exit 0 }}; exit 1");
         Command::new("powershell").args(["-NoProfile", "-Sta", "-Command", &script]).output()
     } else if cfg!(target_os = "macos") {
         let script = format!(
@@ -76,15 +76,17 @@ pub fn clipboard_image() -> Result<String, String> {
     };
 
     let out = out.map_err(|e| format!("could not read the clipboard: {e}"))?;
-    // Windows prints the path it used (ours, or the dropped file's); the others
-    // redirect into the file, so an empty file is the real failure signal
-    let printed = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if out.status.success() && !printed.is_empty() && Path::new(&printed).exists() {
+    // Windows prints the paths it used (ours, or the dropped files', one per
+    // line); the others redirect into the file, so an empty file is the real
+    // failure signal
+    let printed: Vec<String> = String::from_utf8_lossy(&out.stdout).lines()
+        .map(|l| l.trim().to_string()).filter(|l| !l.is_empty() && Path::new(l).exists()).collect();
+    if out.status.success() && !printed.is_empty() {
         return Ok(printed);
     }
     let wrote = std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false);
     if out.status.success() && wrote {
-        return Ok(path);
+        return Ok(vec![path]);
     }
     let _ = std::fs::remove_file(&path); // a zero-byte clip is worse than none
     Err("no image on the clipboard".into())
@@ -92,7 +94,7 @@ pub fn clipboard_image() -> Result<String, String> {
 
 /// Images a vision model can be sent, by extension. Anything else is read as
 /// text and fails honestly on invalid UTF-8 rather than being mangled.
-fn image_mime(path: &str) -> Option<&'static str> {
+pub fn image_mime(path: &str) -> Option<&'static str> {
     let ext = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "png" => Some("image/png"),
@@ -103,9 +105,182 @@ fn image_mime(path: &str) -> Option<&'static str> {
     }
 }
 
-/// Raw bytes an image may have before it is refused. Base64 inflates by 4/3 and
-/// history is re-sent every turn, so a big screenshot is not a one-off cost.
-const MAX_IMAGE: usize = 4 * 1024 * 1024;
+/// Raw bytes an image may have once encoded: 4.5 MB of base64, Pi's headroom
+/// under Anthropic's 5 MB per-image limit. Base64 inflates by 4/3 and history
+/// is re-sent every turn, so a big screenshot is not a one-off cost.
+const MAX_IMAGE: usize = 4_718_592 / 4 * 3;
+/// Longest side an image is sent at; bigger ones are scaled down to it.
+const MAX_SIDE: u32 = 2000;
+
+/// The model profile's `vision` setting: false refuses to send images at all,
+/// rather than letting a text-only endpoint drop them without a word.
+static VISION: AtomicBool = AtomicBool::new(true);
+
+pub fn set_vision(on: bool) {
+    VISION.store(on, Ordering::Relaxed);
+}
+
+/// An image ready to send: its data URL, the bytes it carries, and the
+/// coordinate note when it was scaled down.
+pub struct Image {
+    pub url: String,
+    pub size: usize,
+    pub note: Option<String>,
+}
+
+/// Read an image for a vision model, shrunk to fit when it is too big. The
+/// one way in for read_file and for `@` images attached on submit, so the
+/// vision flag and the limits hold for both.
+pub fn load_image(path: &str) -> Result<Image, String> {
+    if !VISION.load(Ordering::Relaxed) {
+        return Err(format!("this model profile has no vision; {path} not sent"));
+    }
+    let mime = image_mime(path).ok_or_else(|| format!("{path} is not a png, jpeg, gif or webp image"))?;
+    let bytes = std::fs::read(path).map_err(|e| format!("error reading {path}: {e}"))?;
+    let (bytes, mime, note) = fit(bytes, mime, |side, q| shrink(path, side, q))
+        .map_err(|e| format!("{path}: {e}"))?;
+    Ok(Image { url: format!("data:{mime};base64,{}", b64(&bytes)), size: bytes.len(), note })
+}
+
+/// Bytes as a person reads them. Under 1 KB in bytes, not "0 KB": a model
+/// that reads 0 concludes the attachment is empty and refuses to look at it.
+pub fn size_text(n: usize) -> String {
+    if n < 1024 { format!("{n} bytes") } else { format!("{} KB", n / 1024) }
+}
+
+/// Width and height from an image's header: PNG, GIF and baseline or
+/// progressive JPEG. ponytail: WebP is not read, so a WebP is only shrunk
+/// when it is over the byte limit; add VP8/VP8L/VP8X if that matters.
+pub fn image_dims(b: &[u8]) -> Option<(u32, u32)> {
+    let be = |i: usize| Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]) as u32);
+    if b.starts_with(b"\x89PNG") && b.len() >= 24 {
+        let at = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        return Some((at(16), at(20)));
+    }
+    if b.starts_with(b"GIF") && b.len() >= 10 {
+        return Some((u16::from_le_bytes([b[6], b[7]]) as u32, u16::from_le_bytes([b[8], b[9]]) as u32));
+    }
+    if !b.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut i = 2;
+    while i + 1 < b.len() {
+        if b[i] != 0xFF {
+            return None;
+        }
+        let m = b[i + 1];
+        if m == 0xFF {
+            i += 1; // fill byte
+            continue;
+        }
+        // SOF0..SOF15 carry the frame size; C4 (DHT), C8 and CC (DAC) do not
+        if (0xC0..=0xCF).contains(&m) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+            return Some((be(i + 7)?, be(i + 5)?));
+        }
+        i += 2 + be(i + 2)? as usize;
+    }
+    None
+}
+
+/// `bytes` as they will be sent: untouched when within MAX_IMAGE and
+/// MAX_SIDE, else the first rung of Pi's ladder that fits — PNG at the size
+/// cap (only when it is the pixels that are too big), then JPEG at falling
+/// quality and size. `resize(side, quality)` makes one attempt; quality 0 is
+/// PNG. An image too wide but light enough goes as it is when nothing here
+/// can resize it.
+fn fit(bytes: Vec<u8>, mime: &'static str, resize: impl Fn(u32, u8) -> Result<Vec<u8>, String>)
+    -> Result<(Vec<u8>, &'static str, Option<String>), String> {
+    let dims = image_dims(&bytes);
+    let wide = dims.is_some_and(|(w, h)| w.max(h) > MAX_SIDE);
+    if bytes.len() <= MAX_IMAGE && !wide {
+        return Ok((bytes, mime, None));
+    }
+    let long = dims.map_or(MAX_SIDE, |(w, h)| w.max(h).min(MAX_SIDE));
+    let ladder = [(long, 0), (long, 80), (long * 3 / 4, 70), (long / 2, 55), (long / 3, 40)];
+    let mut why = String::new();
+    for &(side, q) in &ladder[if wide { 0 } else { 1 }..] {
+        match resize(side, q) {
+            Ok(out) if out.len() <= MAX_IMAGE => {
+                let note = dims.zip(image_dims(&out)).map(|((w, h), (w2, h2))| format!(
+                    "[Image: original {w}x{h}, displayed at {w2}x{h2}. Multiply coordinates by {:.2} to map to the original image.]",
+                    w as f64 / w2.max(1) as f64));
+                return Ok((out, if q == 0 { "image/png" } else { "image/jpeg" }, note));
+            }
+            Ok(out) => why = format!("still {} at {side}px", size_text(out.len())),
+            Err(e) => {
+                why = e;
+                break; // no resizer here: a smaller size will not find one either
+            }
+        }
+    }
+    if bytes.len() <= MAX_IMAGE {
+        return Ok((bytes, mime, None));
+    }
+    Err(format!("{} is over the {} limit for an image and could not be shrunk ({why})",
+        size_text(bytes.len()), size_text(MAX_IMAGE)))
+}
+
+/// One resize of the image at `src` to fit `side` px, by the platform's own
+/// tool so no image crate ships in the binary (D2): System.Drawing through
+/// PowerShell on Windows, sips on macOS, ImageMagick elsewhere. Quality 0 is
+/// PNG, else JPEG at that quality. Paths travel in the environment, never in
+/// the script, so a quote in a file name cannot break out of it.
+fn shrink(src: &str, side: u32, q: u8) -> Result<Vec<u8>, String> {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let ext = if q == 0 { "png" } else { "jpg" };
+    let dst = std::env::temp_dir().join(format!("rusti-shrink-{}-{}.{ext}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let dst_s = dst.to_string_lossy().into_owned();
+    let run = |mut c: Command| c.env("RUSTI_SRC", src).env("RUSTI_DST", &dst).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let status = if cfg!(windows) {
+        // a JPEG has no alpha: paint white first, or transparency turns black
+        let (clear, save) = if q == 0 {
+            ("", "$b.Save($env:RUSTI_DST, [System.Drawing.Imaging.ImageFormat]::Png)".to_string())
+        } else {
+            ("$g.Clear([System.Drawing.Color]::White);", format!(
+                "$c = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object {{ $_.MimeType -eq 'image/jpeg' }}; \
+                 $p = New-Object System.Drawing.Imaging.EncoderParameters 1; \
+                 $p.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), ([long]{q}); \
+                 $b.Save($env:RUSTI_DST, $c, $p)"))
+        };
+        let script = format!(
+            "Add-Type -AssemblyName System.Drawing; \
+             $i = [System.Drawing.Image]::FromFile($env:RUSTI_SRC); \
+             $s = [Math]::Min(1.0, {side} / [Math]::Max($i.Width, $i.Height)); \
+             $w = [Math]::Max(1, [int]($i.Width * $s)); $h = [Math]::Max(1, [int]($i.Height * $s)); \
+             $b = New-Object System.Drawing.Bitmap $w, $h; \
+             $g = [System.Drawing.Graphics]::FromImage($b); \
+             $g.InterpolationMode = 'HighQualityBicubic'; {clear} \
+             $g.DrawImage($i, 0, 0, $w, $h); {save}");
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-Command", &script]);
+        run(c)
+    } else if cfg!(target_os = "macos") {
+        let mut c = Command::new("sips");
+        c.args(["-Z", &side.to_string()]);
+        if q > 0 {
+            c.args(["-s", "format", "jpeg", "-s", "formatOptions", &q.to_string()]);
+        }
+        c.args([src, "--out", &dst_s]);
+        run(c)
+    } else {
+        // `>` only ever shrinks; the output's extension picks the format, and a
+        // PNG's "quality" 90 is zlib level 9
+        let im = |p: &str| {
+            let mut c = Command::new(p);
+            c.args([src, "-resize", &format!("{side}x{side}>"), "-quality", &(if q == 0 { 90 } else { q }).to_string(), &dst_s]);
+            c
+        };
+        run(im("magick")).or_else(|_| run(im("convert")))
+    };
+    let out = match status {
+        Ok(st) if st.success() => std::fs::read(&dst).map_err(|e| format!("the resized image is missing: {e}")),
+        Ok(st) => Err(format!("resizing failed ({st})")),
+        Err(e) => Err(format!("no image resizer here ({e}){}",
+            if cfg!(any(windows, target_os = "macos")) { "" } else { "; install ImageMagick" })),
+    };
+    let _ = std::fs::remove_file(&dst);
+    out
+}
 
 /// The image a read_file picked up, waiting for the agent loop to attach it to
 /// the conversation. A static like UNDO/JOBS rather than a wider dispatch
@@ -134,22 +309,15 @@ pub fn b64(bytes: &[u8]) -> String {
 
 /// Read an image as a data URL and park it for the agent loop. The result the
 /// model sees is just a note: the picture itself arrives in the next message.
-fn read_image(path: &str, mime: &'static str) -> (bool, String) {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => return (false, format!("error reading {path}: {e}")),
-    };
-    if bytes.len() > MAX_IMAGE {
-        return (false, format!(
-            "{path} is {} KB; over the {} KB limit for an attached image",
-            bytes.len() / 1024, MAX_IMAGE / 1024));
+fn read_image(path: &str) -> (bool, String) {
+    match load_image(path) {
+        Ok(img) => {
+            *PENDING_IMAGE.lock().unwrap() = Some((path.to_string(), img.url));
+            let note = img.note.map(|n| format!("\n{n}")).unwrap_or_default();
+            (true, format!("attached {path} ({}) — it follows as an image{note}", size_text(img.size)))
+        }
+        Err(e) => (false, e),
     }
-    let url = format!("data:{mime};base64,{}", b64(&bytes));
-    *PENDING_IMAGE.lock().unwrap() = Some((path.to_string(), url));
-    // bytes under 1 KB, not "0 KB": a model that reads 0 concludes the
-    // attachment is empty and refuses to look at the picture it was sent
-    let size = if bytes.len() < 1024 { format!("{} bytes", bytes.len()) } else { format!("{} KB", bytes.len() / 1024) };
-    (true, format!("attached {path} ({mime}, {size}) — it follows as an image"))
 }
 
 /// Lines and bytes one read_file returns before it stops and says where to go
@@ -164,8 +332,8 @@ pub fn set_read_max(n: usize) {
 }
 
 pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
-    if let Some(mime) = image_mime(path) {
-        return read_image(path, mime);
+    if image_mime(path).is_some() {
+        return read_image(path);
     }
     match std::fs::read_to_string(path) {
         Ok(s) => (true, truncate_lines(&s, path, offset, limit, READ_MAX.load(Ordering::Relaxed))),
@@ -1180,7 +1348,7 @@ mod tests {
         if std::env::var("RUSTI_CLIPBOARD_TEST").as_deref() != Ok("1") {
             return;
         }
-        let path = clipboard_image().expect("clipboard should hold the image the harness put there");
+        let path = clipboard_image().expect("clipboard should hold the image the harness put there").remove(0);
         let got = std::fs::metadata(&path).expect("the clip must exist").len();
         assert!(got > 0, "a zero-byte clip is a failure, not an image");
         assert!(path.ends_with(".png"));
@@ -1217,5 +1385,70 @@ mod tests {
         let out = pick_shell(None, bash_candidates(), "echo pre").command("echo cmd").output().unwrap();
         let out = String::from_utf8_lossy(&out.stdout);
         assert!(out.find("pre").zip(out.find("cmd")).is_some_and(|(p, c)| p < c), "prefix runs first: {out:?}");
+    }
+
+    /// Image size from the header alone, for the formats rusti resizes.
+    #[test]
+    fn image_dims_reads_png_gif_and_jpeg_headers() {
+        let png = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png")).unwrap();
+        assert_eq!(image_dims(&png), Some((240, 240)));
+        assert_eq!(image_dims(b"GIF89a\x10\x00\x20\x00"), Some((16, 32)));
+        // SOI, an APP0 of length 4, then SOF0: precision 8, height 300, width 500
+        let jpg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8, 0x01, 0x2C, 0x01, 0xF4, 3];
+        assert_eq!(image_dims(&jpg), Some((500, 300)));
+        assert_eq!(image_dims(b"not an image"), None);
+        assert_eq!(image_dims(&jpg[..12]), None, "a cut header is unknown, not a panic");
+    }
+
+    /// Resize instead of refusing: a small light image goes untouched, a too
+    /// wide one is scaled with Pi's coordinate note, a heavy one steps down
+    /// the ladder until it fits, and one nothing here can resize is sent when
+    /// light and refused when heavy.
+    #[test]
+    fn fit_shrinks_rather_than_refusing() {
+        let png = |w: u32, h: u32, len: usize| {
+            let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+            b.extend(w.to_be_bytes());
+            b.extend(h.to_be_bytes());
+            b.resize(len, 0);
+            b
+        };
+        let never = |_: u32, _: u8| -> Result<Vec<u8>, String> { panic!("must not resize") };
+        let (b, mime, note) = fit(png(800, 600, 100), "image/png", never).unwrap();
+        assert_eq!((b.len(), mime, note), (100, "image/png", None));
+
+        let calls = std::cell::RefCell::new(Vec::new());
+        let (b, mime, note) = fit(png(4000, 1000, 100), "image/png", |side, q| {
+            calls.borrow_mut().push((side, q));
+            Ok(png(side, side / 4, 50))
+        }).unwrap();
+        assert_eq!(calls.take(), vec![(2000, 0)], "too wide: PNG at the cap first");
+        assert_eq!((b.len(), mime), (50, "image/png"));
+        assert_eq!(note.unwrap(), "[Image: original 4000x1000, displayed at 2000x500. Multiply coordinates by 2.00 to map to the original image.]");
+
+        let heavy = png(1500, 1000, MAX_IMAGE + 1);
+        let (_, mime, _) = fit(heavy.clone(), "image/png", |side, q| {
+            calls.borrow_mut().push((side, q));
+            Ok(png(side, side, if side < 1500 { 10 } else { MAX_IMAGE + 1 }))
+        }).unwrap();
+        assert_eq!(calls.take(), vec![(1500, 80), (1125, 70)], "too heavy: JPEG, then smaller");
+        assert_eq!(mime, "image/jpeg");
+
+        let none = |_: u32, _: u8| -> Result<Vec<u8>, String> { Err("no resizer".into()) };
+        assert_eq!(fit(png(3000, 3000, 100), "image/png", none).unwrap().0.len(), 100, "light: sent as it is");
+        assert!(fit(heavy, "image/png", none).unwrap_err().contains("could not be shrunk"));
+    }
+
+    /// The platform resizer really runs: _bands.png (240x240) down to a box.
+    /// ponytail: Windows only, where System.Drawing always exists; sips and
+    /// ImageMagick are not on every machine that runs the tests.
+    #[test]
+    fn shrink_resizes_with_the_platform_tool() {
+        if !cfg!(windows) {
+            return;
+        }
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png");
+        assert_eq!(image_dims(&shrink(src, 100, 0).unwrap()), Some((100, 100)));
+        assert_eq!(image_dims(&shrink(src, 60, 80).unwrap()), Some((60, 60)), "JPEG too");
     }
 }

@@ -80,7 +80,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Windows shell | The `shell` setting, then Git Bash, then bash on PATH, then `cmd /C` (`ai_core/tools.rs`) | The `shellPath` setting, then Git Bash, then bash on PATH, plus an optional `powershell` tool (`docs/windows.md:3,33-47`) |
 | MCP config | An `"mcp"` block in `~/.rusti/config.json`; toggled live with `/mcp` | `~/.pi/agent/mcp.json` or `.pi/mcp.json` in the usual `mcpServers` shape; managed with the `/mcp` manager and `pi mcp ...` |
 | MCP safety | Every MCP tool always asks and is refused in plan mode (`readme.md` "MCP servers") | No gate. Project `mcp.json` loads only after the project is trusted (`docs/mcp.md`) |
-| Images | Ctrl+V/Alt+V saves the clipboard image and types its path; `read_file` then attaches it as an image part. Not yet verified against a vision endpoint (`ai_core/tools.rs`) | Paste or drag straight into the editor, `@file` arguments, auto-resize, and inline display in the terminal (`docs/usage.md`, `docs/settings.md`) |
+| Images | Ctrl+V/Alt+V saves the clipboard image (or takes every copied image file) and types `@` references; on submit each `@` image is attached to that message, scaled to 2000 px / 4.5 MB of base64 by the platform's own tool; `"vision": false` per profile refuses them. Verified against two vision models through the :20128 proxy (`ai_core/tools.rs`, `harness/features/feat-image-input.json`) | Paste or drag straight into the editor, `@file` arguments, auto-resize, and inline display in the terminal (`docs/usage.md`, `docs/settings.md`) |
 | Themes | 15 compiled-in palettes picked with `/themes`, plus a `"light"` flag (`tui/theme.rs`) | A `system` theme that follows the terminal palette, `dark`/`light`, and custom JSON themes with hot reload (`docs/themes.md`) |
 
 ---
@@ -99,7 +99,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Transcript tinting | **yes**: user, failed-tool and permission rows banded; reads folded; narration dimmed (feat-076, `tui/render.rs`) | partial: tool expand (Ctrl+O), thinking collapse (Ctrl+T) | Different styling approach |
 | Thinking display | **yes**: italic block; Ctrl+T folds it, keeping a two-row live preview, saved as `hide_thinking` (feat-080, `tui/render.rs`) | **yes**: Ctrl+T collapse, `hideThinkingBlock` | Pi also toggles one block by click |
 | Themes | **yes**: 15 built-in palettes, `/themes`, `light` flag (`tui/theme.rs`) | **yes**: system, dark and light themes plus custom JSON with hot reload (`docs/themes.md`) | Pi's are user-authored |
-| Image input | **partial**: clipboard paste to a file path, `read_file` attaches it; last hop unverified (feat-061/062) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi direct; rusti goes through a tool call |
+| Image input | **yes**: Alt+V or `@img` attaches on submit, auto-resize with a coordinate note, `vision` flag per profile (F03) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi attaches directly only for CLI `@` arguments and routes TUI pastes through `read`; rusti attaches every `@` image directly. No inline display in rusti |
 | Queue while streaming | **yes**: steer (Enter), follow-up (Ctrl+Q), dequeue (Alt+Up / Alt+Q, and Esc) (feat-queue-while-working, `tui/app.rs`) | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Pi's follow-up key is Alt+Enter, rusti's newline key; Pi delivers steers one at a time by default |
 | Footer | **yes**: plan, session, model, branch, tokens, ctx %, cache %; toggled with `/settings` (`tui/app.rs`) | **yes**: cwd, session, tokens, cache, cost, ctx, model | Pi shows cost |
 | Clipboard copy of reply | **no** (open-work, low priority) | **yes**: `/copy` | |
@@ -127,7 +127,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Feature | rusti | Pi | Difference |
 |---|---|---|---|
 | Default set | 17 tools, always on (`ai_core/mod.rs`) | `read`, `bash`, `edit`, `write` on; `grep`, `find`, `ls` opt-in; `powershell` on Windows (`docs/cli.md:128-139`) | rusti ships a wider default set |
-| Read | **yes**: `read_file` with offset/limit; images ≤ 4 MB | **yes**: `read` for text and images | |
+| Read | **yes**: `read_file` with offset/limit; images scaled to 2000 px / 4.5 MB of base64 | **yes**: `read` for text and images | |
 | Write | **yes**: `write_file`, guarded, snapshotted, returns a diff stat | **yes**: `write` | |
 | Edit | **yes**: `edit_file` and atomic `multi_edit`, exact unique match | **yes**: `edit`, exact replacements | rusti has a separate multi-edit tool |
 | Delete and move | **yes**: `delete_file`, `move_file` | **no** dedicated tool (done via bash) | |

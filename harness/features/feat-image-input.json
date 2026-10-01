@@ -1,0 +1,15 @@
+{
+  "id": "feat-image-input",
+  "name": "Image input: attach @ images on submit, resize, vision flag, multi-file paste (F03)",
+  "description": "3a: the last hop is verified. 3b: on submit every @ reference that names an existing .png/.jpg/.gif/.webp file (tui::app::image_refs, read with F01's at_token rules, quoted paths included, each once) is loaded by tools::load_image and attached to that user entry as one image_url part each (Entry.images), with a '  · attached shot.png (312 KB)' row and a context note telling the model it is attached and not to describe what it cannot see; plain mode does the same for a one-shot task. The old Entry.image field still loads and sends. 3c: an image over 2000 px or 4.5 MB of base64 (MAX_IMAGE, was 4 MB raw) is scaled down instead of refused, by PowerShell System.Drawing / sips / ImageMagick (D2: no dependency), PNG at the cap first when the pixels are the problem, then JPEG at falling quality and size; Pi's coordinate note is added. read_file images go through the same load_image. 3d: \"vision\": false on a model profile refuses images from submit and from read_file with 'this model profile has no vision; X not sent'; unset means try. 3e: Ctrl+V/Alt+V types an @ reference for the clip, and one per copied image file.",
+  "dependencies": ["feat-at-file-refs"],
+  "status": "done",
+  "evidence": "3a, 2026-10-01: _bands.png (expected top red, middle green, bottom blue, stated before sending; decoding forbidden) sent raw to the :20128 proxy: cmc/deepseek/deepseek-v4-flash-vision-exp and cmc/moonshotai/Kimi-K2.6 answered 'red green blue', cmc/xiaomi/mimo-v2.5-pro (the default profile) answered 'NO IMAGE', cx/gpt-5.5 was 404 model_not_found. Then through rusti itself (plain mode, '@swapped.png' in the task, a 3000x3000 PNG banded blue/red/green top to bottom): it printed 'attached swapped.png (18 KB)' (resized to 2000 px) and both vision models answered 'blue red green'. cargo test: ai_core::typed_images_attach_unless_the_profile_has_no_vision; ai_core::tools::tests image_dims_reads_png_gif_and_jpeg_headers, fit_shrinks_rather_than_refusing, shrink_resizes_with_the_platform_tool; tui::app::tests::image_refs_take_only_at_references_to_image_files; session::image_tests::an_image_entry_becomes_content_parts (N parts, old image field). ./init.sh passed.",
+  "decisions": [
+    "Open question on what direct attach may grab: only @ references. A path merely mentioned stays text; Alt+V types its clips as @ references so pastes still attach, and a dragged file attaches when @ is typed before the drop.",
+    "The scan lives with at_token in tui::app (no second path resolver) and runs on the agent thread before run_agent, which takes the paths as a parameter; delegate passes none.",
+    "Entry.image keeps meaning 'an attachment entry nobody typed' (read_file's), so message numbering is unchanged; typed attachments go in Entry.images.",
+    "Shrink paths travel to the resize tool in RUSTI_SRC/RUSTI_DST environment variables, never inside the script text.",
+    "WebP dimensions are not parsed, so a WebP is resized only when over the byte cap (ponytail comment)."
+  ]
+}

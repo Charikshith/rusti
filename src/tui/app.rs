@@ -119,6 +119,35 @@ pub fn at_token(input: &str, cursor: usize) -> Option<(usize, String)> {
     None
 }
 
+/// The `@` references in a submitted message that name an image file, each
+/// once, in order: what gets attached to it (F03). Only `@` counts — a path
+/// merely mentioned ("not old.png") stays text — so Alt+V types its clips as
+/// `@` references too. Read with at_token's own rules by asking it about each
+/// place a token can end. ponytail: O(n²) over the draft's chars, fine for
+/// anything typed; scan forward once if pasted megabytes ever submit slowly.
+pub fn image_refs(input: &str) -> Vec<String> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut refs: Vec<(usize, String)> = Vec::new();
+    for end in 0..=chars.len() {
+        if end < chars.len() && !chars[end].is_whitespace() && chars[end] != '"' {
+            continue;
+        }
+        if let Some((start, path)) = at_token(input, end) {
+            match refs.last_mut() {
+                Some(last) if last.0 == start => last.1 = path, // a quoted path grows past its spaces
+                _ => refs.push((start, path)),
+            }
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (_, p) in refs {
+        if ai_core::tools::image_mime(&p).is_some() && std::path::Path::new(&p).is_file() && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
 /// What accepting a path inserts for an `@` reference. A folder keeps the
 /// picker open (no trailing space) so you can walk into it; a path with a
 /// space is quoted, and a quoted folder stays open-quoted for the same reason.
@@ -673,21 +702,22 @@ pub fn ui_loop(
                             app.exit_armed = Some(std::time::Instant::now());
                         }
                         // Ctrl+V / Alt+V paste the clipboard's image: it lands in
-                        // .rusti/clips and its PATH is typed into the input, which
-                        // read_file then attaches (feat-061). Both chords, because
+                        // .rusti/clips and an @ reference to it is typed into the
+                        // input, which submit attaches (F03); copied image files
+                        // come in as one reference each. Both chords, because
                         // Windows Terminal binds ctrl+v to its own text paste and
                         // usually swallows it — alt+v is the one that always arrives.
                         (KeyCode::Char('v'), m)
                             if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
                         {
                             match ai_core::tools::clipboard_image() {
-                                Ok(path) => {
-                                    let text = format!("{path} ");
+                                Ok(paths) => {
+                                    let text: String = paths.iter().map(|p| at_insert(p, false)).collect();
                                     let byte = app.input.char_indices().nth(app.cursor)
                                         .map(|(i, _)| i).unwrap_or(app.input.len());
                                     app.input.insert_str(byte, &text);
                                     app.cursor += text.chars().count();
-                                    app.notice = Some((format!("pasted {path}"), std::time::Instant::now()));
+                                    app.notice = Some((format!("pasted {}", paths.join(", ")), std::time::Instant::now()));
                                 }
                                 // a keypress that does nothing reads as a broken key,
                                 // so say why on the status line either way
@@ -1461,6 +1491,7 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
     match cfg.models.iter().find(|m| m.name == name) {
         Some(p) => {
             app.model = p.model.clone();
+            ai_core::tools::set_vision(p.vision != Some(false));
             let _ = job_tx.send(Job::Model {
                 url: p.url.clone(),
                 key: p.key.clone(),
@@ -1860,5 +1891,23 @@ mod tests {
         assert_eq!(a.input, "no, spaces\n\nthen commit\n\ndraft");
         assert!(a.follow.is_empty() && ai_core::steers().is_empty());
         assert!(!dequeue(&mut a), "nothing queued: Alt+Up stays history recall");
+    }
+
+    /// Submit attaches the `@` references that name an image file, quoted
+    /// ones too, each once, and never a path that is only mentioned (F03).
+    #[test]
+    fn image_refs_take_only_at_references_to_image_files() {
+        let dir = std::env::temp_dir().join(format!("rusti_refs_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a b")).unwrap();
+        let files = [dir.join("shot.png"), dir.join("a b/x.JPG"), dir.join("notes.txt")];
+        for f in &files {
+            std::fs::write(f, "").unwrap();
+        }
+        let [shot, spaced, text] = files.map(|f| f.to_string_lossy().into_owned());
+        let msg = format!("compare @{shot} with @\"{spaced}\" and @{shot} again,\nnot {shot}, nor @{text} or @missing.png");
+        assert_eq!(image_refs(&msg), vec![shot.clone(), spaced.clone()]);
+        assert!(image_refs(&format!("look at {shot}")).is_empty(), "mentioned, not referenced");
+        assert_eq!(image_refs(&at_insert(&spaced, false)), vec![spaced.clone()], "what Alt+V types is what submit takes");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

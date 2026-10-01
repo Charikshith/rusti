@@ -115,11 +115,13 @@ What: Send provider cache-control markers on the system/early messages when the 
 Where: ai_core/llm.rs request body, config.rs profile field
 
 ### Image Input — follow-ups
-When: feat-061 (read_file attaches an image) and feat-062 (ctrl+v / alt+v paste one) are in; what is missing
-is a provider to prove the last hop, since the :20128 proxy strips image parts
-What: a vision-capable endpoint to verify against; optionally attach straight to the user entry instead of
-via a read_file round-trip, which needs the [Image #N] placeholder + side table Claude Code uses
-Where: ai_core/tools.rs clipboard_image, tui/app.rs Enter handler
+When: F03 (feat-image-input) attaches `@` images on submit, resizes and has the vision flag; left over:
+What: (a) two read_file images in one tool batch keep only the last, since PENDING_IMAGE holds one;
+(b) a dragged path without a leading `@` is not attached — bracketed paste (A4) could mark pasted paths;
+(c) steers queued mid-turn are not scanned for `@` images, only tasks and follow-ups are;
+(d) plain mode prints `· attached` rows to stdout, as every Event::Text row is, which a pipe then carries;
+(e) inline terminal display (kitty/iTerm2/sixel), an images kill switch, and normalising MCP tool images
+Where: ai_core/tools.rs PENDING_IMAGE, ai_core/mod.rs emit, tui/mod.rs Job::Task
 
 ### Native Anthropic / Gemini APIs
 When: Endpoint isn't OpenAI-compatible

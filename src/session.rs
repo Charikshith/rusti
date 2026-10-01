@@ -158,8 +158,14 @@ pub struct Entry {
     /// beside `content` rather than turning content into parts: every reader
     /// of a transcript (export, replay, compaction, the tree) wants the text,
     /// and only the request builder cares that a picture rides with it.
+    /// Set, it also marks the entry as one nobody typed: the picture a
+    /// read_file attached after the tool results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// Data URLs of the `@` images the user attached to a message they typed,
+    /// sent after its text as one image part each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
     /// What the turn started on (git status, plan mode), sent after a user
     /// entry's text but kept out of `content`. It is volatile, so it rides on
     /// the turn it describes instead of the system prompt, and being stored
@@ -173,7 +179,7 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, context: None, ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.
@@ -187,12 +193,13 @@ impl Entry {
             };
             // an OpenAI tool message takes a string only, which is why an image
             // travels on a user entry after the tool results, never on one
-            let content = match &self.image {
-                Some(url) => json!([
-                    {"type": "text", "text": text},
-                    {"type": "image_url", "image_url": {"url": url}},
-                ]),
-                None => json!(text),
+            let urls: Vec<&String> = self.image.iter().chain(&self.images).collect();
+            let content = if urls.is_empty() {
+                json!(text)
+            } else {
+                let mut parts = vec![json!({"type": "text", "text": text})];
+                parts.extend(urls.iter().map(|url| json!({"type": "image_url", "image_url": {"url": url}})));
+                json!(parts)
             };
             let mut m = json!({"role": self.role, "content": content});
             if let Some(tc) = &self.tool_calls {
@@ -465,6 +472,16 @@ mod image_tests {
 
         let plain = Entry::new("user", "hi".into()).to_message();
         assert_eq!(plain["content"], "hi", "no image, no parts");
+
+        // typed @ images: one text part, then one image part each
+        let mut typed = Entry::new("user", "compare @a.png @b.png".into());
+        typed.images = vec!["data:image/png;base64,A".into(), "data:image/jpeg;base64,B".into()];
+        let parts = typed.to_message()["content"].as_array().unwrap().clone();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[2]["image_url"]["url"], "data:image/jpeg;base64,B");
+        let old: Entry = serde_json::from_str(r#"{"id":"m1","role":"user","content":"x","image":"data:image/png;base64,AAA"}"#).unwrap();
+        assert_eq!(old.to_message()["content"][1]["image_url"]["url"], "data:image/png;base64,AAA", "a session saved with `image` still sends it");
+        assert!(serde_json::to_string(&Entry::new("user", "hi".into())).unwrap().find("images").is_none(), "no images, no key");
 
         let mut t = Entry::new("tool", "attached shot.png".into());
         t.tool_call_id = Some("call_1".into());
