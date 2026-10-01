@@ -59,8 +59,8 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
    - Pi: Enter queues a steering message, Alt+Enter queues a follow-up, and Alt+Up pulls queued messages back into the editor (`docs/usage.md:36-40`, `docs/keybindings.md`).
    - rusti: open-work "Follow-Up Queue".
 6. **Session tooling.**
-   - Pi has `/fork`, `/clone`, `/new`, HTML export, `/share` to a gist, `/import`, branch summaries on `/tree`, and deleting sessions from the picker (`docs/sessions.md`, `docs/slash-commands.md`).
-   - rusti has the tree, resume, rename and markdown export.
+   - Pi has `/fork`, `/clone`, HTML export, `/share` to a gist, `/import`, branch summaries on `/tree`, and deleting sessions from the picker (`docs/sessions.md`, `docs/slash-commands.md`).
+   - rusti has the tree, resume, rename, /new and markdown export.
 7. **Manual `/compact` and a structured summary.**
    - Pi: summary sections Goal, Progress and Next Steps, cumulative read and modified file lists, and compact-and-retry on overflow (`docs/compaction.md`).
    - rusti: auto-compaction only.
@@ -111,12 +111,12 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Feature | rusti | Pi | Difference |
 |---|---|---|---|
 | Storage | **yes**: JSON tree in the project directory (`session.rs`) | **yes**: JSONL v3 per cwd under `~/.pi/agent/sessions` (`docs/session-format.md`) | Location and format differ |
-| Continue last | **yes**: `--resume` resumes the named or default session's active leaf (`main.rs`) | **yes**: `-c/--continue` | |
+| Continue last | **yes**: `--resume` resumes the named or most recent session's active leaf (`main.rs`) | **yes**: `-c/--continue` | |
 | Resume picker | **yes**: `/resume [n\|name]` shows messages, branches, age and last message (`tui/app.rs`) | **yes**: `-r` and `/resume`, with rename, delete, sort and filter keys (`docs/sessions.md`) | Pi can delete and sort from the picker |
 | Tree and branching | **yes**: `/tree`, `--tree`, Pi semantics (`tree.rs`, `session.rs`) | **yes**: `/tree` with search, filters, fold, labels and timestamps | Pi richer |
 | Branch summary | **no** | **yes**: optional summary when switching branches (`docs/compaction.md`) | |
 | Fork or clone to a new file | **no** | **yes**: `/fork`, `/clone`, `--fork` | |
-| New session in-app | **no**: open-work "New Session Without Restarting" | **yes**: `/new` | |
+| New session in-app | **yes**: `/new [name]`, auto-named `s-YYYYMMDD-HHMM` when unnamed (`tui/mod.rs`) | **yes**: `/new` | |
 | Naming | **yes**: `/rename` moves the file (`tui/mod.rs`) | **yes**: `/name`, `--name` | |
 | Export | **yes**: `/export [file.md]` markdown (`session.rs`) | **yes**: `/export` HTML or JSONL, `pi --export`, `/share` (a Radius artifact, or a private gist via `gh`; `docs/usage.md:82`), `/import`, `/bug` | Pi has HTML, share and import |
 | Undo | **yes, one level**: file snapshots plus rewind (`ai_core/tools.rs`) | not in core (example `git-checkpoint.ts`) | rusti ahead |

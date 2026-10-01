@@ -112,14 +112,6 @@ When: Scripting/CI use of the one-shot CLI (--help/--version landed as feat-034)
 What: `--json` streams the Event enum as NDJSON on the plain (piped) path instead of prose
 Where: main.rs, tui/plain.rs
 
-## Sessions
-
-### New Session Without Restarting
-When: `/resume` switches between *existing* sessions and `/rename` names the current one, but starting a fresh
-empty session still means quitting and relaunching with `--session NAME`
-What: `/new [name]` — save the current session, start an empty one, replace the transcript via Event::Resumed
-Where: tui/app.rs handle_command, tui/mod.rs Job
-
 ## Model / API
 
 ### Prompt Caching Headers

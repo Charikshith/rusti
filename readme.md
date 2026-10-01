@@ -41,7 +41,7 @@ rusti
 
 # session tree (pi-style branching)
 ./target/release/rusti --tree            # browse + branch from earlier entries
-./target/release/rusti --resume          # continue from active leaf
+./target/release/rusti --resume          # continue the latest session from its active leaf
 
 # flags/env still override the saved profile
 ./target/release/rusti --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTI_MAX_ITERS)
@@ -56,7 +56,7 @@ command is refused), `/tree` browses and branches the session, `/undo` puts back
 the last turn changed, `/commit` stages and commits the work, `/export` writes the
 transcript out as markdown, `/settings` chooses which status-line segments are shown,
 `/mcp` switches MCP servers on and off, `!cargo test` runs a shell command whose output the model
-sees on the next turn, and `!!git log` runs one whose output only you see. `/resume` with no argument lists saved sessions and switches to the
+sees on the next turn, and `!!git log` runs one whose output only you see. `/new [name]` saves the session and starts an empty one in place, keeping the model, plan mode, MCP servers and background jobs. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
 plan mode, the session, model, git branch, tokens used and how full the context is.
 
@@ -247,6 +247,13 @@ filters as you type.
 
 sessions are stored as a tree of entries with `id`/`parentId` fields,
 mirroring pi's session model. the current position is the active leaf.
+
+each session is one file under `.rusti/sessions/`. `--session NAME` (or `/new NAME`)
+picks the name; otherwise a launch or `/new` starts `s-YYYYMMDD-HHMM` (local time, `-2`
+and up when that minute is taken), so a fresh start never overwrites an older session.
+`--resume` and `--tree` without `--session` open the most recent one; a `./session.json`
+from older versions is still listed and resumable. `/new` and `/resume` also reset `/undo`,
+so it can only put back files the current session changed.
 
 ```sh
 ./target/release/rusti --tree   # browse the tree interactively

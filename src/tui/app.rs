@@ -31,6 +31,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/use", desc: "/use <name> - switch to a saved profile", soon: false },
     Cmd { name: "/resume", desc: "list sessions and switch: /resume, /resume <name>, /resume <n>", soon: false },
     Cmd { name: "/rename", desc: "/rename <new-name> - rename the active session", soon: false },
+    Cmd { name: "/new", desc: "/new [name] - save this session and start a new one", soon: false },
     Cmd { name: "/tree", desc: "browse the session tree and branch from an earlier entry", soon: false },
     Cmd { name: "/reload", desc: "rebuild rusti from source and relaunch", soon: false },
     Cmd { name: "/quit", desc: "exit rusti (same as ctrl+c twice)", soon: false },
@@ -760,6 +761,14 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
                 let _ = job_tx.send(Job::Rename(arg.to_string()));
             }
         }
+        "/new" => {
+            if !app.done {
+                app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
+            } else {
+                let name = (!arg.is_empty()).then(|| arg.to_string());
+                let _ = job_tx.send(Job::New { name, history: app.history.clone() });
+            }
+        }
         "/settings" => pick_settings(app),
         // /themes <name> switches outright; bare /themes opens the list
         "/themes" => {
@@ -1116,7 +1125,7 @@ fn resume(app: &mut App, job_tx: &Sender<Job>, arg: &str) {
             .map(|s| {
                 (
                     format!(
-                        "{:<15}{:<9}{:<13}{:<11}{}",
+                        "{:<18}{:<9}{:<13}{:<11}{}", // fits an auto name with its -N suffix
                         s.name,
                         crate::session::count(s.msgs, "msg", "msgs"),
                         // resuming shows one branch; say when there are others

@@ -8,6 +8,8 @@ mod render;
 mod theme;
 mod plain;
 
+pub use app::utc_offset_min; // session auto names read local time too
+
 use std::io::{self, Write, stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -67,6 +69,7 @@ pub enum Job {
     Model { url: String, key: String, model: String },
     ResumePath(String), // load this session file and continue it
     Rename(String),     // rename the active session file
+    New { name: Option<String>, history: Vec<String> }, // save this session, start an empty one; history is the input history to keep
     Tree,               // send the selectable tree rows for the picker
     Select(String),     // move the active leaf to this entry (pi-style branch)
     Undo,               // put back the files the last turn changed, then rewind to before it
@@ -204,6 +207,29 @@ fn rename_session(session: &mut Session, name: &str) -> Result<String, String> {
     Ok(format!("renamed {was} → {name}"))
 }
 
+/// /new: save the active session and swap in an empty one at `name`, or at an
+/// auto name. Returns the new name, or why not. The model rides along; the
+/// last turn's undo frame and the todo list belong to the old session.
+fn new_session(session: &mut Session, name: Option<&str>) -> Result<String, String> {
+    // save first: an unsaved session must exist on disk before a name is
+    // checked or picked against it, or the new one could land on its path
+    if !session.is_empty() {
+        session.save()?;
+    }
+    let path = match name {
+        None => crate::session::auto_path(),
+        Some(n) if !crate::session::valid_name(n) => return Err("letters, digits, . _ - only (max 40)".into()),
+        Some(n) if std::path::Path::new(&crate::session::path_for(n)).exists() => {
+            return Err(format!("a session named '{n}' already exists (/resume {n} to switch)"))
+        }
+        Some(n) => crate::session::path_for(n),
+    };
+    *session = Session::with_path(session.model.clone(), &path);
+    ai_core::tools::undo_begin_turn(); // /undo must not reach the old session's files
+    ai_core::tools::todo(Vec::new());
+    Ok(crate::session::name_of(&path))
+}
+
 /// Reconstruct visible transcript lines from a resumed session's active path,
 /// so /reload (and plain --resume) don't present a blank screen despite prior
 /// history — the agent's own message list already has it, the TUI doesn't.
@@ -291,6 +317,7 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
     match session.select(id) {
         None => { let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ no entry {id}"))); }
         Some(text) => {
+            ai_core::tools::undo_begin_turn(); // the turn /undo would revert is no longer on the path
             let _ = session.save();
             let (lines, history, msg_num) = render_history(session);
             let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
@@ -368,6 +395,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                         let notice = resumed_notice(&loaded, &path);
                         let (lines, history, msg_num) = render_history(&loaded);
                         session = loaded;
+                        ai_core::tools::undo_begin_turn(); // the last turn's files belong to the session left behind
                         let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
                         let _ = event_tx.send(ai_core::Event::SessionName(crate::session::name_of(&path)));
                         let _ = event_tx.send(ai_core::Event::Notice(notice));
@@ -425,6 +453,17 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                         Ok(note) => {
                             let _ = event_tx.send(ai_core::Event::SessionName(name.clone()));
                             ai_core::Event::Notice(note)
+                        }
+                        Err(e) => ai_core::Event::Text(format!("  ✗ {e}")),
+                    };
+                    let _ = event_tx.send(msg);
+                }
+                Ok(Job::New { name, history }) => {
+                    let msg = match new_session(&mut session, name.as_deref()) {
+                        Ok(n) => {
+                            let _ = event_tx.send(ai_core::Event::Resumed { lines: Vec::new(), history, msg_num: 0 });
+                            let _ = event_tx.send(ai_core::Event::SessionName(n.clone()));
+                            ai_core::Event::Notice(format!("new session {n}"))
                         }
                         Err(e) => ai_core::Event::Text(format!("  ✗ {e}")),
                     };
@@ -608,6 +647,38 @@ mod tests {
         assert_eq!(s.entries.len(), 3);
         assert!(s.path_messages().iter().any(|m| m.to_string().contains("shared-out")), "! reaches the model");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// /new parks the old session on disk, starts an empty one with the same
+    /// model, and leaves /undo nothing of the old session's to put back (A5).
+    #[test]
+    fn new_session_saves_the_old_one_and_undo_cannot_reach_it() {
+        let tag = std::process::id();
+        let old_path = crate::session::path_for(&format!("rusti-new-old-{tag}"));
+        let mut s = Session::with_path("m7".into(), &old_path);
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        s.add(Entry::new("user", "hi".into()), Some(sys));
+        let file = &format!("_rusti_new_undo_{tag}.txt"); // write_file keeps to the project root
+        ai_core::tools::undo_begin_turn();
+        assert!(ai_core::tools::write_file(file, "old session's work").0);
+
+        let name = format!("rusti-new-{tag}");
+        assert_eq!(new_session(&mut s, Some(&name)), Ok(name.clone()));
+        assert!(s.is_empty() && s.path == crate::session::path_for(&name) && s.model == "m7");
+        assert_eq!(Session::load_from(&old_path).msgs(), 1, "the old session was saved before the swap");
+        assert!(ai_core::tools::undo_turn().is_empty(), "undo must not reach the old session's files");
+        assert!(std::path::Path::new(file).exists());
+
+        // the old one is on disk now, so its name is taken
+        let old_name = crate::session::name_of(&old_path);
+        assert!(new_session(&mut s, Some(&old_name)).unwrap_err().contains("already exists"));
+        assert!(new_session(&mut s, Some("../x")).is_err());
+        // unnamed: an auto name, never the root session.json
+        let auto = new_session(&mut s, None).unwrap();
+        assert!(auto.starts_with("s-") && s.path != crate::session::PATH, "{auto}");
+
+        let _ = std::fs::remove_file(&old_path);
+        let _ = std::fs::remove_file(file);
     }
 
     #[test]

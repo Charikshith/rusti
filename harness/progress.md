@@ -982,3 +982,10 @@ through the session"):
   tui::run_bash), every line shown (no row cap). The system prompt now names the shell; HELP, readme § shell commands updated.
 - Verification: `./init.sh`, cargo test 46 passed; model run_command through Git Bash with a prefix from PowerShell;
   `!ls`, `!!echo`, and a streaming loop driven live in Windows Terminal.
+
+## Session 2026-10-01: feat-079 — /new, auto-named sessions, undo stays in its session
+- `/new [name]` (tui/mod.rs new_session, Job::New): saves the active session, starts an empty one with the same model;
+  unnamed gets `s-YYYYMMDD-HHMM` under .rusti/sessions (session::auto_path). Bare launches use the same auto name (A2);
+  bare `--resume`/`--tree` open the latest saved session (session::latest).
+- A5: undo_begin_turn on /new, /resume and branch_at, so /undo never restores another session's files. Todo list cleared on /new.
+- Verification: `./init.sh`, cargo test 48 passed; built binary resumed an auto-named session from an empty dir without creating ./session.json.

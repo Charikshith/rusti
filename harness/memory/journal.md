@@ -84,3 +84,8 @@
 - Surprise: PowerShell passes `$null` to a P/Invoke string parameter as "", so FindWindow($null, title) never matches; use [NullString]::Value.
 - Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
 - Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.
+
+## 2026-10-01 - /new and auto-named sessions
+- Surprise: write_file refuses paths outside the project root, so a test that wants an undo snapshot must write a cwd-relative file (as self_test does), not one in temp_dir.
+- Surprise: no python3 on this box; bash heredocs to python fail, use the Edit tool.
+- Reused tui::app::utc_offset_min for local-time session names instead of a date crate.
