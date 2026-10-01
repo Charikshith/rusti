@@ -160,13 +160,20 @@ pub struct Entry {
     /// and only the request builder cares that a picture rides with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// What the turn started on (git status, plan mode), sent after a user
+    /// entry's text but kept out of `content`. It is volatile, so it rides on
+    /// the turn it describes instead of the system prompt, and being stored
+    /// means every later request replays it byte-for-byte: the provider's
+    /// prefix cache keeps matching. The transcript and export never show it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
     #[serde(default)]
     pub ts: u64,
 }
 
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, context: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.
@@ -174,14 +181,18 @@ impl Entry {
         if self.role == "tool" {
             json!({"role": "tool", "tool_call_id": self.tool_call_id, "content": self.content})
         } else {
+            let text = match &self.context {
+                Some(c) => format!("{}\n\n{c}", self.content),
+                None => self.content.clone(),
+            };
             // an OpenAI tool message takes a string only, which is why an image
             // travels on a user entry after the tool results, never on one
             let content = match &self.image {
                 Some(url) => json!([
-                    {"type": "text", "text": self.content},
+                    {"type": "text", "text": text},
                     {"type": "image_url", "image_url": {"url": url}},
                 ]),
-                None => json!(self.content),
+                None => json!(text),
             };
             let mut m = json!({"role": self.role, "content": content});
             if let Some(tc) = &self.tool_calls {
@@ -459,5 +470,26 @@ mod image_tests {
         t.tool_call_id = Some("call_1".into());
         t.image = Some("data:image/png;base64,AAA".into());
         assert_eq!(t.to_message()["content"], "attached shot.png", "a tool message stays a string");
+    }
+
+    /// The turn context goes to the model after the typed text, and only to
+    /// the model: what the transcript and export read is still `content`.
+    #[test]
+    fn turn_context_is_sent_but_not_shown() {
+        let git = "# Git\nbranch: main\nworking tree clean";
+        let mut e = Entry::new("user", "fix the bug".into());
+        e.context = Some(git.into());
+        assert_eq!(e.to_message()["content"], format!("fix the bug\n\n{git}"));
+        e.image = Some("data:image/png;base64,AAA".into());
+        assert_eq!(e.to_message()["content"][0]["text"], format!("fix the bug\n\n{git}"));
+
+        let mut s = Session::with_path("m".into(), "ctx.json");
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        s.add(e, Some(sys));
+        assert!(!s.export_markdown().contains("# Git"), "context is for the model, not the transcript");
+        let back: Entry = serde_json::from_value(serde_json::to_value(&s.entries[1]).unwrap()).unwrap();
+        assert_eq!(back.context.as_deref(), Some(git), "stored, so later requests replay it identically");
+        let old: Entry = serde_json::from_str(r#"{"id":"m1","role":"user","content":"hi"}"#).unwrap();
+        assert!(old.context.is_none(), "entries saved before this field still load");
     }
 }

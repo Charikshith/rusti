@@ -1010,3 +1010,17 @@ through the session"):
 - read_file was cut at the shared 20 KB MAX_RESULT with a bare …[truncated]: no line count, no resume point.
 - Now 2000 lines / 50 KB per read (`truncate_lines` in tools.rs) with `[Showing lines A-B of N. Use offset=B+1 to continue.]`; a single over-cap line gets a sed hint; `read_max_bytes` sets the cap, 0 removes it. Other tools keep MAX_RESULT.
 - Verified: three new tools::tests (read_cap_*), cargo test 49 passed via ./init.sh.
+
+## Session 2026-10-01 (6): feat-083 — prompt caching C1+C2 (stable prefix, real usage)
+- `system_prompt()` lost its `# Git` and `# Plan mode` blocks. `turn_context()` builds them per turn and run_agent
+  stores the result on the new user entry (`Entry.context`); `to_message` appends it after the typed text. Stored,
+  so every earlier message replays byte-identically. Plan mode turning off is said once (`PLAN_OFF`), since the ON
+  notice stays in the history.
+- `llm.rs`: `stream_options.include_usage` on every request; a 400 naming stream_options retries once without it
+  and the Client stops sending it. `cached_tokens()` reads OpenAI / DeepSeek / Kimi field names into
+  `Event::Usage.cached`.
+- TUI: footer `cache N%` (new `cache` toggle in /settings; `Footer` is now `serde(default)` so older files load),
+  stats row `· cached N`. C3 (explicit markers) left in open-work.
+- Verification: `./init.sh`, cargo test 50 passed (new: the_prompt_prefix_stays_stable_and_stream_options_falls_back,
+  plan_mode_rides_on_the_turn, turn_context_is_sent_but_not_shown, cache_hits_read_under_each_providers_name);
+  `rusti --self-test` OK.

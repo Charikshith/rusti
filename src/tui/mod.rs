@@ -893,42 +893,49 @@ mod tests {
     fn footer_shows_only_the_parts_that_exist() {
         let on = crate::config::Footer::default();
         assert_eq!(
-            app::footer_right(&on, false, "main", "mimo", "master", 4321, 25_000, 100_000),
+            app::footer_right(&on, false, "main", "mimo", "master", 4321, 25_000, 100_000, None),
             "main · mimo · ⎇ master · 4.3k tok · ctx 25%"
         );
         // fresh session: no name, no branch, nothing generated — but ctx is
         // reported at 0% rather than hidden, since it resets every turn
-        assert_eq!(app::footer_right(&on, false, "", "mimo", "", 0, 0, 100_000), "mimo · ctx 0%");
+        assert_eq!(app::footer_right(&on, false, "", "mimo", "", 0, 0, 100_000, None), "mimo · ctx 0%");
         // plan mode leads, so a narrow terminal cuts it last
-        assert_eq!(app::footer_right(&on, true, "", "mimo", "", 0, 0, 100_000), "plan · mimo · ctx 0%");
+        assert_eq!(app::footer_right(&on, true, "", "mimo", "", 0, 0, 100_000, None), "plan · mimo · ctx 0%");
+        // cache hits show once the server reports them, and only then
+        assert_eq!(app::footer_right(&on, false, "", "mimo", "", 0, 0, 100_000, Some(82)), "mimo · ctx 0% · cache 82%");
     }
 
     #[test]
     fn settings_hide_footer_segments_but_never_plan_mode() {
         let off = crate::config::Footer {
-            session: false, model: false, branch: false, tokens: false, context: false,
+            session: false, model: false, branch: false, tokens: false, context: false, cache: false,
         };
         // everything off still announces plan mode: it is why writes get refused
-        assert_eq!(app::footer_right(&off, true, "main", "mimo", "master", 4321, 25_000, 100_000), "plan");
-        assert_eq!(app::footer_right(&off, false, "main", "mimo", "master", 4321, 25_000, 100_000), "");
-        let ctx_only = crate::config::Footer { context: true, ..off };
+        assert_eq!(app::footer_right(&off, true, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "plan");
+        assert_eq!(app::footer_right(&off, false, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "");
+        let ctx_only = crate::config::Footer { context: true, ..off.clone() };
         assert_eq!(
-            app::footer_right(&ctx_only, false, "main", "mimo", "master", 4321, 25_000, 100_000),
+            app::footer_right(&ctx_only, false, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)),
             "ctx 25%"
         );
+        let cache_only = crate::config::Footer { cache: true, ..off };
+        assert_eq!(app::footer_right(&cache_only, false, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "cache 82%");
     }
 
     #[test]
     fn turn_stats_row_reports_tps_over_generation_time_only() {
         // 120 tokens generated in 3s, turn took 8s wall (5s of it tool waits)
         // "done <clock>" is wall-clock, so pin the two halves around it instead
-        let row = app::stats_row(120, 4321, false, 3000, 8.0).unwrap();
+        let row = app::stats_row(120, 4321, None, false, 3000, 8.0).unwrap();
         assert!(row.starts_with("  · worked 8.0s · done "), "{row}");
         assert!(row.ends_with(" · 120 tok · 40.0 tps · ctx 4.3k"), "{row}");
-        let est = app::stats_row(9, 950, true, 0, 1.0).unwrap();
+        let est = app::stats_row(9, 950, None, true, 0, 1.0).unwrap();
         assert!(est.starts_with("  · worked 1.0s · done "), "{est}");
         assert!(est.ends_with(" · ~9 tok · 0.0 tps · ctx ~950"), "{est}");
-        assert!(app::stats_row(0, 0, false, 100, 1.0).is_none());
+        assert!(app::stats_row(0, 0, None, false, 100, 1.0).is_none());
+        // cache reads the server reported ride at the end
+        let hit = app::stats_row(120, 4321, Some(3500), false, 3000, 8.0).unwrap();
+        assert!(hit.ends_with(" · ctx 4.3k · cached 3.5k"), "{hit}");
 
         // seconds keep tenths, minutes drop them, hours roll over
         assert_eq!(app::human_dur(9.14), "9.1s");

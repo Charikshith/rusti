@@ -25,7 +25,9 @@ pub enum Event {
     Retry { attempt: u32, of: u32, wait_ms: u64, err: String },
     Tree(Vec<(String, String)>),               // (label, id) rows for the TUI's /tree picker
     Prefill(String),                           // put this text in the input (branching at a user message)
-    Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128 }, // one LLM call's generation accounting; prompt = context size sent
+    /// One LLM call's generation accounting; prompt = context size sent,
+    /// cached = how much of it the provider read from its prefix cache (None: not reported).
+    Usage { tokens: u64, prompt: u64, est: bool, gen_ms: u128, cached: Option<u64> },
     // choices empty = free-text answer (the ask_user tool); non-empty = a fixed
     // set of (label, answer) the front end offers as a chooser
     Ask { question: String, choices: Vec<(String, String)>, reply: tokio::sync::oneshot::Sender<String> },
@@ -154,7 +156,11 @@ async fn compact(client: &llm::Client, session: &mut Session, cancel: &AtomicBoo
     msgs.push(json!({"role": "user", "content": COMPACT_PROMPT}));
     let res = client.chat_stream(&msgs, None, cancel).await?;
     let summary = format!("[Summary of the conversation so far; earlier messages were compacted]\n{}", res.content.trim());
-    let mut parent = session.add(Entry::new("user", summary), Some(path[0].id.clone()));
+    let mut head = Entry::new("user", summary);
+    if path[cut..].iter().all(|e| e.context.is_none()) {
+        head.context = path[..cut].iter().rev().find_map(|e| e.context.clone());
+    }
+    let mut parent = session.add(head, Some(path[0].id.clone()));
     for e in &path[cut..] {
         parent = session.add(e.clone(), Some(parent)); // add() reassigns id/parent/ts
     }
@@ -246,21 +252,31 @@ fn system_prompt() -> String {
     if let Some((name, body)) = instructions_from(std::path::Path::new(".")) {
         p.push_str(&format!("\n\n# Project instructions (from {name} in the working directory)\n{body}"));
     }
-    // refreshed every turn (run_agent rewrites the system entry), so the model
-    // always sees the tree as it is now rather than as it was at session start
-    if let Some(g) = git_context() {
-        p.push_str("\n\n");
-        p.push_str(&g);
-    }
-    if plan_mode() {
-        p.push_str(
-            "\n\n# Plan mode\nThe user has turned plan mode ON. Reading, searching and listing still work, but \
-             every tool that writes a file or runs a command is refused — do not attempt them. Investigate first, \
-             then reply with a concrete plan: which files you would change, what you would change in each, and how \
-             you would verify it. The user turns plan mode off when they approve.",
-        );
-    }
+    // nothing volatile below this line: git status and plan mode ride on the
+    // user entry (turn_context), so this prompt stays byte-identical turn to
+    // turn and the provider's prefix cache can match from token 0
     p
+}
+
+const PLAN_ON: &str = "# Plan mode\nThe user has turned plan mode ON. Reading, searching and listing still work, but \
+every tool that writes a file or runs a command is refused — do not attempt them. Investigate first, \
+then reply with a concrete plan: which files you would change, what you would change in each, and how \
+you would verify it. The user turns plan mode off when they approve.";
+const PLAN_OFF: &str = "# Plan mode\nThe user has turned plan mode OFF: writing files and running commands work again.";
+
+/// What this turn starts on, stored on its user entry. `plan_was` is whether
+/// the previous turn's context said plan mode was on: that notice stays in
+/// the history, so turning it off has to be said rather than just dropped.
+fn turn_context(plan: bool, plan_was: bool) -> Option<String> {
+    let parts: Vec<String> = [
+        git_context(),
+        plan.then(|| PLAN_ON.to_string()),
+        (!plan && plan_was).then(|| PLAN_OFF.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
 fn git(args: &[&str]) -> Option<String> {
@@ -415,8 +431,11 @@ pub async fn run_agent(
         }
     }
     if !task.is_empty() {
+        let plan_was = session.path().iter().rev().find_map(|e| e.context.as_deref()).is_some_and(|c| c.contains(PLAN_ON));
+        let mut u = Entry::new("user", task.into());
+        u.context = turn_context(plan_mode(), plan_was);
         // branch from the current leaf (or root); resume/--tree set active
-        session.add(Entry::new("user", task.into()), session.active.clone());
+        session.add(u, session.active.clone());
     }
     let tools = tool_schemas();
     let mut last_prompt = 0u64;
@@ -790,10 +809,11 @@ pub fn self_test() {
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();
     assert!(system_prompt().starts_with(SYSTEM_PROMPT));
-    // git context rides along with the prompt, and only inside a work tree
+    // git context rides on the turn, not the prompt, and only inside a work tree
     assert_eq!(git_context().is_some(), git_branch().is_some());
     if git_branch().is_some() {
-        assert!(system_prompt().contains("# Git\nbranch: "));
+        assert!(turn_context(false, false).unwrap().contains("# Git\nbranch: "));
+        assert!(!system_prompt().contains("# Git"));
     }
 
     // permission decisions (decide stays pure — saving happens in permitted)
@@ -810,14 +830,13 @@ pub fn self_test() {
     allow_from_config(&["run_command".to_string(), "run_command".to_string()]);
     assert_eq!(ALLOWED.lock().unwrap().iter().filter(|a| *a == "run_command").count(), 1);
 
-    // plan mode blocks every mutating tool and nothing else, and says so in the prompt
+    // plan mode blocks every mutating tool and nothing else
     assert!(!plan_blocks("write_file"));
     set_plan(true);
     assert!(plan_blocks("write_file") && plan_blocks("run_command") && plan_blocks("delete_file"));
     assert!(!plan_blocks("read_file") && !plan_blocks("grep") && !plan_blocks("todo"));
-    assert!(system_prompt().contains("# Plan mode"));
     set_plan(false);
-    assert!(!plan_blocks("write_file") && !system_prompt().contains("# Plan mode"));
+    assert!(!plan_blocks("write_file"));
 
     // project-root guard (yolo off for this block)
     tools::YOLO.store(false, Ordering::Relaxed);
@@ -993,5 +1012,140 @@ pub fn self_test() {
         write_docs(&dir).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("readme.md")).unwrap(), readme, "an upgrade refreshes stale docs");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two turns against a fake server that rejects stream_options once. The
+    /// prefix the second request shares with the first must be byte-identical,
+    /// even though the working tree changed between them: that is what lets a
+    /// provider's prefix cache hit. The rejected field is dropped and stays dropped.
+    #[test]
+    fn the_prompt_prefix_stays_stable_and_stream_options_falls_back() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel::<Value>();
+        std::thread::spawn(move || {
+            let reject = r#"{"error":{"message":"Unrecognized request argument supplied: stream_options"}}"#;
+            let ok = concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            for (n, s) in listener.incoming().take(3).enumerate() {
+                let mut s = s.unwrap();
+                // read the headers, then exactly Content-Length bytes of body
+                let mut req = Vec::new();
+                let mut buf = [0u8; 65536];
+                let body = loop {
+                    let k = s.read(&mut buf).unwrap();
+                    req.extend_from_slice(&buf[..k]);
+                    let Some(h) = req.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                    let head = String::from_utf8_lossy(&req[..h]).to_lowercase();
+                    let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                    if req.len() >= h + 4 + len {
+                        break serde_json::from_slice::<Value>(&req[h + 4..h + 4 + len]).unwrap();
+                    }
+                };
+                tx.send(body).unwrap();
+                let resp = if n == 0 {
+                    format!("HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reject}", reject.len())
+                } else {
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ok}", ok.len())
+                };
+                s.write_all(resp.as_bytes()).unwrap();
+            }
+        });
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
+        let path = std::env::temp_dir().join(format!("rusti_cache_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        let no = AtomicBool::new(false);
+        let dirty = format!("_cache_test_dirty_{}.txt", std::process::id());
+
+        assert_eq!(rt.block_on(run_agent(&client, &mut session, "first", &no)).unwrap(), "ok");
+        std::fs::write(&dirty, "x").unwrap(); // the working tree changes between the turns
+        let second = rt.block_on(run_agent(&client, &mut session, "second", &no));
+        let fits = git(&["status", "--short"]).is_some_and(|s| s.len() <= 2000);
+        std::fs::remove_file(&dirty).ok();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(second.unwrap(), "ok");
+
+        let (rejected, t1, t2) = (rx.recv().unwrap(), rx.recv().unwrap(), rx.recv().unwrap());
+        assert_eq!(rejected["stream_options"]["include_usage"], true, "usage is asked for by default");
+        assert!(t1.get("stream_options").is_none(), "retried without the field the server named");
+        assert!(t2.get("stream_options").is_none(), "and the client remembers that");
+
+        let (m1, m2) = (t1["messages"].as_array().unwrap(), t2["messages"].as_array().unwrap());
+        assert_eq!(m2.len(), 4); // system, first, its reply, second
+        assert_eq!(m1[0], m2[0], "the system prompt is byte-identical across turns");
+        assert_eq!(m1[1], m2[1], "the first turn, context included, is replayed as it was sent");
+        assert!(m1[1]["content"].as_str().unwrap().starts_with("first"));
+        if git_branch().is_some() {
+            let (c1, c2) = (m1[1]["content"].as_str().unwrap(), m2[3]["content"].as_str().unwrap());
+            assert!(c1.contains("# Git\nbranch: ") && !c1.contains(&dirty), "{c1}");
+            assert!(c2.contains("# Git
+branch: "), "{c2}");
+            if fits {
+                assert!(c2.contains(&dirty), "the new turn carries the tree as it is now: {c2}");
+            }
+            assert!(!m2[0]["content"].as_str().unwrap().contains("# Git"));
+        }
+    }
+
+    /// Compacting mid-turn summarizes away the user entry that carried this
+    /// turn's context; the summary must carry it on, or plan mode is forgotten.
+    #[test]
+    fn compaction_keeps_the_turn_context() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 65536];
+            loop {
+                let k = s.read(&mut buf).unwrap();
+                req.extend_from_slice(&buf[..k]);
+                let Some(h) = req.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                let head = String::from_utf8_lossy(&req[..h]).to_lowercase();
+                let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                if req.len() >= h + 4 + len { break; }
+            }
+            let ok = "data: {\"choices\":[{\"delta\":{\"content\":\"sum\"},\"finish_reason\":\"stop\"}]}\r\n\r\ndata: [DONE]\r\n\r\n";
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ok}", ok.len());
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
+        let path = std::env::temp_dir().join(format!("rusti_compact_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        let mut leaf = session.add(Entry::new("system", "sys".into()), None);
+        let mut u = Entry::new("user", "plan it".into());
+        u.context = turn_context(true, false);
+        leaf = session.add(u, Some(leaf));
+        for i in 0..12 {
+            leaf = session.add(Entry::new("assistant", format!("step {i}")), Some(leaf));
+        }
+        rt.block_on(compact(&client, &mut session, &AtomicBool::new(false))).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let msgs = session.path_messages();
+        assert!(msgs.len() < 14, "the path was compacted");
+        assert!(!msgs.iter().any(|m| m["content"] == "plan it"), "the turn's user entry was summarized away");
+        assert!(msgs[1]["content"].as_str().unwrap().contains(PLAN_ON), "the summary carries plan mode on");
+    }
+
+    /// Plan mode is announced on the turn it is on, and its end is announced
+    /// once, since the ON notice stays in the history the model rereads.
+    #[test]
+    fn plan_mode_rides_on_the_turn() {
+        let on = turn_context(true, false).unwrap();
+        assert!(on.contains(PLAN_ON) && !on.contains(PLAN_OFF));
+        let off = turn_context(false, true).unwrap();
+        assert!(off.contains(PLAN_OFF) && !off.contains(PLAN_ON));
+        assert!(turn_context(false, false).is_none_or(|c| !c.contains("# Plan mode")));
+        assert!(!system_prompt().contains("# Plan mode"));
     }
 
