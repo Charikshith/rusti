@@ -25,7 +25,8 @@ pub struct Client {
     pub model: String,
     http: reqwest::Client,
     /// Set once this server has rejected `stream_options` with a 400. A Client
-    /// is one profile, so the profile stops sending it until rusti restarts.
+    /// is one profile, so it stops sending it for the Client's lifetime: until
+    /// /model switches profile or rusti restarts.
     no_stream_options: AtomicBool,
 }
 

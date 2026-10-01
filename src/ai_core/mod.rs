@@ -156,7 +156,11 @@ async fn compact(client: &llm::Client, session: &mut Session, cancel: &AtomicBoo
     msgs.push(json!({"role": "user", "content": COMPACT_PROMPT}));
     let res = client.chat_stream(&msgs, None, cancel).await?;
     let summary = format!("[Summary of the conversation so far; earlier messages were compacted]\n{}", res.content.trim());
-    let mut parent = session.add(Entry::new("user", summary), Some(path[0].id.clone()));
+    let mut head = Entry::new("user", summary);
+    if path[cut..].iter().all(|e| e.context.is_none()) {
+        head.context = path[..cut].iter().rev().find_map(|e| e.context.clone());
+    }
+    let mut parent = session.add(head, Some(path[0].id.clone()));
     for e in &path[cut..] {
         parent = session.add(e.clone(), Some(parent)); // add() reassigns id/parent/ts
     }
@@ -1082,6 +1086,50 @@ pub fn self_test() {
             assert!(c2.contains(&dirty), "the new turn carries the tree as it is now: {c2}");
             assert!(!m2[0]["content"].as_str().unwrap().contains("# Git"));
         }
+    }
+
+    /// Compacting mid-turn summarizes away the user entry that carried this
+    /// turn's context; the summary must carry it on, or plan mode is forgotten.
+    #[test]
+    fn compaction_keeps_the_turn_context() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 65536];
+            loop {
+                let k = s.read(&mut buf).unwrap();
+                req.extend_from_slice(&buf[..k]);
+                let Some(h) = req.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                let head = String::from_utf8_lossy(&req[..h]).to_lowercase();
+                let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                if req.len() >= h + 4 + len { break; }
+            }
+            let ok = "data: {\"choices\":[{\"delta\":{\"content\":\"sum\"},\"finish_reason\":\"stop\"}]}\r\n\r\ndata: [DONE]\r\n\r\n";
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ok}", ok.len());
+            s.write_all(resp.as_bytes()).unwrap();
+        });
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
+        let path = std::env::temp_dir().join(format!("rusti_compact_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        let mut leaf = session.add(Entry::new("system", "sys".into()), None);
+        let mut u = Entry::new("user", "plan it".into());
+        u.context = turn_context(true, false);
+        leaf = session.add(u, Some(leaf));
+        for i in 0..12 {
+            leaf = session.add(Entry::new("assistant", format!("step {i}")), Some(leaf));
+        }
+        rt.block_on(compact(&client, &mut session, &AtomicBool::new(false))).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let msgs = session.path_messages();
+        assert!(msgs.len() < 14, "the path was compacted");
+        assert!(!msgs.iter().any(|m| m["content"] == "plan it"), "the turn's user entry was summarized away");
+        assert!(msgs[1]["content"].as_str().unwrap().contains(PLAN_ON), "the summary carries plan mode on");
     }
 
     /// Plan mode is announced on the turn it is on, and its end is announced
