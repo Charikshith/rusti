@@ -99,6 +99,5 @@
 - Reused tui::app::utc_offset_min for local-time session names instead of a date crate.
 
 ## 2026-10-01 - system prompt override
-- Repeat of 2026-09-30 (3): a Python-via-heredoc edit again turned Rust `\` and `
-` escapes into raw chars, and an `"\0"` became a literal NUL. That lesson is ready to promote to memory.
+- Repeat of 2026-09-30 (3): a Python-via-heredoc edit again turned Rust backslash and newline escapes into raw chars, and a backslash-zero became a literal NUL. That lesson is ready to promote to memory.
 - build_relaunch_args already passes unknown flags through, so /reload kept the new flags with no change; only a test was needed.
