@@ -493,19 +493,20 @@ pub fn allow_from_config(names: &[String]) {
 
 /// Messages typed while the agent works (Enter mid-turn). run_agent takes them
 /// after a tool batch; what is left when a task ends the TUI runs as a follow-up.
-static STEER: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Each carries the `@` images its text references, attached on delivery.
+static STEER: std::sync::Mutex<Vec<(String, Vec<String>)>> = std::sync::Mutex::new(Vec::new());
 
-pub fn steer(text: String) {
-    STEER.lock().unwrap().push(text);
+pub fn steer(text: String, images: Vec<String>) {
+    STEER.lock().unwrap().push((text, images));
 }
 
 /// Everything queued, removed: delivery, Alt+Up, Esc and task end all empty it.
 pub fn take_steers() -> Vec<String> {
-    std::mem::take(&mut *STEER.lock().unwrap())
+    std::mem::take(&mut *STEER.lock().unwrap()).into_iter().map(|s| s.0).collect()
 }
 
 pub fn steers() -> Vec<String> {
-    STEER.lock().unwrap().clone()
+    STEER.lock().unwrap().iter().map(|s| s.0.clone()).collect()
 }
 
 /// Serializes the tests that touch the global STEER queue.
@@ -670,11 +671,23 @@ This message carries that file as an image part.                  If you cannot 
         // steers go here for the same reason as the image, all at once as one
         // user entry; a sub-agent leaves them for its parent, an interrupted
         // turn for the TUI's follow-up queue
-        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) { take_steers() } else { vec![] };
+        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) {
+            std::mem::take(&mut *STEER.lock().unwrap())
+        } else {
+            vec![]
+        };
         if !steered.is_empty() {
-            let text = steered.join("\n\n");
-            session.add(Entry::new("user", text.clone()), session.active.clone());
+            let text = steered.iter().map(|s| s.0.as_str()).collect::<Vec<_>>().join("\n\n");
+            let mut images: Vec<String> = Vec::new();
+            for p in steered.into_iter().flat_map(|s| s.1) {
+                if !images.contains(&p) {
+                    images.push(p);
+                }
+            }
+            let mut u = Entry::new("user", text.clone());
             emit(Event::Delivered(text));
+            attach(&mut u, &images);
+            session.add(u, session.active.clone());
         }
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
@@ -1402,8 +1415,9 @@ branch: "), "{c2}");
         let path = std::env::temp_dir().join(format!("rusti_steer_{}.json", std::process::id()));
         let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
         take_steers();
-        steer("use tabs".into());
-        steer("and run the tests".into()); // queued while the first request streams
+        let png = concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png").to_string();
+        steer("use tabs".into(), vec![]);
+        steer(format!("and run the tests @{png}"), vec![png.clone()]); // queued while the first request streams
         let r = rt.block_on(run_agent(&client, &mut session, "task", &[], &AtomicBool::new(false)));
         std::fs::remove_file(&path).ok();
         assert_eq!(r.unwrap(), "ok");
@@ -1413,7 +1427,9 @@ branch: "), "{c2}");
         assert_eq!(first["messages"].as_array().unwrap().len(), 2, "not sent before the batch: system, task");
         let roles: Vec<&str> = second["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
         assert_eq!(roles, ["system", "user", "assistant", "tool", "tool", "user"]);
-        assert_eq!(second["messages"][5]["content"], "use tabs\n\nand run the tests", "all queued, as one entry");
+        let steered = &second["messages"][5]["content"];
+        assert!(steered[0]["text"].as_str().unwrap().starts_with(&format!("use tabs\n\nand run the tests @{png}\n\n")), "all queued, as one entry");
+        assert!(steered[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"), "its @ image rides on it");
     }
 
     /// An `@` image the user typed rides on their own entry as an image part

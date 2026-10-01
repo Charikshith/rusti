@@ -118,7 +118,7 @@ Where: ai_core/llm.rs request body, config.rs profile field
 When: F03 (feat-image-input) attaches `@` images on submit, resizes and has the vision flag; left over:
 What: (a) two read_file images in one tool batch keep only the last, since PENDING_IMAGE holds one;
 (b) a dragged path without a leading `@` is not attached — bracketed paste (A4) could mark pasted paths;
-(c) steers queued mid-turn are not scanned for `@` images, only tasks and follow-ups are;
+(c) a steer's `@` images are found when it is queued and attached on delivery, not re-checked in between;
 (d) plain mode prints `· attached` rows to stdout, as every Event::Text row is, which a pipe then carries;
 (e) inline terminal display (kitty/iTerm2/sixel), an images kill switch, and normalising MCP tool images
 Where: ai_core/tools.rs PENDING_IMAGE, ai_core/mod.rs emit, tui/mod.rs Job::Task

@@ -139,9 +139,12 @@ pub fn image_refs(input: &str) -> Vec<String> {
             }
         }
     }
+    let is_image = |p: &str| ai_core::tools::image_mime(p).is_some() && std::path::Path::new(p).is_file();
     let mut out: Vec<String> = Vec::new();
     for (_, p) in refs {
-        if ai_core::tools::image_mime(&p).is_some() && std::path::Path::new(&p).is_file() && !out.contains(&p) {
+        // "what is in @shot.png?": sentence punctuation after a reference
+        let p = if is_image(&p) { p } else { p.trim_end_matches(['?', '.', ',', ';', ':', '!', ')']).to_string() };
+        if is_image(&p) && !out.contains(&p) {
             out.push(p);
         }
     }
@@ -815,7 +818,7 @@ pub fn ui_loop(
                                 }
                             } else if !app.done {
                                 // a steer: shown as pending until the agent takes it
-                                ai_core::steer(raw);
+                                ai_core::steer(raw.clone(), image_refs(&raw));
                             } else {
                                 start_task(&mut app, job_tx, raw);
                             }
@@ -1875,7 +1878,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut a = app();
         a.follow.push_back("then commit".into());
-        ai_core::steer("use tabs".into()); // Enter pressed as the task finished
+        ai_core::steer("use tabs".into(), vec![]); // Enter pressed as the task finished
         next_queued(&mut a, true, &tx);
         assert!(matches!(rx.try_recv(), Ok(Job::Task(t)) if t == "use tabs"));
         assert_eq!(a.lines.last().map(String::as_str), Some("1› use tabs"));
@@ -1885,7 +1888,7 @@ mod tests {
         next_queued(&mut a, false, &tx);
         assert!(rx.try_recv().is_err(), "a failed task does not run the queue");
 
-        ai_core::steer("no, spaces".into());
+        ai_core::steer("no, spaces".into(), vec![]);
         a.input = "draft".into();
         assert!(dequeue(&mut a));
         assert_eq!(a.input, "no, spaces\n\nthen commit\n\ndraft");
@@ -1908,6 +1911,8 @@ mod tests {
         assert_eq!(image_refs(&msg), vec![shot.clone(), spaced.clone()]);
         assert!(image_refs(&format!("look at {shot}")).is_empty(), "mentioned, not referenced");
         assert_eq!(image_refs(&at_insert(&spaced, false)), vec![spaced.clone()], "what Alt+V types is what submit takes");
+        assert_eq!(image_refs(&format!("what is in @{shot}?")), vec![shot.clone()], "trailing punctuation");
+        assert_eq!(image_refs(&format!("see @{shot}.")), vec![shot.clone()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
