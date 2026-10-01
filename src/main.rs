@@ -22,7 +22,7 @@ flags
   --tui                  force the UI (bare `rusti` in a terminal already opens it)
   --session NAME         use .rusti/sessions/NAME.json (unnamed: a new s-YYYYMMDD-HHMM)
   --resume               continue a session (the latest unless --session names one)
-  --tree                 browse a session's tree and branch from an earlier entry
+  --tree                 browse a session's tree (the latest unless --session names one)
   --url U --key K --model M   override the saved profile for this run
   --use NAME             make a saved profile the default, then exit
   --list                 list saved profiles      --add   add one interactively

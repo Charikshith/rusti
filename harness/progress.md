@@ -1003,5 +1003,5 @@ through the session"):
 - `/new [name]` (tui/mod.rs new_session, Job::New): saves the active session, starts an empty one with the same model;
   unnamed gets `s-YYYYMMDD-HHMM` under .rusti/sessions (session::auto_path). Bare launches use the same auto name (A2);
   bare `--resume`/`--tree` open the latest saved session (session::latest).
-- A5: undo_begin_turn on /new, /resume and branch_at, so /undo never restores another session's files. Todo list cleared on /new.
+- A5: undo_begin_turn on /new and /resume only (a /tree branch keeps /undo), so /undo never restores another session's files. Todo list cleared on /new.
 - Verification: `./init.sh`, cargo test 48 passed; built binary resumed an auto-named session from an empty dir without creating ./session.json.

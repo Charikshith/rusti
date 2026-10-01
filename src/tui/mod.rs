@@ -321,7 +321,6 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
     match session.select(id) {
         None => { let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ no entry {id}"))); }
         Some(text) => {
-            ai_core::tools::undo_begin_turn(); // the turn /undo would revert is no longer on the path
             let _ = session.save();
             let (lines, history, msg_num) = render_history(session);
             let _ = event_tx.send(ai_core::Event::Resumed { lines, history, msg_num });
