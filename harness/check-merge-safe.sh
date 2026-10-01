@@ -3,22 +3,15 @@
 # same base (each with its harness/features/, harness/progress/ and harness/memory/journal/
 # entry, committed through .githooks/pre-commit) merge with no conflict. A control run of the
 # old convention (both append to harness/progress.md) must conflict, so the check is not vacuous.
-# Also checks every harness/features/*.json is named after its own id.
-# Run from the project root; init.sh runs it.
+# On demand, from the project root: ./harness/check-merge-safe.sh
 set -e
-
-for f in harness/features/*.json; do
-  [ -e "$f" ] || continue
-  id=$(basename "$f" .json)
-  grep -q "\"id\": *\"$id\"" "$f" || { echo "FAIL: $f does not have \"id\": \"$id\""; exit 1; }
-done
 
 root=$(pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
 export GIT_AUTHOR_NAME=check GIT_AUTHOR_EMAIL=check@local GIT_COMMITTER_NAME=check GIT_COMMITTER_EMAIL=check@local
-g() { git -c core.autocrlf=false -c init.defaultBranch=base "$@" >/dev/null 2>&1; }
+g() { git -c core.autocrlf=false -c commit.gpgsign=false -c init.defaultBranch=base "$@" >/dev/null 2>&1; }
 
 g init
 cp -r "$root/harness" "$root/.githooks" .
@@ -37,7 +30,7 @@ feature() { # $1 = branch, $2 = src file
   echo "# $1" > "harness/progress/2026-10-02-feat-$1.md"
   echo "## 2026-10-02 - $1" > "harness/memory/journal/2026-10-02-feat-$1.md"
   g add -A
-  g commit -m "$1" || { echo "FAIL: pre-commit hook rejected a convention-following commit ($1)"; exit 1; }
+  sh .githooks/pre-commit >/dev/null 2>&1 && g commit -m "$1" || { echo "FAIL: pre-commit hook rejected a convention-following commit ($1)"; exit 1; }
 }
 feature alpha a.rs
 feature beta b.rs

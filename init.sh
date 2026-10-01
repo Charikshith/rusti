@@ -42,8 +42,12 @@ if [ -f "$ENV_CONTRACT" ]; then
   fi
 fi
 
-echo "=== harness merge-safety check ==="
-./harness/check-merge-safe.sh
+echo "=== harness feature ids ==="
+for f in harness/features/*.json; do
+  [ -e "$f" ] || continue
+  id=$(basename "$f" .json)
+  grep -q "\"id\": *\"$id\"" "$f" || { echo "FAIL: $f does not have \"id\": \"$id\""; exit 1; }
+done
 
 echo "=== cargo test ==="
 cargo test

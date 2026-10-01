@@ -234,6 +234,8 @@ Before ending a session:
 2. Record the feature's status in its own file, `harness/features/<feature-id>.json`. A new
    feature's id is `feat-<slug>` (a short kebab-case name, e.g. `feat-session-export`), never
    the next number, so two parallel PRs cannot take the same id; the file name is the id.
+   `./init.sh` checks that; `./harness/check-merge-safe.sh` (on demand) proves two parallel
+   features merge without conflict.
 3. Record any unresolved risks or blockers
 4. **Write one dated block as `harness/memory/journal/YYYY-MM-DD-<feature-id>.md`** — 3-5 lines,
    no prose: what you had to look up, what surprised you, any correction you received, what you
