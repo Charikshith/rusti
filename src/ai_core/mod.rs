@@ -205,7 +205,7 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
 const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
 permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking (help.txt, readme.md § TUI), \
 sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
-AGENTS.md (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
+AGENTS.md, SYSTEM.md, --system-prompt (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
 /reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
 
@@ -231,8 +231,81 @@ fn docs_block() -> Option<&'static str> {
         .as_deref()
 }
 
+/// --system-prompt and every --append-system-prompt, set once at startup.
+static PROMPT_FLAGS: OnceLock<(Option<String>, Vec<String>)> = OnceLock::new();
+
+pub fn set_prompt_flags(system: Option<String>, append: Vec<String>) {
+    let _ = PROMPT_FLAGS.set((system, append));
+}
+
+/// A flag value that names an existing file is that file's text; anything else is the text itself.
+fn flag_text(v: &str) -> String {
+    match std::fs::metadata(v) {
+        Ok(m) if m.is_file() => std::fs::read_to_string(v).unwrap_or_default(),
+        _ => v.to_string(),
+    }
+}
+
+fn read_nonempty(p: &std::path::Path) -> Option<String> {
+    let s = std::fs::read_to_string(p).ok()?;
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// SYSTEM_PROMPT, or what replaces it, plus each addendum, and the names of
+/// whatever overrode the default (empty when nothing did). Flags win over the
+/// files in `dir` (~/.rusti). Read every turn, so edits to the files are live.
+/// ponytail: the project's .rusti/SYSTEM.md (wins) and .rusti/APPEND_SYSTEM.md
+/// (after the global one) join here once the Phase 0 trust gate lands; until
+/// then an untrusted repo cannot rewrite the prompt.
+fn prompt_base(dir: &std::path::Path, system: Option<&str>, append: &[String]) -> (String, Vec<String>) {
+    let mut src = Vec::new();
+    let file = |name: &str| {
+        let p = dir.join(name);
+        read_nonempty(&p).map(|s| (s, p.to_string_lossy().replace('\\', "/")))
+    };
+    let mut p = match system {
+        Some(v) => {
+            src.push("--system-prompt".to_string());
+            flag_text(v)
+        }
+        None => match file("SYSTEM.md") {
+            Some((s, path)) => {
+                src.push(path);
+                s
+            }
+            None => SYSTEM_PROMPT.to_string(),
+        },
+    };
+    let adds: Vec<String> = if append.is_empty() {
+        file("APPEND_SYSTEM.md").map(|(s, path)| { src.push(format!("+ {path}")); s }).into_iter().collect()
+    } else {
+        src.push(format!("+ --append-system-prompt ×{}", append.len()));
+        append.iter().map(|a| flag_text(a)).collect()
+    };
+    for a in adds {
+        p.push_str("\n\n");
+        p.push_str(a.trim());
+    }
+    (p, src)
+}
+
+fn prompt_flags() -> (Option<&'static str>, &'static [String]) {
+    PROMPT_FLAGS.get().map_or((None, &[]), |(s, a)| (s.as_deref(), a.as_slice()))
+}
+
+/// One startup line naming what changed the system prompt, so it is never invisible.
+pub fn prompt_note() -> Option<String> {
+    let (sys, app) = prompt_flags();
+    let src = prompt_base(&crate::config::home_dir(), sys, app).1;
+    (!src.is_empty()).then(|| format!("  ℹ system prompt: {}", src.join(" ")))
+}
+
 fn system_prompt() -> String {
-    let mut p = SYSTEM_PROMPT.to_string();
+    let (sys, app) = prompt_flags();
+    // only the base text is replaceable: the shell line, docs pointer, project
+    // instructions, git context and plan-mode block below always stay
+    let mut p = prompt_base(&crate::config::home_dir(), sys, app).0;
     let sh = tools::current_shell();
     p.push_str(&format!(
         "\n\n# Shell\nrun_command and run_background run `{} {} <command>` on {}; write commands in that shell's syntax.",
@@ -995,3 +1068,36 @@ pub fn self_test() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+
+    /// SYSTEM.md / --system-prompt replace only the base text: appends follow it
+    /// in order, and the shell, git and plan-mode blocks still ride along.
+    #[test]
+    fn system_prompt_override_replaces_base_and_appends_in_order() {
+        let dir = std::env::temp_dir().join(format!("rusti_sysprompt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let none: &[String] = &[];
+        assert_eq!(prompt_base(&dir, None, none), (SYSTEM_PROMPT.to_string(), vec![]), "no files, no flags: the default");
+
+        std::fs::write(dir.join("SYSTEM.md"), "  file base \n").unwrap();
+        std::fs::write(dir.join("APPEND_SYSTEM.md"), "file add").unwrap();
+        let (p, src) = prompt_base(&dir, None, none);
+        assert_eq!(p, "file base\n\nfile add");
+        assert!(src[0].ends_with("/SYSTEM.md") && src[1].ends_with("/APPEND_SYSTEM.md"), "{src:?}");
+
+        // flags win over both files; a value naming a file is read, anything else is text
+        let f = dir.join("extra.md");
+        std::fs::write(&f, "from file").unwrap();
+        let adds = vec!["one".to_string(), f.to_string_lossy().into_owned()];
+        let (p, src) = prompt_base(&dir, Some("flag base"), &adds);
+        assert_eq!(p, "flag base\n\none\n\nfrom file");
+        assert_eq!(src, vec!["--system-prompt".to_string(), "+ --append-system-prompt ×2".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        set_prompt_flags(Some("custom base".into()), vec!["custom add".into()]);
+        set_plan(true);
+        let p = system_prompt();
+        set_plan(false);
+        assert!(p.starts_with("custom base\n\ncustom add\n\n# Shell\n") && !p.contains(SYSTEM_PROMPT), "{p}");
+        assert!(p.contains("# Plan mode"), "plan mode's block survives a replaced prompt");
+        assert!(prompt_note().unwrap().contains("system prompt: --system-prompt + --append-system-prompt ×1"));
+    }

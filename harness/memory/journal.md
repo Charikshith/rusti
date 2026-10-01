@@ -97,3 +97,8 @@
 - Surprise: write_file refuses paths outside the project root, so a test that wants an undo snapshot must write a cwd-relative file (as self_test does), not one in temp_dir.
 - Surprise: no python3 on this box; bash heredocs to python fail, use the Edit tool.
 - Reused tui::app::utc_offset_min for local-time session names instead of a date crate.
+
+## 2026-10-01 - system prompt override
+- Repeat of 2026-09-30 (3): a Python-via-heredoc edit again turned Rust `\` and `
+` escapes into raw chars, and an `"\0"` became a literal NUL. That lesson is ready to promote to memory.
+- build_relaunch_args already passes unknown flags through, so /reload kept the new flags with no change; only a test was needed.

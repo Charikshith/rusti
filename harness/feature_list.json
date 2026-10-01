@@ -1059,6 +1059,20 @@
         "The input history is sent with Job::New and handed back in Event::Resumed, so no new Event variant was needed.",
         "The /resume picker's name column widened from 15 to 18 so an auto name with a suffix still has a gap after it."
       ]
+    },
+    {
+      "id": "feat-082",
+      "name": "System prompt override: ~/.rusti/SYSTEM.md, APPEND_SYSTEM.md, --system-prompt, --append-system-prompt",
+      "description": "~/.rusti/SYSTEM.md replaces only the built-in SYSTEM_PROMPT base text; ~/.rusti/APPEND_SYSTEM.md is added after it. --system-prompt X and repeatable --append-system-prompt X win over the files (X is a file's text when that path is a file, else literal). The shell line, docs pointer, project instructions, git context and plan-mode block always stay. Files are re-read every turn. Startup prints one 'ℹ system prompt: …' line (TUI transcript and one-shot stderr) naming the sources. /reload keeps the flags. The project-level .rusti/SYSTEM.md is deferred to the Phase 0 trust gate (hook comment in prompt_base).",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "cargo test 47 passed via cargo test (new: ai_core::system_prompt_override_replaces_base_and_appends_in_order; relaunch and task_arg assertions extended). One-shot runs printed 'ℹ system prompt: --system-prompt + --append-system-prompt ×1' with flags and 'ℹ system prompt: <RUSTI_HOME>/SYSTEM.md' with only the home file; --self-test OK.",
+      "decisions": [
+        "Flags replace the matching file entirely (an --append-system-prompt flag drops APPEND_SYSTEM.md), as Pi's CLI overrides discovery.",
+        "The rusti docs pointer stays with a custom prompt (D8): it is gated to questions about rusti.",
+        "A repeated --system-prompt keeps the last one.",
+        "Project .rusti/SYSTEM.md / APPEND_SYSTEM.md are not read until Phase 0 trust lands."
+      ]
     }
   ]
 }

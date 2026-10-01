@@ -4,6 +4,13 @@
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 13 passed, --self-test with and without ripgrep on PATH, ./init.sh)
 
+## Session 2026-10-01: System prompt override (feat-079, plan F11)
+- `prompt_base` in ai_core builds the base text: `--system-prompt` > `~/.rusti/SYSTEM.md` > `SYSTEM_PROMPT`,
+  then `--append-system-prompt` (repeatable) or else `~/.rusti/APPEND_SYSTEM.md`. Everything after the base
+  (shell, docs pointer, AGENTS.md, git, plan mode) is unchanged. `prompt_note` gives the startup `ℹ` line
+- Project `.rusti/SYSTEM.md` deliberately not read: it waits for the Phase 0 trust gate (hook comment in prompt_base)
+- Verification: `cargo test` 47 passed; one-shot runs show the startup line for flags and for a home SYSTEM.md
+
 ## Session 2026-09-09: Fix — /model list had no up/down navigation
 - Reported as "/model isn't navigable with up/down". Root cause: `/model` with no argument called
   `list_models`, which dumped every profile into the transcript as plain text — there was no
