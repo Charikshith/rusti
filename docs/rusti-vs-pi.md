@@ -71,7 +71,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 
 | Feature | rusti | Pi |
 |---|---|---|
-| Session storage | One pretty-printed JSON tree in `./session.json` or `.rusti/sessions/NAME.json`, stored inside the project (`session.rs`) | Append-only JSONL v3 per session under `~/.pi/agent/sessions/--<path>--/` (`docs/session-format.md`, `docs/sessions.md`) |
+| Session storage | One pretty-printed JSON tree per session in `.rusti/sessions/NAME.json` (unnamed ones auto-named; a legacy `./session.json` is still read), stored inside the project (`session.rs`) | Append-only JSONL v3 per session under `~/.pi/agent/sessions/--<path>--/` (`docs/session-format.md`, `docs/sessions.md`) |
 | Branching | Pick an entry in `/tree` or `--tree`; the semantics follow Pi's (`readme.md` "session tree") | Same model, plus labels, filters, folding and optional branch summarization (`docs/sessions.md`) |
 | Compaction | Automatic past `--context` (default 100k). Summarises all but the last 8 entries into a new branch: system → summary → copied tail (`ai_core/mod.rs`) | Automatic at `contextWindow − reserveTokens` (16384 reserved), keeps about 20k recent tokens, handles a cut that falls mid-turn, and also has manual `/compact` (`docs/compaction.md`) |
 | Context files | First non-empty `AGENTS.md`, then `RUSTI.md`, then `CLAUDE.md`, from the cwd only; 20 KB cap; re-read every turn (`ai_core/mod.rs`) | All `AGENTS.md`/`CLAUDE.md` files from `~/.pi/agent`, parent directories and the cwd, concatenated. `SYSTEM.md` replaces the system prompt and `APPEND_SYSTEM.md` appends to it (`README.md`, `docs/security.md:57`) |

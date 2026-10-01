@@ -1,7 +1,7 @@
 // Session persistence as a message TREE, mirroring pi's session model:
 // every entry has an id and parentId; the current position is the active
 // leaf. Branching = moving the leaf to an earlier entry and continuing —
-// no new files. Stored as one JSON file (session.json).
+// no new files. Stored as one JSON file per session under DIR.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

@@ -5,7 +5,7 @@
 // Keyboard: Esc interrupts, Ctrl+C clears (twice quits), Ctrl+D quits when the
 // input is empty, Enter submits, arrows edit input, Up/Down recall history,
 // PageUp/PageDown scroll transcript.
-// Slash: /use /model /resume /rename /tree /reload /quit.
+// Slash: /use /model /new /resume /rename /tree /reload /quit.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

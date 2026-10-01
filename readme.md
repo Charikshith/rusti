@@ -77,7 +77,7 @@ per-project defaults that flags and env still override:
 ```
 main.rs      CLI
 ├── config   model.json profiles
-├── session  tree-shaped session persistence (session.json)
+├── session  tree-shaped session persistence (.rusti/sessions/NAME.json)
 ├── tree     interactive session tree browser (ANSI TUI / plain list)
 └── ai_core  agent loop, LLM client, tool dispatch, event system
     ├── llm    reqwest SSE streaming client
