@@ -1,7 +1,7 @@
 #!/bin/sh
 # Enforces harness/memory/commit-is-not-session-end.md: a commit that changes anything
-# outside harness/ must also update harness/progress.md and harness/memory/journal.md in
-# the same commit, not afterward. See templates/index.md for what installs this.
+# outside harness/ must also add a harness/progress/ entry and a harness/memory/journal/ entry
+# in the same commit, not afterward; the closed harness/progress.md and harness/memory/journal.md do not count. See templates/index.md for what installs this.
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 
@@ -19,8 +19,8 @@ fi
 echo "$staged" | grep -qv '^harness/' || exit 0
 
 missing=""
-echo "$staged" | grep -q '^harness/progress\.md$' || missing="$missing harness/progress.md"
-echo "$staged" | grep -q '^harness/memory/journal\.md$' || missing="$missing harness/memory/journal.md"
+echo "$staged" | grep -q '^harness/progress/' || missing="$missing harness/progress/<entry>.md"
+echo "$staged" | grep -q '^harness/memory/journal/' || missing="$missing harness/memory/journal/<entry>.md"
 
 if [ -n "$missing" ]; then
   echo "pre-commit: this commit changes project files but is missing:$missing" >&2

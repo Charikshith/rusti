@@ -1,5 +1,9 @@
 # Journal
 
+> Closed to new blocks after 2026-10-01. Each session writes its block as its own file,
+> `harness/memory/journal/YYYY-MM-DD-<feature-id>.md`, so parallel PRs never edit the same lines.
+> Curation reads that directory and this file together.
+
 ## 2026-04-10 — Session 1
 
 ### Built

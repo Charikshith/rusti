@@ -11,7 +11,7 @@ filter, not the codebase, and the user acted on the wrong claim.
 
 **How to apply:** Never assert a symbol, command, or feature is missing on the strength of
 a filtered `grep`. Run `rtk proxy <cmd>` for the raw output, or use the Grep tool, before
-any claim of absence — and prefer `harness/feature_list.json` as the first check for
+any claim of absence — and prefer `harness/feature_list.json` and `harness/features/` as the first check for
 "is this built?", since it is the declared source of truth.
 
 Also affects long-running commands: `rtk npx …` with a multi-line argument fails with

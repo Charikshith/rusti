@@ -31,7 +31,7 @@ Before writing code:
 2. **Read this file** completely
 3. **Read project docs if present** (`docs/ARCHITECTURE.md`, `docs/PRODUCT.md`, README, or equivalent)
 4. **Run `./init.sh`** to verify environment is healthy
-5. **Read `harness/feature_list.json`** to see current feature state. Also scan `harness/open-work.md`
+5. **Read `harness/feature_list.json` and `harness/features/`** to see current feature state. Also scan `harness/open-work.md`
    for a `cheap-parallel-win` that fits the current task before starting a fresh feature.
 6. **Read `harness/memory/index.md`** — the bounded index of lessons learned in past sessions.
    Open a topic file only when its index line looks relevant to this task.
@@ -85,18 +85,19 @@ higher one and move on. The first lazy solution that works is the right one.
 - **Match the existing style.** Consistency beats your preference.
 - **Don't refactor things that aren't broken.** The diff's best outcome is getting shorter.
 - **If you notice unrelated dead code or issues**, add one line to `harness/open-work.md` with a
-  reason code — don't fix them in this diff. `harness/progress.md` is status; `harness/open-work.md` is
+  reason code — don't fix them in this diff. `harness/progress/` is status; `harness/open-work.md` is
   work another session can pick up.
 - **Remove only the imports, variables, or functions that YOUR changes made unused.**
   Do NOT remove pre-existing dead code unless asked.
 - **The test:** Every changed line should trace directly to the feature in
-  `harness/feature_list.json`.
+  `harness/feature_list.json` or `harness/features/`.
 
 ## Working Rules
 
-- **One feature at a time**: Pick exactly one unfinished feature from `harness/feature_list.json`
+- **One feature at a time**: Pick exactly one unfinished feature from `harness/feature_list.json` or `harness/features/`
 - **Verification required**: Don't claim done without running verification commands
-- **Update artifacts**: Before ending session, update `harness/progress.md` and `harness/feature_list.json`
+- **Update artifacts**: Before ending session, add your `harness/progress/` entry and your feature's file
+  (see End of Session)
 - **Stay in scope**: Don't modify files unrelated to the current feature
 - **Leave clean state**: Next session must be able to run `./init.sh` immediately
 
@@ -115,10 +116,13 @@ read it in — so `harness/progress.md` means that, even when you are already in
 
 - `AGENTS.md` — this file (or `CLAUDE.md`)
 - `init.sh` — Standard startup and verification path
-- `harness/feature_list.json` — Feature state tracker (source of truth)
-- `harness/progress.md` — Session continuity log
+- `harness/feature_list.json` — Feature state tracker (source of truth), closed at feat-084;
+  each newer feature is its own file in `harness/features/`
+- `harness/progress.md` — Session continuity log, closed 2026-10-01; newer sessions are one
+  file each in `harness/progress/`
 - `harness/memory/index.md` — Bounded index of lessons learned; topic files alongside it
-- `harness/memory/journal.md` — Append-only session friction log; the input to curation
+- `harness/memory/journal.md` — Session friction log, the input to curation; closed 2026-10-01,
+  newer blocks are one file each in `harness/memory/journal/`
 - `harness/open-work.md` — Work seen but declined under scope discipline; recruitable
 - `harness/session-handoff.md` — Must exist; *filling it in* is what's optional, and only
   worth it for larger sessions. The file being present is scored, so deleting it because a
@@ -140,7 +144,7 @@ read it in — so `harness/progress.md` means that, even when you are already in
 ## Memory
 
 Memory is what was **learned**, not where the work stopped. Status belongs in
-`harness/progress.md` and `harness/feature_list.json`; lessons belong in `harness/memory/`. Keeping these
+`harness/progress/` and `harness/features/` (older: `harness/progress.md`, `harness/feature_list.json`); lessons belong in `harness/memory/`. Keeping these
 separate is the whole point — a bookmark is not a lesson.
 
 - **Read `harness/memory/index.md` every session**; it is the always-on index. Topic files are
@@ -158,7 +162,7 @@ separate is the whole point — a bookmark is not a lesson.
 - **The highest-value lesson is a correction from the user.** When corrected, write it down.
 - **Scope**: project-specific lessons live here. Preferences that apply across all
   projects belong in your agent runtime's user-level memory, not in this repo.
-- **`harness/memory/journal.md` is not a lesson store.** It is the raw append-only log of
+- **`harness/memory/journal/` (and the closed `harness/memory/journal.md`) is not a lesson store.** It is the raw append-only log of
   session friction — the corpus curation reads to find patterns. Lessons are the
   distilled output; the journal is the evidence they came from.
 - **Before proposing a library, refactor, or rewrite, read `harness/memory/graveyard.md`.** It
@@ -177,7 +181,7 @@ so it competes with no task for attention.
 - **Curation cadence**: every ~10 sessions, or weekly, or when `harness/memory/index.md` passes
   160 lines (80% of cap). A pattern needs several sessions to exist; running this after
   every session produces noise and trains you to skim.
-- **Input**: `harness/memory/journal.md` (the friction log) read against `harness/memory/index.md` and
+- **Input**: `harness/memory/journal/` plus `harness/memory/journal.md` (the friction log) read against `harness/memory/index.md` and
   its topic files, plus `harness/memory/graveyard.md`. Look for exactly five things: a lesson that
   recurs in the journal but is missing from the store, two lessons that contradict, a lesson
   nothing referenced, a lesson now contradicted by reality, and a graveyard route that
@@ -217,19 +221,25 @@ A feature is done only when ALL of the following are true:
 - [ ] For bugs: a reproduction test was written FIRST, then made to pass
 - [ ] For features: a verification check was written FIRST, then the code
 - [ ] Required verification actually ran and passed (tests / lint / type-check)
-- [ ] Evidence recorded in `harness/feature_list.json` or `harness/progress.md`
+- [ ] Evidence recorded in the feature's `harness/features/` file or its `harness/progress/` entry
 - [ ] Repository remains restartable from standard startup path
 
 ## End of Session
 
 Before ending a session:
 
-1. Update `harness/progress.md` with current state
-2. Update `harness/feature_list.json` with new feature status
+1. Write `harness/progress/YYYY-MM-DD-<feature-id>.md` with current state. Never append to
+   the closed `harness/progress.md`: one file per session is what keeps parallel PRs from
+   conflicting.
+2. Record the feature's status in its own file, `harness/features/<feature-id>.json`. A new
+   feature's id is `feat-<slug>` (a short kebab-case name, e.g. `feat-session-export`), never
+   the next number, so two parallel PRs cannot take the same id; the file name is the id.
+   `./init.sh` checks that; `./harness/check-merge-safe.sh` (on demand) proves two parallel
+   features merge without conflict.
 3. Record any unresolved risks or blockers
-4. **Append one dated block to `harness/memory/journal.md`** — 3-5 lines, no prose: what you
-   had to look up, what surprised you, any correction you received, what you would do
-   differently. This is the sole input to curation. Never rewrite an earlier block.
+4. **Write one dated block as `harness/memory/journal/YYYY-MM-DD-<feature-id>.md`** — 3-5 lines,
+   no prose: what you had to look up, what surprised you, any correction you received, what you
+   would do differently. This is the sole input to curation. Never rewrite an earlier block.
 5. **If a lesson is already clearly durable**, do the two-step save now: write
    `harness/memory/<slug>.md`, then append a one-line pointer to `harness/memory/index.md`. A user
    correction always qualifies. Otherwise leave it in the journal for curation to find.
@@ -263,4 +273,4 @@ If you encounter:
 - **Unclear or over-specified requirements**: Check product/requirements docs if present,
   otherwise ask user. Question whether the spec itself is over-specified.
 - **Repeated test failures**: Update progress, flag for human review
-- **Scope ambiguity**: Re-read `harness/feature_list.json` for definition of done
+- **Scope ambiguity**: Re-read the feature's entry (`harness/feature_list.json` or `harness/features/`) for definition of done

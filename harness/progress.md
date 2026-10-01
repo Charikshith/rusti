@@ -1,5 +1,9 @@
 # Progress: rusti
 
+> Closed to new entries after 2026-10-01. Each session writes its own file,
+> `harness/progress/YYYY-MM-DD-<feature-id>.md`, so parallel PRs never edit the same lines.
+> Read the newest few there first, then this file for older history.
+
 ## Current State
 **Phase**: MVP Complete — Agent Live-Tested
 **Last Verified**: 2026-09-09 (cargo build --release 0 warnings, cargo test 13 passed, --self-test with and without ripgrep on PATH, ./init.sh)
