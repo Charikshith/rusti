@@ -57,7 +57,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
    - rusti has plain one-shot text output only. `--json` is an open-work item.
 5. **Message queueing while the agent runs.**
    - Pi: Enter queues a steering message, Alt+Enter queues a follow-up, and Alt+Up pulls queued messages back into the editor (`docs/usage.md:36-40`, `docs/keybindings.md`).
-   - rusti: open-work "Follow-Up Queue".
+   - rusti: the same steer / follow-up / dequeue set, with Ctrl+Q for follow-up because Alt+Enter is its newline key (feat-queue-while-working, `tui/app.rs`). Steers all go at once; follow-ups one at a time.
 6. **Session tooling.**
    - Pi has `/fork`, `/clone`, HTML export, `/share` to a gist, `/import`, branch summaries on `/tree`, and deleting sessions from the picker (`docs/sessions.md`, `docs/slash-commands.md`).
    - rusti has the tree, resume, rename, /new and markdown export.
@@ -100,7 +100,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Thinking display | **yes**: italic block; Ctrl+T folds it, keeping a two-row live preview, saved as `hide_thinking` (feat-080, `tui/render.rs`) | **yes**: Ctrl+T collapse, `hideThinkingBlock` | Pi also toggles one block by click |
 | Themes | **yes**: 15 built-in palettes, `/themes`, `light` flag (`tui/theme.rs`) | **yes**: system, dark and light themes plus custom JSON with hot reload (`docs/themes.md`) | Pi's are user-authored |
 | Image input | **partial**: clipboard paste to a file path, `read_file` attaches it; last hop unverified (feat-061/062) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi direct; rusti goes through a tool call |
-| Queue while streaming | **no**: open-work "Follow-Up Queue" | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Notable gap |
+| Queue while streaming | **yes**: steer (Enter), follow-up (Ctrl+Q), dequeue (Alt+Up / Alt+Q, and Esc) (feat-queue-while-working, `tui/app.rs`) | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Pi's follow-up key is Alt+Enter, rusti's newline key; Pi delivers steers one at a time by default |
 | Footer | **yes**: plan, session, model, branch, tokens, ctx %, cache %; toggled with `/settings` (`tui/app.rs`) | **yes**: cwd, session, tokens, cache, cost, ctx, model | Pi shows cost |
 | Clipboard copy of reply | **no** (open-work, low priority) | **yes**: `/copy` | |
 | Extension UI (widgets, overlays) | **no** | **yes** (`docs/tui.md`) | |
@@ -259,7 +259,6 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
   - thinking-level control
   - any extension, skill or template mechanism
   - JSON, RPC and SDK output
-  - the steer and follow-up queue
   - manual `/compact` and cost display
 - **Where rusti is ahead of Pi's core:**
   - safety by default: gate, plan mode, write guard, undo

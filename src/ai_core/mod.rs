@@ -33,6 +33,7 @@ pub enum Event {
     Ask { question: String, choices: Vec<(String, String)>, reply: tokio::sync::oneshot::Sender<String> },
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
     Reload { exe: String, args: Vec<String> },   // TUI /reload: new binary built, ready to relaunch
+    Delivered(String),                           // queued steer text just joined the conversation
 }
 
 /// Optional front-end sink. When set, the agent sends Events instead of
@@ -89,6 +90,7 @@ pub(crate) fn emit(ev: Event) {
             Event::Tree(_) | Event::Prefill(_) | Event::Git(_) => {} // TUI-only
             Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end
+            Event::Delivered(_) => {}  // only the TUI queues steers
         },
     }
 }
@@ -488,6 +490,27 @@ pub fn allow_from_config(names: &[String]) {
     }
 }
 
+/// Messages typed while the agent works (Enter mid-turn). run_agent takes them
+/// after a tool batch; what is left when a task ends the TUI runs as a follow-up.
+static STEER: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub fn steer(text: String) {
+    STEER.lock().unwrap().push(text);
+}
+
+/// Everything queued, removed: delivery, Alt+Up, Esc and task end all empty it.
+pub fn take_steers() -> Vec<String> {
+    std::mem::take(&mut *STEER.lock().unwrap())
+}
+
+pub fn steers() -> Vec<String> {
+    STEER.lock().unwrap().clone()
+}
+
+/// Serializes the tests that touch the global STEER queue.
+#[cfg(test)]
+pub static STEER_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// One level of delegation: a fresh session under .rusti/sessions/, same tools, same cap.
 static DEPTH: AtomicUsize = AtomicUsize::new(0);
 
@@ -608,6 +631,15 @@ pub async fn run_agent(
 This message carries that file as an image part.                  If you cannot actually see it, say so — do not describe it from                  the path, the file size, or the conversation."));
             ie.image = Some(url);
             session.add(ie, Some(parent));
+        }
+        // steers go here for the same reason as the image, all at once as one
+        // user entry; a sub-agent leaves them for its parent, an interrupted
+        // turn for the TUI's follow-up queue
+        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) { take_steers() } else { vec![] };
+        if !steered.is_empty() {
+            let text = steered.join("\n\n");
+            session.add(Entry::new("user", text.clone()), session.active.clone());
+            emit(Event::Delivered(text));
         }
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
@@ -1291,3 +1323,59 @@ branch: "), "{c2}");
         assert!(!system_prompt().contains("# Plan mode"));
     }
 
+
+    /// A steer typed mid-turn joins the conversation after the WHOLE tool
+    /// batch, as one user entry, and the next request carries it there: one
+    /// landing between two results would orphan the second call (feat-026).
+    #[test]
+    fn a_steer_lands_after_every_tool_result() {
+        use std::io::{Read, Write};
+        let _q = STEER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel::<Value>();
+        std::thread::spawn(move || {
+            let call = |i: u32| format!(
+                "{{\"index\":{i},\"id\":\"c{i}\",\"type\":\"function\",\"function\":{{\"name\":\"list_dir\",\"arguments\":\"{{\\\"path\\\":\\\"src\\\"}}\"}}}}");
+            let tool = format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{},{}]}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n",
+                call(0), call(1));
+            let done = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_string();
+            for (n, s) in listener.incoming().take(2).enumerate() {
+                let mut s = s.unwrap();
+                let mut req = Vec::new();
+                let mut buf = [0u8; 65536];
+                let body = loop {
+                    let k = s.read(&mut buf).unwrap();
+                    req.extend_from_slice(&buf[..k]);
+                    let Some(h) = req.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                    let head = String::from_utf8_lossy(&req[..h]).to_lowercase();
+                    let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                    if req.len() >= h + 4 + len {
+                        break serde_json::from_slice::<Value>(&req[h + 4..h + 4 + len]).unwrap();
+                    }
+                };
+                tx.send(body).unwrap();
+                let sse = if n == 0 { &tool } else { &done };
+                s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}", sse.len()).as_bytes()).unwrap();
+            }
+        });
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
+        let path = std::env::temp_dir().join(format!("rusti_steer_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        take_steers();
+        steer("use tabs".into());
+        steer("and run the tests".into()); // queued while the first request streams
+        let r = rt.block_on(run_agent(&client, &mut session, "task", &AtomicBool::new(false)));
+        std::fs::remove_file(&path).ok();
+        assert_eq!(r.unwrap(), "ok");
+        assert!(steers().is_empty(), "delivered, so nothing is left for a follow-up");
+
+        let (first, second) = (rx.recv().unwrap(), rx.recv().unwrap());
+        assert_eq!(first["messages"].as_array().unwrap().len(), 2, "not sent before the batch: system, task");
+        let roles: Vec<&str> = second["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "tool", "tool", "user"]);
+        assert_eq!(second["messages"][5]["content"], "use tabs\n\nand run the tests", "all queued, as one entry");
+    }

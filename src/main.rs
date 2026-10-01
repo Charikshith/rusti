@@ -66,6 +66,9 @@ slash commands (--tui)
   !CMD            run a shell command, output streamed; it goes to the model too
   !!CMD           the same, but the output is shown to you only
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
+  enter (working) steer: sent after the current tool calls
+  ctrl+q          follow-up: run as its own task when this one ends
+  alt+up / alt+q  queued messages back into the draft (esc does too)
   ctrl+t          hide/show the model's thinking (saved as \"hide_thinking\" in config.json)
 ";
 
