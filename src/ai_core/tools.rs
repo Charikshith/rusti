@@ -201,8 +201,8 @@ fn truncate_lines(s: &str, path: &str, offset: usize, limit: usize, max: usize) 
     if full && shown == 0 {
         let n = start + 1;
         let len = s.split_inclusive('\n').nth(start).map_or(0, str::len);
-        return format!("[Line {n} is {} KB, over the {} KB read limit. Use run_command: sed -n '{n}p' {path} | head -c {max}]",
-            len / 1024, max / 1024);
+        return format!("[Line {n} is {} KB, over the {} KB read limit. Use run_command: sed -n '{n}p' '{path}' | head -c {}]",
+            len / 1024, max / 1024, max.min(MAX_RESULT));
     }
     if shown == 0 && !raw {
         return format!("(no lines at offset {offset}; file has {total} lines)");
@@ -998,7 +998,11 @@ mod tests {
     fn read_cap_long_line_points_at_sed() {
         let s = format!("short\n{}\nafter\n", "x".repeat(3000));
         assert_eq!(truncate_lines(&s, "big.min.js", 2, 0, 2048),
-            "[Line 2 is 2 KB, over the 2 KB read limit. Use run_command: sed -n '2p' big.min.js | head -c 2048]");
+            "[Line 2 is 2 KB, over the 2 KB read limit. Use run_command: sed -n '2p' 'big.min.js' | head -c 2048]");
+        // run_command caps its output at MAX_RESULT, so the hint never asks for more
+        let huge = format!("{}\n", "x".repeat(60 * 1024));
+        assert_eq!(truncate_lines(&huge, "My Project/a.min.js", 0, 0, 50 * 1024),
+            format!("[Line 1 is 60 KB, over the 50 KB read limit. Use run_command: sed -n '1p' 'My Project/a.min.js' | head -c {MAX_RESULT}]"));
         // reading from the top shows what fits, then points at the long line
         assert!(truncate_lines(&s, "f", 0, 0, 2048).ends_with("[Showing lines 1-1 of 3. Use offset=2 to continue.]"));
     }
