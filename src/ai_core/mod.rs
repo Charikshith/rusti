@@ -695,7 +695,7 @@ pub fn self_test() {
         for s in listener.incoming() {
             let mut s = s.unwrap();
             let mut buf = [0u8; 65536];
-            s.read(&mut buf).unwrap();
+            assert!(s.read(&mut buf).unwrap() > 0, "empty request");
             n += 1;
             if n == 1 {
                 // transient failure first: the client must retry, not give up
