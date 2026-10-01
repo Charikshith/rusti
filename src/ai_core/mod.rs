@@ -1439,7 +1439,7 @@ branch: "), "{c2}");
     fn typed_images_attach_unless_the_profile_has_no_vision() {
         let png = concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png").to_string();
         let mut u = Entry::new("user", format!("what is @{png}"));
-        attach(&mut u, &[png.clone()]);
+        attach(&mut u, std::slice::from_ref(&png));
         let m = u.to_message();
         assert_eq!(m["content"][0]["type"], "text");
         assert!(m["content"][0]["text"].as_str().unwrap().contains("is attached to this message as an image"));
@@ -1448,7 +1448,7 @@ branch: "), "{c2}");
 
         tools::set_vision(false);
         let mut blind = Entry::new("user", "x".into());
-        attach(&mut blind, &[png.clone()]);
+        attach(&mut blind, std::slice::from_ref(&png));
         let (ok, why) = tools::read_file(&png, 0, 0);
         tools::set_vision(true);
         assert!(blind.images.is_empty() && blind.context.is_none(), "nothing sent, nothing claimed");
