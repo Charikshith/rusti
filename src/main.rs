@@ -134,7 +134,7 @@ fn main() {
     let found = config::gated(here);
     let mut ask = |q: &str| Some(prompt(q, ""));
     let interactive = tui_mode && is_terminal::is_terminal(std::io::stdin());
-    let ask: Option<&mut dyn FnMut(&str) -> Option<String>> = if interactive { Some(&mut ask) } else { None };
+    let ask: Option<&mut config::Ask<'_>> = if interactive { Some(&mut ask) } else { None };
     let trusted = config::decide_trust(here, &config::trust_path(), &found, args.iter().any(|a| a == "--trust"), ask);
     config::set_trusted(trusted);
     if !trusted && !found.is_empty() {

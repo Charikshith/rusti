@@ -54,7 +54,7 @@ fn trust_key(dir: &std::path::Path) -> String {
 
 /// `dir` was answered Always before.
 pub fn always_trusted(trust_file: &std::path::Path, dir: &std::path::Path) -> bool {
-    read_obj(&trust_file.to_string_lossy()).map_or(false, |m| m.get(&trust_key(dir)) == Some(&serde_json::Value::Bool(true)))
+    read_obj(&trust_file.to_string_lossy()).is_ok_and(|m| m.get(&trust_key(dir)) == Some(&serde_json::Value::Bool(true)))
 }
 
 /// Record an Always answer. A trust.json that does not parse is left alone.
@@ -68,6 +68,9 @@ pub fn save_trust(trust_file: &std::path::Path, dir: &std::path::Path) -> Result
     write_obj(&path, m)
 }
 
+/// The interactive trust question: prompt text in, answer out.
+pub type Ask<'a> = dyn FnMut(&str) -> Option<String> + 'a;
+
 /// Decide trust for `dir`. `found` is `gated(dir)`; `ask` is the interactive
 /// question, None for piped and one-shot runs, which stay untrusted unless
 /// `flag` (--trust). --yolo is not an input on purpose: skipping prompts for
@@ -77,7 +80,7 @@ pub fn decide_trust(
     trust_file: &std::path::Path,
     found: &[String],
     flag: bool,
-    ask: Option<&mut dyn FnMut(&str) -> Option<String>>,
+    ask: Option<&mut Ask<'_>>,
 ) -> bool {
     if flag || always_trusted(trust_file, dir) {
         return true;
