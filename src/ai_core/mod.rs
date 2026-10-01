@@ -1140,7 +1140,7 @@ pub fn self_test() {
         assert!(on.contains(PLAN_ON) && !on.contains(PLAN_OFF));
         let off = turn_context(false, true).unwrap();
         assert!(off.contains(PLAN_OFF) && !off.contains(PLAN_ON));
-        assert!(turn_context(false, false).map_or(true, |c| !c.contains("# Plan mode")));
+        assert!(turn_context(false, false).is_none_or(|c| !c.contains("# Plan mode")));
         assert!(!system_prompt().contains("# Plan mode"));
     }
 
