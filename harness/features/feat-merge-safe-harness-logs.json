@@ -1,0 +1,13 @@
+{
+  "id": "feat-merge-safe-harness-logs",
+  "name": "Merge-safe harness logs: one file per feature, session and journal block; slug ids",
+  "description": "Parallel feature PRs all appended to the same place in harness/feature_list.json, harness/progress.md and harness/memory/journal.md and took the same next sequential id (feat-081, feat-083 twice each in rusti #5-#9). Those three files are now closed (existing entries kept in place); each new feature is harness/features/feat-<slug>.json, each session's progress is harness/progress/YYYY-MM-DD-<feature-id>.md and its journal block harness/memory/journal/YYYY-MM-DD-<feature-id>.md. Ids are kebab slugs, not the next number. .githooks/pre-commit accepts the new paths; AGENTS.md, init.sh and the closed files' headers describe the convention.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "harness/check-merge-safe.sh (run by ./init.sh) builds a temp repo from the current harness, commits two features from the same base through .githooks/pre-commit, merges both with no conflict, and confirms the old shared-append convention does conflict. With the previous pre-commit hook it fails ('pre-commit hook rejected a convention-following commit'). ./init.sh passed.",
+  "decisions": [
+    "Closed the three files instead of splitting the 84 existing features and ~100 sessions into files: nothing moves, so nothing can be lost, and the scored required files stay valid. Old entries may still be edited in place.",
+    "The file name is the id, so a duplicate id is an add/add conflict git reports instead of a silent collision.",
+    "harness/open-work.md and harness/memory/index.md still have shared append points; out of scope, they conflicted less."
+  ]
+}

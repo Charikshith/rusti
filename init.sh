@@ -42,13 +42,16 @@ if [ -f "$ENV_CONTRACT" ]; then
   fi
 fi
 
+echo "=== harness merge-safety check ==="
+./harness/check-merge-safe.sh
+
 echo "=== cargo test ==="
 cargo test
 
 echo "=== Verification Complete ==="
 echo ""
 echo "Next steps:"
-echo "1. Read harness/feature_list.json to see current feature state"
+echo "1. Read harness/feature_list.json and harness/features/ to see current feature state"
 echo "2. Pick ONE unfinished feature to work on"
 echo "3. Implement only that feature"
 echo "4. Re-run verification before claiming done"

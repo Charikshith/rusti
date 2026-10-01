@@ -3,7 +3,8 @@
     "type": "state",
     "title": "rusti Feature Tracker",
     "description": "Tracks feature status for the rusti Rust coding agent",
-    "artifact": "harness/feature_list.json"
+    "artifact": "harness/feature_list.json",
+    "closed": "Holds feat-001 to feat-084 only. Add each new feature as its own file, harness/features/feat-<slug>.json, holding one feature object whose id is the file name (e.g. harness/features/feat-session-export.json). Parallel PRs then never edit the same lines or take the same id. Updating an existing entry here in place is fine."
   },
   "features": [
     {
