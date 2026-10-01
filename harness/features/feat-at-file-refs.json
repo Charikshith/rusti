@@ -1,0 +1,14 @@
+{
+  "id": "feat-at-file-refs",
+  "name": "Editor: @ file references and Tab path completion (F01)",
+  "description": "Typing @ at a token boundary (line start, whitespace, ( [ or a quote) opens the menu panel as a file picker over the project: rg --files (honours .gitignore) or the SKIP_DIRS walk, indexed on a background thread once per draft with an 'indexing files…' row, capped at 50,000 files, dropped when a turn ends. Pi's scoring (name equal 100, prefix 80, substring 50, path 30, folder +10; shallower then shorter wins), top 20, a query with '/' scoped to that folder. Tab/Enter insert @path (folder: @dir/ and the picker stays open; spaces: @\"a b\"), Esc dismisses like the slash menu. Tab with no menu completes the path before the cursor: case-insensitive prefix, folders first, ~ is home, \ shown as /; one match inline, several fill the shared start and open the list, none says 'no match'. @path stays literal text on submit (D1); the system prompt says '@path in a user message names a file; read it.'",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: tui::app::tests at_token_starts_only_at_a_word_boundary, at_picker_ranks_files_and_scopes_to_a_folder, accepting_an_at_row_inserts_the_reference, tab_completes_the_path_before_the_cursor; ai_core::tools::tests project_files_lists_files_and_their_folders, walk_follows_links_only_when_asked. ./init.sh passed.",
+  "decisions": [
+    "The menu panel's rows are one enum (Item::Cmd | Item::Path{start, insert}); an @ row and a Tab row differ only in what they insert, so accepting is one replace_span.",
+    "Rows are cached in App.menu and recomputed by sync_menu only when what they depend on changed, so a 50,000-file score runs once per edit, not per frame.",
+    "No match for an @ token shows nothing rather than a 'nothing matches' row, so a decorator or a handle at a word start stays quiet.",
+    "Image attach through @ (F03) is not built; an F03 PR can resolve @ tokens on submit with at_token's quoting rules."
+  ]
+}

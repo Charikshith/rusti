@@ -28,13 +28,13 @@ Where: tui/mod.rs word_wrap()
 ## TUI Experience Gaps (from pi comparison, 2026-04-10 session)
 
 ### Editor Autocomplete
-When: Typing speed matters; model/file names not discoverable (slash commands done)
-What: Fuzzy autocomplete in input for saved model names and file paths
-Where: tui/app.rs input handling (fd/fuzzy lib or lazy prefix match)
+When: Typing speed matters; model names not discoverable (slash commands, `@` files and Tab paths done in feat-at-file-refs)
+What: Autocomplete for saved model names (argument completion, see below)
+Where: tui/app.rs menu_items
 
 ### Slash-Menu Follow-ups (prototype parity landed 2026-09-09)
 When: The menu exists (`/` opens it) but only completes command names
-What: Extend the same panel to saved model names and file paths; the commands
+What: Extend the same panel to saved model names (file paths landed in feat-at-file-refs); the commands
 it still lists as `· soon` (/plan /test /export /session) are the items below
 Where: tui/app.rs filter_cmds/menu_items, tui/render.rs panel_rows
 

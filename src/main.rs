@@ -70,6 +70,8 @@ slash commands (--tui)
   ctrl+q          follow-up: run as its own task when this one ends
   alt+up / alt+q  queued messages back into the draft (esc does too)
   ctrl+t          hide/show the model's thinking (saved as \"hide_thinking\" in config.json)
+  @PATH           pick a project file to name in the message (the model reads it)
+  tab             complete the path before the cursor
 ";
 
 fn main() {
