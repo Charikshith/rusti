@@ -67,7 +67,7 @@ pub enum Item {
 }
 
 /// Everything menu_items reads besides the pick/ask state, which forces a refresh.
-type MenuKey = (String, usize, bool, Option<String>, Option<String>);
+type MenuKey = (String, usize, bool, Option<(String, usize)>, Option<String>);
 
 /// `@` picker rows shown at most, and files indexed at most.
 const FILE_ROWS: usize = 20;
@@ -84,8 +84,8 @@ pub fn menu_items(app: &App) -> Vec<Item> {
     if !cmds.is_empty() {
         return cmds.into_iter().map(Item::Cmd).collect();
     }
-    if let Some((input, items)) = &app.tab {
-        if *input == app.input {
+    if let Some((input, cursor, items)) = &app.tab {
+        if *input == app.input && *cursor == app.cursor {
             return items.clone();
         }
     }
@@ -237,7 +237,7 @@ fn tab_complete(app: &mut App) {
                 .iter()
                 .map(|f| Item::Path { start, insert: done(f), path: f.0.clone(), dir: f.1 })
                 .collect();
-            app.tab = Some((app.input.clone(), items));
+            app.tab = Some((app.input.clone(), app.cursor, items));
         }
     }
 }
@@ -360,7 +360,7 @@ pub struct App {
     pub files: Option<Vec<(String, bool)>>,
     pub index: Option<Receiver<Vec<(String, bool)>>>,
     /// The list a Tab opened, valid while the input is still what it filled in.
-    pub tab: Option<(String, Vec<Item>)>,
+    pub tab: Option<(String, usize, Vec<Item>)>,
 }
 
 /// Prefix on a transcript row that is present but not drawn until Ctrl+O.
@@ -430,7 +430,7 @@ impl App {
             self.index = Some(rx);
         }
         let key = (self.input.clone(), self.cursor, self.files.is_some(),
-                   self.tab.as_ref().map(|t| t.0.clone()), self.menu_off.clone());
+                   self.tab.as_ref().map(|t| (t.0.clone(), t.1)), self.menu_off.clone());
         if key != self.menu_key || self.pick.is_some() || self.ask.is_some() {
             self.menu = menu_items(self);
             self.menu_key = key;
@@ -1733,6 +1733,12 @@ mod tests {
         a.sync_menu();
         let rows: Vec<String> = a.menu.iter().map(|i| match i { Item::Path { insert, .. } => insert.clone(), _ => panic!() }).collect();
         assert_eq!(rows, vec![format!("{base}/Notes/"), format!("{base}/notes.txt ")], "folders first");
+        let end = a.cursor;
+        a.cursor = 0;
+        a.sync_menu();
+        assert!(a.menu.is_empty(), "moving the cursor closes the list, so it cannot splice at a stale start");
+        a.cursor = end;
+        a.sync_menu();
         let Item::Path { start, insert, .. } = a.menu[1].clone() else { panic!() };
         accept_path(&mut a, start, &insert);
         assert_eq!(a.input, format!("cat {base}/notes.txt "));
