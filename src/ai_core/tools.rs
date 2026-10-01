@@ -152,28 +152,67 @@ fn read_image(path: &str, mime: &'static str) -> (bool, String) {
     (true, format!("attached {path} ({mime}, {size}) — it follows as an image"))
 }
 
+/// Lines and bytes one read_file returns before it stops and says where to go
+/// on. Every result is re-sent each turn until compaction, so a read is not a
+/// one-off cost; the notice keeps a cut lossless to page through.
+const READ_LINES: usize = 2000;
+static READ_MAX: AtomicUsize = AtomicUsize::new(50 * 1024);
+
+/// The `read_max_bytes` setting; 0 lifts both caps.
+pub fn set_read_max(n: usize) {
+    READ_MAX.store(n, Ordering::Relaxed);
+}
+
 pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
     if let Some(mime) = image_mime(path) {
         return read_image(path, mime);
     }
     match std::fs::read_to_string(path) {
-        Ok(s) => {
-            if offset <= 1 && limit == 0 {
-                return (true, truncate(&s, MAX_RESULT));
-            }
-            let start = offset.saturating_sub(1);
-            let take = if limit == 0 { usize::MAX } else { limit };
-            let mut out = String::new();
-            for (i, l) in s.lines().skip(start).take(take).enumerate() {
-                out.push_str(&format!("{}: {l}\n", start + i + 1));
-            }
-            if out.is_empty() {
-                out = format!("(no lines at offset {offset}; file has {} lines)", s.lines().count());
-            }
-            (true, truncate(&out, MAX_RESULT))
-        }
+        Ok(s) => (true, truncate_lines(&s, path, offset, limit, READ_MAX.load(Ordering::Relaxed))),
         Err(e) => (false, format!("error reading {path}: {e}")),
     }
+}
+
+/// The read_file slice of `s`, cut at READ_LINES lines or `max` bytes
+/// (0 = no cap), whichever comes first. Whole-file reads stay raw (CRLF and
+/// a missing last newline included) so a small file reads back verbatim;
+/// ranged ones prefix line numbers.
+fn truncate_lines(s: &str, path: &str, offset: usize, limit: usize, max: usize) -> String {
+    let raw = offset <= 1 && limit == 0;
+    let total = s.lines().count();
+    let start = offset.saturating_sub(1);
+    let (max_lines, max) = if max == 0 { (usize::MAX, usize::MAX) } else { (READ_LINES, max) };
+    let take = if limit == 0 { max_lines } else { limit.min(max_lines) };
+    let mut out = String::new();
+    let mut shown = 0;
+    let mut full = false; // stopped by the byte cap, not the line count
+    for (i, l) in s.split_inclusive('\n').skip(start).take(take).enumerate() {
+        let line = if raw { l.to_string() } else {
+            let l = l.strip_suffix('\n').unwrap_or(l);
+            format!("{}: {}\n", start + i + 1, l.strip_suffix('\r').unwrap_or(l))
+        };
+        if out.len() + line.len() > max {
+            full = true;
+            break;
+        }
+        out.push_str(&line);
+        shown += 1;
+    }
+    if full && shown == 0 {
+        let n = start + 1;
+        let len = s.split_inclusive('\n').nth(start).map_or(0, str::len);
+        return format!("[Line {n} is {} KB, over the {} KB read limit. Use run_command: sed -n '{n}p' '{path}' | head -c {}]",
+            len / 1024, max / 1024, max.min(MAX_RESULT));
+    }
+    if shown == 0 && !raw {
+        return format!("(no lines at offset {offset}; file has {total} lines)");
+    }
+    let end = start + shown;
+    // the model's own limit is not a cut; the caps are
+    if end < total && (full || shown == max_lines && limit != shown) {
+        out.push_str(&format!("\n[Showing lines {}-{end} of {total}. Use offset={} to continue.]", start + 1, end + 1));
+    }
+    out
 }
 
 // ---- undo ------------------------------------------------------------------
@@ -182,6 +221,10 @@ pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
 
 /// Before-images for the current turn, oldest first. None = the file did not exist.
 static UNDO: Mutex<Vec<(String, Option<Vec<u8>>)>> = Mutex::new(Vec::new());
+
+/// Held by every test that writes through the tools, so parallel tests don't share UNDO.
+#[cfg(test)]
+pub(crate) static UNDO_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn undo_begin_turn() {
     UNDO.lock().unwrap().clear();
@@ -925,6 +968,52 @@ pub fn truncate(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
+    /// A cut read must say exactly where it stopped and how to go on, or the
+    /// model cannot page the rest of the file.
+    #[test]
+    fn read_cap_names_the_next_offset() {
+        let big: String = (1..=5000).map(|i| format!("l{i}\n")).collect();
+        // line cap: a whole-file read stays raw and stops at 2000 lines
+        let out = truncate_lines(&big, "f", 0, 0, 50 * 1024);
+        assert!(out.starts_with("l1\nl2\n") && out.contains("l2000\n") && !out.contains("l2001"));
+        assert!(out.ends_with("\n[Showing lines 1-2000 of 5000. Use offset=2001 to continue.]"), "{out}");
+        // following the notice picks up exactly there
+        let out = truncate_lines(&big, "f", 2001, 0, 50 * 1024);
+        assert!(out.starts_with("2001: l2001\n"));
+        assert!(out.ends_with("[Showing lines 2001-4000 of 5000. Use offset=4001 to continue.]"), "{out}");
+        // the last page has nothing left to point at
+        assert!(!truncate_lines(&big, "f", 4001, 0, 50 * 1024).contains("Showing"));
+        // byte cap: 30 bytes hold nine 3-byte lines, and l10 would overflow
+        let out = truncate_lines(&big, "f", 0, 0, 30);
+        assert!(out.ends_with("l9\n\n[Showing lines 1-9 of 5000. Use offset=10 to continue.]"), "{out}");
+        // the model's own limit is not a cut
+        assert_eq!(truncate_lines(&big, "f", 2, 2, 50 * 1024), "2: l2\n3: l3\n");
+        // a small file reads back byte for byte, CRLF and missing last newline included
+        assert_eq!(truncate_lines("a\r\nb", "f", 0, 0, 50 * 1024), "a\r\nb");
+    }
+
+    /// One line over the cap returns no content at all, so the hint has to
+    /// name a command that can read it.
+    #[test]
+    fn read_cap_long_line_points_at_sed() {
+        let s = format!("short\n{}\nafter\n", "x".repeat(3000));
+        assert_eq!(truncate_lines(&s, "big.min.js", 2, 0, 2048),
+            "[Line 2 is 2 KB, over the 2 KB read limit. Use run_command: sed -n '2p' 'big.min.js' | head -c 2048]");
+        // run_command caps its output at MAX_RESULT, so the hint never asks for more
+        let huge = format!("{}\n", "x".repeat(60 * 1024));
+        assert_eq!(truncate_lines(&huge, "My Project/a.min.js", 0, 0, 50 * 1024),
+            format!("[Line 1 is 60 KB, over the 50 KB read limit. Use run_command: sed -n '1p' 'My Project/a.min.js' | head -c {MAX_RESULT}]"));
+        // reading from the top shows what fits, then points at the long line
+        assert!(truncate_lines(&s, "f", 0, 0, 2048).ends_with("[Showing lines 1-1 of 3. Use offset=2 to continue.]"));
+    }
+
+    /// read_max_bytes = 0 is the "remove the cap" switch: no line or byte limit.
+    #[test]
+    fn read_cap_zero_reads_everything() {
+        let big: String = (1..=5000).map(|i| format!("{} {i}\n", "y".repeat(40))).collect();
+        assert_eq!(truncate_lines(&big, "f", 0, 0, 0), big);
+    }
+
     /// The whole point of the trim: report the lines that changed, not the
     /// file they live in. The append case is the one that bites — the shared
     /// tail must not be counted twice as both head and tail.
@@ -965,6 +1054,7 @@ mod tests {
     fn edit_hunks_carry_real_file_line_numbers() {
         // inside the project root: the write guard refuses anything outside it,
         // and target/ is the one place in here that is not source
+        let _undo = UNDO_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let path = "target/rusti_diff_lines.txt";
         std::fs::write(path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
 

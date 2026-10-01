@@ -999,7 +999,19 @@ through the session"):
   to the global config. HELP, readme § TUI, DOC_TOPICS updated.
 - Verification: `./init.sh`, cargo test 49 + 1 passed after merging master (one new render test, config round-trip extended).
 
-## Session 2026-10-01 (4): feat-081 — prompt caching C1+C2 (stable prefix, real usage)
+## Session 2026-10-01 (4): feat-081 — /new, auto-named sessions, undo stays in its session
+- `/new [name]` (tui/mod.rs new_session, Job::New): saves the active session, starts an empty one with the same model;
+  unnamed gets `s-YYYYMMDD-HHMM` under .rusti/sessions (session::auto_path). Bare launches use the same auto name (A2);
+  bare `--resume`/`--tree` open the latest saved session (session::latest).
+- A5: undo_begin_turn on /new and /resume only (a /tree branch keeps /undo), so /undo never restores another session's files. Todo list cleared on /new.
+- Verification: `./init.sh`, cargo test 48 passed; built binary resumed an auto-named session from an empty dir without creating ./session.json.
+
+## Session 2026-10-01 (5): feat-082 — read_file pages instead of truncating
+- read_file was cut at the shared 20 KB MAX_RESULT with a bare …[truncated]: no line count, no resume point.
+- Now 2000 lines / 50 KB per read (`truncate_lines` in tools.rs) with `[Showing lines A-B of N. Use offset=B+1 to continue.]`; a single over-cap line gets a sed hint; `read_max_bytes` sets the cap, 0 removes it. Other tools keep MAX_RESULT.
+- Verified: three new tools::tests (read_cap_*), cargo test 49 passed via ./init.sh.
+
+## Session 2026-10-01 (6): feat-083 — prompt caching C1+C2 (stable prefix, real usage)
 - `system_prompt()` lost its `# Git` and `# Plan mode` blocks. `turn_context()` builds them per turn and run_agent
   stores the result on the new user entry (`Entry.context`); `to_message` appends it after the typed text. Stored,
   so every earlier message replays byte-identically. Plan mode turning off is said once (`PLAN_OFF`), since the ON

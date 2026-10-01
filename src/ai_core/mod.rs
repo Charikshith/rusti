@@ -210,7 +210,7 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
 /// heading in readme.md; a test pins that, so a renamed heading fails CI.
 const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
 permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking (help.txt, readme.md § TUI), \
-sessions, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
+sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
 AGENTS.md (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
 /reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
@@ -600,7 +600,7 @@ pub fn tool_summary(name: &str, args: &Value) -> String {
 
 fn tool_schemas() -> Vec<Value> {
     let mut v = vec![
-        json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files. A .png/.jpg/.gif/.webp path is read as an image and attached to the conversation for you to look at.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
+        json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files. A long read is cut (by default at 2000 lines or 50 KB) and ends with the offset to continue from; keep reading from it until you have what you need. A .png/.jpg/.gif/.webp path is read as an image and attached to the conversation for you to look at.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"write_file","description":"Write content to a file, overwriting it.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}),
         json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120).","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
         json!({"type":"function","function":{"name":"edit_file","description":"Replace one exact text occurrence in a file. old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}}}),

@@ -93,7 +93,16 @@
 ## 2026-10-01 (3) - Ctrl+T thinking toggle
 - word_wrap measures bytes, so "…" and "│" count 3 each: a 30-col test wrapped the fold row; use realistic widths in tests.
 
-## 2026-10-01 (4) - prompt caching C1+C2
+## 2026-10-01 (4) - /new and auto-named sessions
+- Surprise: write_file refuses paths outside the project root, so a test that wants an undo snapshot must write a cwd-relative file (as self_test does), not one in temp_dir.
+- Surprise: no python3 on this box; bash heredocs to python fail, use the Edit tool.
+- Reused tui::app::utc_offset_min for local-time session names instead of a date crate.
+
+## 2026-10-01 (5) - read_file cap
+- Whole-file reads must stay byte-exact (CRLF, missing last newline): edit_file matches against what the model saw, so rebuilding from lines() would have broken CRLF files.
+- Repeated last session's mistake: Python-in-heredoc mangled Rust escapes again. The Edit tool first, always, for Rust.
+
+## 2026-10-01 (6) - prompt caching C1+C2
 - self_test() is not run by cargo test (only `--self-test`); a behavioural check needs its own #[test].
 - A fake server that reads one 64 KB chunk can miss the body: AGENTS.md alone puts the system prompt near 15 KB, so read to Content-Length.
 - Footer needed `#[serde(default)]` on the struct: adding a field would otherwise make every saved footer fail to parse.

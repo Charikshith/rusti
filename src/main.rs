@@ -20,9 +20,9 @@ usage: rusti [flags]              interactive terminal UI
 
 flags
   --tui                  force the UI (bare `rusti` in a terminal already opens it)
-  --session NAME         use .rusti/sessions/NAME.json instead of ./session.json
-  --resume               continue the session from its active leaf
-  --tree                 browse the session tree and branch from an earlier entry
+  --session NAME         use .rusti/sessions/NAME.json (unnamed: a new s-YYYYMMDD-HHMM)
+  --resume               continue a session (the latest unless --session names one)
+  --tree                 browse a session's tree (the latest unless --session names one)
   --url U --key K --model M   override the saved profile for this run
   --use NAME             make a saved profile the default, then exit
   --list                 list saved profiles      --add   add one interactively
@@ -50,9 +50,11 @@ allow (or whose .rusti has prompts, skills, themes or SYSTEM.md) is asked about 
 [y]es for this run, [a]lways (saved by path in ~/.rusti/trust.json), or no. Untrusted, those
 are ignored with one warning; max_iters, context, theme and footer still apply. Piped and
 one-shot runs are untrusted unless --trust.
+\"read_max_bytes\" caps one read_file (default 51200; 2000 lines either way; 0 = no cap).
 
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   list, switch and name sessions
+  /new [NAME]     start a new session here, keeping the model, plan mode and MCP servers
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
   /export         transcript to markdown      /reload           rebuild and relaunch
@@ -155,6 +157,9 @@ fn main() {
     if let Some(n) = saved.context {
         ai_core::set_context_limit(n);
     }
+    if let Some(n) = saved.read_max_bytes {
+        ai_core::tools::set_read_max(n);
+    }
 
     if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTI_YOLO").map_or(false, |v| v == "1") {
         ai_core::tools::YOLO.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -174,16 +179,22 @@ fn main() {
     let (url, key, model) = resolve_model(&args);
 
     // session + task first (so --tree can be cancelled before any model config)
-    // --session NAME → .rusti/sessions/NAME.json, else the root session.json
+    // --session NAME → .rusti/sessions/NAME.json; otherwise --resume/--tree
+    // continue the latest session and a fresh one gets an auto name, so it
+    // never overwrites the last unnamed session
+    let continuing = args.iter().any(|a| a == "--resume" || a == "--tree");
     let session_path = get(&args, "--session", "RUSTI_SESSION")
         .map(|n| session::path_for(&n))
-        .unwrap_or_else(|| session::PATH.to_string());
+        .unwrap_or_else(|| match continuing {
+            true => session::latest().unwrap_or_else(|| session::PATH.to_string()),
+            false => session::auto_path(),
+        });
     let mut session;
     let task: String;
     if args.iter().any(|a| a == "--tree") {
         session = session::Session::load_from(&session_path);
         if session.is_empty() {
-            eprintln!("no session.json to browse (run a task first)");
+            eprintln!("no saved session to browse (run a task first)");
             std::process::exit(1);
         }
         match tree::browse(&mut session) {
@@ -193,7 +204,7 @@ fn main() {
     } else if args.iter().any(|a| a == "--resume") {
         session = session::Session::load_from(&session_path);
         if session.is_empty() {
-            eprintln!("no session.json to resume (run a task first)");
+            eprintln!("no saved session to resume (run a task first)");
             std::process::exit(1);
         }
         // tui mode never uses `task` (TuiConfig doesn't take one) — skip the
