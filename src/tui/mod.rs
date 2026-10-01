@@ -427,7 +427,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                                 // a turn that failed before its first save leaves entries only in
                                 // memory; persist now so --resume finds them (and doesn't exit 1)
                                 let resume = !session.is_empty() && session.save().is_ok();
-                                // an unnamed session lives at the root session.json: no flag
+                                // only a legacy session resumed from the root session.json has no name: no flag
                                 let named = (session.path != crate::session::PATH)
                                     .then(|| crate::session::name_of(&session.path));
                                 let args = build_relaunch_args(&cli_args, &client.url, &client.key,
@@ -653,6 +653,7 @@ mod tests {
     /// model, and leaves /undo nothing of the old session's to put back (A5).
     #[test]
     fn new_session_saves_the_old_one_and_undo_cannot_reach_it() {
+        let _undo = ai_core::tools::UNDO_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tag = std::process::id();
         let old_path = crate::session::path_for(&format!("rusti-new-old-{tag}"));
         let mut s = Session::with_path("m7".into(), &old_path);

@@ -183,6 +183,10 @@ pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
 /// Before-images for the current turn, oldest first. None = the file did not exist.
 static UNDO: Mutex<Vec<(String, Option<Vec<u8>>)>> = Mutex::new(Vec::new());
 
+/// Held by every test that writes through the tools, so parallel tests don't share UNDO.
+#[cfg(test)]
+pub(crate) static UNDO_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn undo_begin_turn() {
     UNDO.lock().unwrap().clear();
 }
@@ -965,6 +969,7 @@ mod tests {
     fn edit_hunks_carry_real_file_line_numbers() {
         // inside the project root: the write guard refuses anything outside it,
         // and target/ is the one place in here that is not source
+        let _undo = UNDO_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let path = "target/rusti_diff_lines.txt";
         std::fs::write(path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
 
