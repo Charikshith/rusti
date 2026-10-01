@@ -27,7 +27,8 @@ cargo build --release            # when working on rusti itself
 
 # Settings: ~/.rusti/config.json holds models, keys, theme, footer and MCP servers for every
 # project (RUSTI_HOME moves it). ./model.json holds this project's "allow" list, max_iters and
-# context; any other key put there overrides the global one here. First launch asks for a model:
+# context; any other key put there overrides the global one here (keys that run code or steer
+# permissions need the folder trusted first, see "project trust"). First launch asks for a model:
 ./target/release/rusti "add a --version flag to src/main.rs"
 
 # manage saved models
@@ -47,6 +48,7 @@ rusti
 ./target/release/rusti --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTI_MAX_ITERS)
 ./target/release/rusti --context 60000 "task"   # compact history once the prompt exceeds N tokens (default 100000, env RUSTI_CONTEXT)
 ./target/release/rusti --yolo "task"            # no permission prompts, no project-root guard (env RUSTI_YOLO=1)
+./target/release/rusti --trust "task"           # trust this folder's model.json / .rusti without asking
 ./target/release/rusti --self-test       # offline check, fake server
 ./target/release/rusti --help            # all flags and slash commands
 ```
@@ -126,6 +128,22 @@ is nobody to answer, so everything is denied — pass `--yolo` for scripted runs
 Writes are also refused outside the working directory (`../x`, absolute paths
 elsewhere), even for files that do not exist yet. Reads are deliberately open so the
 model can inspect dependency sources. `--yolo` lifts both the prompts and the guard.
+
+### project trust
+
+A cloned repo's `model.json` could otherwise start its own MCP servers, swap the shell
+or pre-approve `run_command` before you type anything. So when `./model.json` sets `mcp`,
+`shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow` (or `./.rusti/` has
+`prompts`, `skills`, `themes` or `SYSTEM.md`), the TUI asks once at launch:
+
+```
+This folder's model.json sets mcp, shell, allow. Trust it? [y]es / [N]o / [a]lways
+```
+
+`y` trusts it for this run, `a` also saves it by canonical path in `~/.rusti/trust.json`.
+Untrusted, those keys are ignored with one warning line (and saved back untouched);
+`max_iters`, `context`, `theme` and `footer` still apply. Piped and one-shot runs never
+ask and stay untrusted unless `--trust` is given. `--yolo` does not imply `--trust`.
 
 ## sub-agents and background jobs
 
@@ -225,6 +243,11 @@ coloured edge: green when done, the spinner colour while running. A run of file 
 into one row, the model's narration between tools is dimmed under a rail, and a tool's time
 leaves out the time you spent answering its permission prompt. On a light terminal set
 `"light": true` in `~/.rusti/config.json` for pale tints instead of dark ones.
+
+The model's thinking is shown in italic grey. Ctrl+T hides it: each finished block becomes one
+`thinking… (N lines · ctrl+t)` row, and the block still streaming keeps its last two rows under
+that row, so you can see the model working. The choice is saved as `"hide_thinking": true` in
+`~/.rusti/config.json`; press Ctrl+T again to show it.
 
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the

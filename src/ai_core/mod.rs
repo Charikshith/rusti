@@ -209,7 +209,7 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
 /// Topic -> where it is answered, in the user's words. Each § is a `## `
 /// heading in readme.md; a test pins that, so a renamed heading fails CI.
 const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, flags (readme.md § Use, help.txt), \
-permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line (help.txt, readme.md § TUI), \
+permissions and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking (help.txt, readme.md § TUI), \
 sessions, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
 AGENTS.md (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
@@ -714,7 +714,7 @@ pub fn self_test() {
         for s in listener.incoming() {
             let mut s = s.unwrap();
             let mut buf = [0u8; 65536];
-            s.read(&mut buf).unwrap();
+            assert!(s.read(&mut buf).unwrap() > 0, "empty request");
             n += 1;
             if n == 1 {
                 // transient failure first: the client must retry, not give up

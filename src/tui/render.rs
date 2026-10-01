@@ -3,6 +3,7 @@
 // Synchronized output (CSI 2026) for atomic flicker-free updates.
 // No box — plain terminal lines like pi. Status then input pinned at bottom.
 
+use std::borrow::Cow;
 use std::io::{self, Write, stdout};
 
 use crossterm::{
@@ -33,13 +34,37 @@ pub fn transcript_window(total: usize, height: usize, scroll_up: usize) -> (usiz
 
 /// The rows to draw: a row marked HIDDEN (a successful tool's output) is only
 /// drawn once Ctrl+O is on, and the marker is stripped either way — it must
-/// never reach the terminal. One filter point, so nothing else in the TUI has
+/// never reach the terminal. With Ctrl+T's hide_thinking on, a reasoning block
+/// draws as its one-row fold. One filter point, so nothing else in the TUI has
 /// to know hidden rows exist.
-pub fn visible(lines: &[String], expand: bool) -> impl Iterator<Item = &str> {
+pub fn visible(lines: &[String], expand: bool, hide_thinking: bool) -> impl Iterator<Item = Cow<'_, str>> {
     lines.iter().filter_map(move |l| match l.strip_prefix(app::HIDDEN) {
-        Some(body) => expand.then_some(body),
-        None => Some(l.as_str()),
+        Some(body) => expand.then_some(Cow::Borrowed(body)),
+        None if hide_thinking && l.starts_with(THINK) => Some(Cow::Owned(thinking_fold(l))),
+        None => Some(Cow::Borrowed(l.as_str())),
     })
+}
+
+/// The sentinel every reasoning block starts with (app.rs pushes it).
+const THINK: &str = "  │ ";
+
+/// A hidden reasoning block as one row, still styled as reasoning: it says the
+/// model thought, how much, and which key brings the text back.
+fn thinking_fold(l: &str) -> String {
+    let n = l.strip_prefix(THINK).unwrap_or(l).lines().filter(|r| !r.trim().is_empty()).count();
+    format!("{THINK}thinking… ({n} line{} · ctrl+t)", if n == 1 { "" } else { "s" })
+}
+
+/// The live reasoning block while hidden: the fold plus the last two rows of
+/// the thought, so you can still watch the model work. The count of rows is
+/// fixed once two exist, so streaming never makes the block jump.
+fn thinking_preview(l: &str, w: usize) -> Vec<String> {
+    let mut rows = word_wrap(&thinking_fold(l), w);
+    // paragraph breaks and the bare sentinel are blank rows, not a preview
+    let body: Vec<String> =
+        word_wrap(l, w).into_iter().filter(|r| !matches!(r.trim(), "" | "│")).collect();
+    rows.extend_from_slice(&body[body.len().saturating_sub(2)..]);
+    rows
 }
 
 /// State carried between frames for differential rendering.
@@ -122,10 +147,12 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
             i += 1;
         }
     };
-    for l in visible(&app.lines, app.expand) {
-        push_wrapped(l, &mut all);
+    for l in visible(&app.lines, app.expand, app.hide_thinking) {
+        push_wrapped(&l, &mut all);
     }
-    if !app.current.is_empty() {
+    if app.hide_thinking && app.current.starts_with(THINK) {
+        all.extend(thinking_preview(&app.current, inner_w).into_iter().map(|r| (b't', r)));
+    } else if !app.current.is_empty() {
         push_wrapped(&app.current.clone(), &mut all);
     }
     state.max_scroll = all.len().saturating_sub(transcript_h);
@@ -967,13 +994,44 @@ mod tests {
             "  · error: no main".to_string(), // a failure tail is never hidden
         ];
 
-        let folded: Vec<&str> = visible(&lines, false).collect();
+        let folded: Vec<Cow<str>> = visible(&lines, false, false).collect();
         assert_eq!(folded, vec!["  ✓ cargo test", "  ✗ cargo build", "  · error: no main"]);
 
-        let open: Vec<&str> = visible(&lines, true).collect();
+        let open: Vec<Cow<str>> = visible(&lines, true, false).collect();
         assert_eq!(open.len(), 4);
         assert_eq!(open[1], "  · 27 passed", "the marker must be stripped, not drawn");
         assert!(!open.iter().any(|r| r.contains(app::HIDDEN)));
+    }
+
+    /// Ctrl+T folds every finished reasoning block to one row that still
+    /// reads as reasoning; the live block keeps the fold plus its last two
+    /// rows, so a hidden thought still shows the model working.
+    #[test]
+    fn hidden_thinking_folds_but_the_live_block_previews_two_rows() {
+        let lines = vec![
+            "1› hi".to_string(),
+            "  │ first thought
+
+second thought".to_string(),
+            "the answer".to_string(),
+        ];
+        let shown: Vec<Cow<str>> = visible(&lines, false, false).collect();
+        assert_eq!(shown[1], lines[1], "visible by default: the block is untouched");
+        let folded: Vec<Cow<str>> = visible(&lines, false, true).collect();
+        assert_eq!(folded, vec!["1› hi", "  │ thinking… (2 lines · ctrl+t)", "the answer"]);
+        assert_eq!(line_style(&folded[1]), b't', "the fold is styled as reasoning");
+
+        let live = "  │ ".to_string() + &"word ".repeat(40) + "
+
+last bit";
+        let rows = thinking_preview(&live, 40);
+        assert_eq!(rows.len(), 3, "fold + two rows, however long the thought: {rows:?}");
+        assert_eq!(rows[0], "  │ thinking… (2 lines · ctrl+t)");
+        assert_eq!(rows[2], "last bit", "the preview is the newest text");
+        assert!(rows[1].starts_with("word"), "a paragraph break is skipped, not shown blank");
+        // a block that has only just started previews what little it has
+        assert_eq!(thinking_preview("  │ ", 40), vec!["  │ thinking… (0 lines · ctrl+t)"]);
+        assert_eq!(thinking_preview("  │ hm", 40).len(), 2);
     }
 
     /// The three rows that get a background keep it across the whole row, even

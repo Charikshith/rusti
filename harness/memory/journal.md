@@ -85,7 +85,15 @@
 - Surprise: a bash heredoc feeding a Python script that writes Rust mangled `\n` / `\r` escapes into real newlines; edit escape-heavy Rust with the Edit tool.
 - Would do differently: extract the agent-thread job body into a function first (run_bash) — it made the `!!` test a plain unit test.
 
-## 2026-10-01 (2) - prompt caching C1+C2
+## 2026-10-01 (2) - project trust gate
+- Every config reader calls Config::load, so gating there covered mcp, /settings and allow_tool at once.
+- Surprise: "ignore untrusted keys" alone would let the next save drop them from model.json; they have to be held and written back.
+- An end-to-end test can read stderr until the first LLM retry line and kill the child; no fake server needed.
+
+## 2026-10-01 (3) - Ctrl+T thinking toggle
+- word_wrap measures bytes, so "…" and "│" count 3 each: a 30-col test wrapped the fold row; use realistic widths in tests.
+
+## 2026-10-01 (4) - prompt caching C1+C2
 - self_test() is not run by cargo test (only `--self-test`); a behavioural check needs its own #[test].
 - A fake server that reads one 64 KB chunk can miss the body: AGENTS.md alone puts the system prompt near 15 KB, so read to Content-Length.
 - Footer needed `#[serde(default)]` on the struct: adding a field would otherwise make every saved footer fail to parse.

@@ -1020,6 +1020,33 @@
     },
     {
       "id": "feat-079",
+      "name": "Project trust gate (Phase 0 / T0, fixes A1)",
+      "description": "A ./model.json that sets mcp, shell, shell_command_prefix, hooks, read_allow or allow, or a ./.rusti/ holding prompts, skills, themes or SYSTEM.md, needs the folder trusted before those apply. The TUI asks once at launch (Yes / No / Always); Always is saved in ~/.rusti/trust.json by canonical path. Untrusted, the gated keys are ignored with one warning line and written back untouched on save; max_iters, context, theme and footer still apply. Piped and one-shot runs are untrusted unless --trust; --yolo does not imply trust. config::trusted() is the one check later project resources consult.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "cargo test via ./init.sh: config::tests::an_untrusted_project_keeps_its_gated_keys_out, config::tests::trust_answers_and_the_trust_file, tests/trust.rs one_shot_runs_ignore_an_untrusted_model_json (real binary: plain and --yolo one-shot runs print the warning and never start the project's MCP server; --trust starts it). Mutation check: forcing Config::load to trusted fails the e2e test.",
+      "decisions": [
+        "The gate sits in Config::load_pair, which every reader goes through (main, mcp::connect_all, /mcp, /settings, allow_tool), so no caller can skip it.",
+        "Untrusted gated keys are held, not dropped: saving while untrusted (an [a]lways answer, a /settings toggle) writes them back as read, and a new allow entry joins the held list.",
+        "Only Always is persisted; Yes is this run only, and /reload's relaunch carries it as --trust.",
+        "Resources (prompts, skills, themes, SYSTEM.md) are only detected for the question; nothing loads them yet."
+      ]
+    },
+    {
+      "id": "feat-080",
+      "name": "Ctrl+T hides the model's thinking, with a two-row live preview",
+      "description": "Ctrl+T flips App.hide_thinking, confirms 'thinking hidden'/'thinking shown' on the status line and saves \"hide_thinking\" in ~/.rusti/config.json (global, like footer). Hidden, every finished reasoning block draws as one italic-grey row `thinking… (N lines · ctrl+t)`; the block still streaming draws that row plus its last two non-blank rows, so the model is visibly working. Default stays visible (D13). The filter is render::visible(); HELP, readme § TUI and the docs topic map describe it.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "cargo test 49 unit + 1 integration passed via ./init.sh after merging master (new: tui::render::tests::hidden_thinking_folds_but_the_live_block_previews_two_rows; config::tests global-file round-trip extended for hide_thinking).",
+      "decisions": [
+        "The live preview is a fixed fold row + last two wrapped rows, so the block height stops changing once two rows exist (no flicker).",
+        "N counts non-blank logical lines of the thought: wrapped rows depend on terminal width.",
+        "No --hide-thinking flag for the plain path and no per-block mouse toggle: adjacent items, not asked for."
+      ]
+    },
+    {
+      "id": "feat-081",
       "name": "Prompt caching C1+C2: stable system prompt, real usage and cache-hit statistics",
       "description": "The system entry no longer carries git status or the plan-mode notice, so it changes only when AGENTS.md, the shell or rusti's docs do. That volatile part goes on the user entry as a stored context field (Entry.context), appended to its text in to_message and never shown in the transcript or export, so every earlier message is replayed byte-identically and a provider's prefix cache can hit. Turning plan mode off is announced once on the next turn. Requests send stream_options.include_usage; a 400 naming stream_options retries once without it and the Client (one profile) stops sending it. Cache hits are read from prompt_tokens_details.cached_tokens, DeepSeek prompt_cache_hit_tokens or Kimi cached_tokens; the footer shows 'cache N%' of the last prompt (toggle 'cache' in /settings) and the turn-stats row ends with '· cached N' when the server reported any.",
       "dependencies": ["feat-035"],
