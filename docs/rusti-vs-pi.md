@@ -139,7 +139,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Ask the user | **yes**: `ask_user` | **no** in core (examples `question.ts`, `questionnaire.ts`) | |
 | Web fetch | **yes**: `web_fetch`, 20 s, 5 MB, labelled untrusted (`ai_core/tools.rs`) | not in core | rusti ahead |
 | Web search | **no** (open-work) | not in core | Neither |
-| Output limits | 20,000 bytes per result (`ai_core/tools.rs`) | 2000 lines or 50 KB (`dist/core/tools/truncate.js:10-11`) | Pi allows more per call |
+| Output limits | `read_file`: 2000 lines or 50 KB with a continuation offset, `read_max_bytes` (see `readme.md`); other tools 20,000 bytes per result (`ai_core/tools.rs`) | 2000 lines or 50 KB (`dist/core/tools/truncate.js:10-11`) | Same read cap; Pi allows more per call for other tools |
 | Tool allowlisting | **no** | **yes**: `--tools`, `-xt`, `-nbt`, `-nt`, `defaultTools` with `+`/`-` | |
 | Parallel or scripted calls | **no**: deliberately skipped (open-work "Parallel Tool Calls") | **yes**: `codemode` runs JavaScript in QuickJS that calls tools in parallel; opt-in (`docs/cli.md:148-178`) | |
 | Tool search | **no** | **yes**: `tool_search`, opt-in (`docs/cli.md:180-182`) | |

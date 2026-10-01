@@ -53,6 +53,7 @@ allow (or whose .rusti has prompts, skills, themes or SYSTEM.md) is asked about 
 [y]es for this run, [a]lways (saved by path in ~/.rusti/trust.json), or no. Untrusted, those
 are ignored with one warning; max_iters, context, theme and footer still apply. Piped and
 one-shot runs are untrusted unless --trust.
+\"read_max_bytes\" caps one read_file (default 51200; 2000 lines either way; 0 = no cap).
 
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   list, switch and name sessions
@@ -158,6 +159,9 @@ fn main() {
     }
     if let Some(n) = saved.context {
         ai_core::set_context_limit(n);
+    }
+    if let Some(n) = saved.read_max_bytes {
+        ai_core::tools::set_read_max(n);
     }
 
     if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTI_YOLO").map_or(false, |v| v == "1") {
