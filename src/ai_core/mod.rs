@@ -102,7 +102,7 @@ Use todo to plan and track multi-step tasks. Writes and commands may need the us
 for that call: explain or ask_user, do not retry it. Use run_background for servers and watchers, and job_stop \
 what you started before finishing. Use delegate for a self-contained subtask whose details you do not need. \
 Never invent file contents, command output, or what an image shows — use tools to verify, and say when you cannot see something. \
-`@path` in a user message names a file; read it. \
+`@path` in a user message names a file; read it, unless it is an image the message says is attached. \
 When the task is done, reply with a concise summary of what you changed.";
 
 /// Tool-call rounds per task. 50 fits a real read/edit/test/fix cycle; --max-iters overrides.
@@ -493,19 +493,20 @@ pub fn allow_from_config(names: &[String]) {
 
 /// Messages typed while the agent works (Enter mid-turn). run_agent takes them
 /// after a tool batch; what is left when a task ends the TUI runs as a follow-up.
-static STEER: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Each carries the `@` images its text references, attached on delivery.
+static STEER: std::sync::Mutex<Vec<(String, Vec<String>)>> = std::sync::Mutex::new(Vec::new());
 
-pub fn steer(text: String) {
-    STEER.lock().unwrap().push(text);
+pub fn steer(text: String, images: Vec<String>) {
+    STEER.lock().unwrap().push((text, images));
 }
 
 /// Everything queued, removed: delivery, Alt+Up, Esc and task end all empty it.
 pub fn take_steers() -> Vec<String> {
-    std::mem::take(&mut *STEER.lock().unwrap())
+    std::mem::take(&mut *STEER.lock().unwrap()).into_iter().map(|s| s.0).collect()
 }
 
 pub fn steers() -> Vec<String> {
-    STEER.lock().unwrap().clone()
+    STEER.lock().unwrap().iter().map(|s| s.0.clone()).collect()
 }
 
 /// Serializes the tests that touch the global STEER queue.
@@ -526,7 +527,7 @@ async fn delegate(client: &llm::Client, task: &str, cancel: &AtomicBool) -> (boo
     let prompt = format!("You are a sub-agent given one scoped task by the main agent. Complete it, then reply with a \
 concise report: what you found or changed, exact file paths, and anything the main agent must know.\n\nTask: {task}");
     // ponytail: the sub-agent streams into the same transcript as its parent; a nested block would need TUI work
-    let r = Box::pin(run_agent(client, &mut sub, &prompt, cancel)).await;
+    let r = Box::pin(run_agent(client, &mut sub, &prompt, &[], cancel)).await;
     DEPTH.fetch_sub(1, Ordering::Relaxed);
     match r {
         Ok(t) => (true, tools::truncate(&format!("[sub-agent session: {path}]\n{t}"), tools::MAX_RESULT)),
@@ -534,10 +535,43 @@ concise report: what you found or changed, exact file paths, and anything the ma
     }
 }
 
+/// Put the `@` images the user typed on their own entry, so the model sees
+/// them on this request instead of spending a read_file round trip (and they
+/// arrive even when it never thinks to read them). Each lands as a transcript
+/// row; one that cannot be sent is a ⚠ row and the text goes anyway, its
+/// `@path` still there for the model to read or ask about.
+fn attach(u: &mut Entry, paths: &[String]) {
+    let mut notes = Vec::new();
+    for p in paths {
+        let name = std::path::Path::new(p).file_name().map_or(p.clone(), |n| n.to_string_lossy().into_owned());
+        match tools::load_image(p) {
+            Ok(img) => {
+                emit(Event::Text(format!("  · attached {name} ({})", tools::size_text(img.size))));
+                notes.push(format!("@{p} is attached to this message as an image.{}",
+                    img.note.map(|n| format!(" {n}")).unwrap_or_default()));
+                u.images.push(img.url);
+            }
+            Err(e) => emit(Event::Text(format!("  ⚠ {e}"))),
+        }
+    }
+    if notes.is_empty() {
+        return;
+    }
+    // the same guard the read_file attachment carries: a proxy that strips the
+    // parts leaves only this text, and a model with no picture describes one
+    notes.push("If you cannot actually see an attached image, say so — do not describe it from its path or the conversation.".into());
+    let notes = notes.join("\n");
+    u.context = Some(match u.context.take() {
+        Some(c) => format!("{notes}\n\n{c}"),
+        None => notes,
+    });
+}
+
 pub async fn run_agent(
     client: &llm::Client,
     session: &mut Session,
     task: &str,
+    images: &[String],
     cancel: &AtomicBool,
 ) -> Result<String, String> {
     let sys_prompt = system_prompt();
@@ -555,6 +589,7 @@ pub async fn run_agent(
         let plan_was = session.path().iter().rev().find_map(|e| e.context.as_deref()).is_some_and(|c| c.contains(PLAN_ON));
         let mut u = Entry::new("user", task.into());
         u.context = turn_context(plan_mode(), plan_was);
+        attach(&mut u, images);
         // branch from the current leaf (or root); resume/--tree set active
         session.add(u, session.active.clone());
     }
@@ -636,11 +671,23 @@ This message carries that file as an image part.                  If you cannot 
         // steers go here for the same reason as the image, all at once as one
         // user entry; a sub-agent leaves them for its parent, an interrupted
         // turn for the TUI's follow-up queue
-        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) { take_steers() } else { vec![] };
+        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) {
+            std::mem::take(&mut *STEER.lock().unwrap())
+        } else {
+            vec![]
+        };
         if !steered.is_empty() {
-            let text = steered.join("\n\n");
-            session.add(Entry::new("user", text.clone()), session.active.clone());
+            let text = steered.iter().map(|s| s.0.as_str()).collect::<Vec<_>>().join("\n\n");
+            let mut images: Vec<String> = Vec::new();
+            for p in steered.into_iter().flat_map(|s| s.1) {
+                if !images.contains(&p) {
+                    images.push(p);
+                }
+            }
+            let mut u = Entry::new("user", text.clone());
             emit(Event::Delivered(text));
+            attach(&mut u, &images);
+            session.add(u, session.active.clone());
         }
         session.save().map_err(|e| format!("saving session: {e}"))?;
     }
@@ -865,7 +912,7 @@ pub fn self_test() {
         let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
         // text is streamed via emit() -> prints to stdout during the test; fine
         let mut session = crate::session::Session::with_path("fake".into(), "_test_session.json");
-        assert_eq!(run_agent(&client, &mut session, "test task", &std::sync::atomic::AtomicBool::new(false)).await.unwrap(), "done");
+        assert_eq!(run_agent(&client, &mut session, "test task", &[], &std::sync::atomic::AtomicBool::new(false)).await.unwrap(), "done");
         // tree: system, user, assistant(tool_calls), tool, tool, assistant(done)
         // both tool results must be on the active path (multi-tool-call fix)
         assert_eq!(session.entries.len(), 6);
@@ -888,7 +935,7 @@ pub fn self_test() {
         // interrupt: a pre-set flag cancels before any network call
         let cancelled = std::sync::atomic::AtomicBool::new(true);
         let mut s3 = crate::session::Session::with_path("fake".into(), "_test_session2.json");
-        assert_eq!(run_agent(&client, &mut s3, "x", &cancelled).await.unwrap_err(), "interrupted");
+        assert_eq!(run_agent(&client, &mut s3, "x", &[], &cancelled).await.unwrap_err(), "interrupted");
         std::fs::remove_file("_test_session2.json").ok();
     });
 
@@ -1099,6 +1146,7 @@ pub fn self_test() {
         url: "http://x".into(),
         key: "".into(),
         model: "gpt-x".into(),
+        vision: None,
     });
     c.default = Some("m1".into());
     c.save_to("_test_model.json").unwrap();
@@ -1238,9 +1286,9 @@ pub fn self_test() {
         let no = AtomicBool::new(false);
         let dirty = format!("_cache_test_dirty_{}.txt", std::process::id());
 
-        assert_eq!(rt.block_on(run_agent(&client, &mut session, "first", &no)).unwrap(), "ok");
+        assert_eq!(rt.block_on(run_agent(&client, &mut session, "first", &[], &no)).unwrap(), "ok");
         std::fs::write(&dirty, "x").unwrap(); // the working tree changes between the turns
-        let second = rt.block_on(run_agent(&client, &mut session, "second", &no));
+        let second = rt.block_on(run_agent(&client, &mut session, "second", &[], &no));
         let fits = git(&["status", "--short"]).is_some_and(|s| s.len() <= 2000);
         std::fs::remove_file(&dirty).ok();
         std::fs::remove_file(&path).ok();
@@ -1367,9 +1415,10 @@ branch: "), "{c2}");
         let path = std::env::temp_dir().join(format!("rusti_steer_{}.json", std::process::id()));
         let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
         take_steers();
-        steer("use tabs".into());
-        steer("and run the tests".into()); // queued while the first request streams
-        let r = rt.block_on(run_agent(&client, &mut session, "task", &AtomicBool::new(false)));
+        let png = concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png").to_string();
+        steer("use tabs".into(), vec![]);
+        steer(format!("and run the tests @{png}"), vec![png.clone()]); // queued while the first request streams
+        let r = rt.block_on(run_agent(&client, &mut session, "task", &[], &AtomicBool::new(false)));
         std::fs::remove_file(&path).ok();
         assert_eq!(r.unwrap(), "ok");
         assert!(steers().is_empty(), "delivered, so nothing is left for a follow-up");
@@ -1378,5 +1427,30 @@ branch: "), "{c2}");
         assert_eq!(first["messages"].as_array().unwrap().len(), 2, "not sent before the batch: system, task");
         let roles: Vec<&str> = second["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
         assert_eq!(roles, ["system", "user", "assistant", "tool", "tool", "user"]);
-        assert_eq!(second["messages"][5]["content"], "use tabs\n\nand run the tests", "all queued, as one entry");
+        let steered = &second["messages"][5]["content"];
+        assert!(steered[0]["text"].as_str().unwrap().starts_with(&format!("use tabs\n\nand run the tests @{png}\n\n")), "all queued, as one entry");
+        assert!(steered[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"), "its @ image rides on it");
+    }
+
+    /// An `@` image the user typed rides on their own entry as an image part
+    /// and says so to the model; a profile with no vision sends none, from
+    /// submit or from read_file, and claims none was sent (F03).
+    #[test]
+    fn typed_images_attach_unless_the_profile_has_no_vision() {
+        let png = concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png").to_string();
+        let mut u = Entry::new("user", format!("what is @{png}"));
+        attach(&mut u, std::slice::from_ref(&png));
+        let m = u.to_message();
+        assert_eq!(m["content"][0]["type"], "text");
+        assert!(m["content"][0]["text"].as_str().unwrap().contains("is attached to this message as an image"));
+        assert!(m["content"][1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,iVBOR"));
+        assert_eq!(m["content"].as_array().unwrap().len(), 2, "one text part, one image part");
+
+        tools::set_vision(false);
+        let mut blind = Entry::new("user", "x".into());
+        attach(&mut blind, std::slice::from_ref(&png));
+        let (ok, why) = tools::read_file(&png, 0, 0);
+        tools::set_vision(true);
+        assert!(blind.images.is_empty() && blind.context.is_none(), "nothing sent, nothing claimed");
+        assert!(!ok && why.contains("has no vision"), "{why}");
     }

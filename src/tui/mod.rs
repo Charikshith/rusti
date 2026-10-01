@@ -9,6 +9,7 @@ mod theme;
 mod plain;
 
 pub use app::utc_offset_min; // session auto names read local time too
+pub use app::image_refs; // a one-shot task attaches its @ images the same way
 
 use std::io::{self, Write, stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -252,6 +253,9 @@ fn render_history(session: &Session) -> (Vec<String>, Vec<String>, usize) {
             "user" => {
                 n += 1;
                 lines.push(format!("{n}› {}", e.content));
+                if !e.images.is_empty() {
+                    lines.push(format!("  · {} attached", crate::session::count(e.images.len(), "image", "images")));
+                }
                 history.push(e.content.clone());
             }
             "assistant" => {
@@ -380,7 +384,8 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
             match job_rx.recv() {
                 Ok(Job::Task(task)) => {
                     cancel_agent.store(false, Ordering::Relaxed); // fresh turn = not cancelled
-                    let ev = match rt.block_on(ai_core::run_agent(&client, &mut session, &task, &cancel_agent)) {
+                    let images = app::image_refs(&task);
+                    let ev = match rt.block_on(ai_core::run_agent(&client, &mut session, &task, &images, &cancel_agent)) {
                         Ok(_) => ai_core::Event::TaskEnd { ok: true, error: None },
                         Err(e) => ai_core::Event::TaskEnd { ok: false, error: Some(e) },
                     };

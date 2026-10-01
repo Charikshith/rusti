@@ -281,6 +281,18 @@ names a file and reads it. The list is built once per draft and rebuilt after ea
 With no menu open, Tab completes the path before the cursor (`~` is your home folder): one
 match goes in outright, several fill what they share and open the list, folders first.
 
+An `@` reference to an image (`.png`, `.jpg`, `.gif`, `.webp`) is attached to that message as an
+image part when you send it, shown as `  · attached shot.png (312 KB)`, so the model sees it on
+the same request. Only `@` references attach; a path you merely mention stays text, so type `@`
+before dropping a file into the terminal. Ctrl+V / Alt+V saves the clipboard's image under
+`.rusti/clips/` and types an `@` reference to it; copied image files come in as one reference
+each. The same works for a one-shot task: `rusti "@shot.png what is wrong here?"`. An image over
+2000 px or 4.5 MB of base64 (`read_file` ones too) is scaled down first, by PowerShell's
+System.Drawing on Windows, `sips` on macOS or ImageMagick elsewhere, and the model is told the
+original size so it can map coordinates back. A profile with `"vision": false` refuses images
+outright (`this model profile has no vision; shot.png not sent`) instead of sending parts a
+text-only endpoint would drop without a word.
+
 rusti uses its own custom terminal renderer built with direct ANSI
 escape sequences (no ratatui, no heavy TUI framework). this keeps the
 binary small (~2.2 MB) and the rendering fast — full-screen redraw with

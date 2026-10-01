@@ -243,7 +243,7 @@ fn main() {
 
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    match rt.block_on(ai_core::run_agent(&client, &mut session, &task, &cancel)) {
+    match rt.block_on(ai_core::run_agent(&client, &mut session, &task, &tui::image_refs(&task), &cancel)) {
         // reply text was already streamed live; just close the line
         Ok(r) => {
             if !r.is_empty() {
@@ -320,6 +320,7 @@ fn resolve_model(args: &[String]) -> (String, String, String) {
         cfg.save().unwrap_or_else(|e| eprintln!("warning: could not save settings: {e}"));
     }
 
+    ai_core::tools::set_vision(prof.vision != Some(false));
     let url = explicit_url.unwrap_or(prof.url);
     let key = explicit_key.unwrap_or(prof.key);
     let model = explicit_model.unwrap_or(if prof.model.is_empty() { "gpt-4o-mini".into() } else { prof.model });
