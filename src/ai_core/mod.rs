@@ -862,7 +862,8 @@ pub fn self_test() {
     std::fs::write(d.join("AGENTS.md"), "run cargo test").unwrap();
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();
-    assert!(system_prompt().starts_with(SYSTEM_PROMPT));
+    let (sys, app) = prompt_flags();
+    assert!(system_prompt().starts_with(&prompt_base(&crate::config::home_dir(), sys, app).0));
     // git context rides along with the prompt, and only inside a work tree
     assert_eq!(git_context().is_some(), git_branch().is_some());
     if git_branch().is_some() {
