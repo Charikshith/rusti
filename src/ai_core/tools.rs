@@ -449,7 +449,7 @@ pub fn grep(pattern: &str, path: &str, glob: &str) -> (bool, String) {
         vec![path.to_string()]
     } else {
         let mut v = Vec::new();
-        walk(root, root, usize::MAX, 0, &mut usize::MAX, &mut v);
+        walk(root, root, usize::MAX, 0, true, &mut { usize::MAX }, &mut v);
         v.into_iter().filter(|(_, d)| !d).map(|(p, _)| p).collect()
     };
     let mut out = String::new();
@@ -488,7 +488,7 @@ pub fn glob(pattern: &str, path: &str) -> (bool, String) {
     }
     let root = Path::new(path);
     let mut v = Vec::new();
-    walk(root, root, usize::MAX, 0, &mut usize::MAX, &mut v);
+    walk(root, root, usize::MAX, 0, true, &mut { usize::MAX }, &mut v);
     let out: String = v.into_iter().filter(|(p, d)| !d && glob_match(pattern, p)).map(|(p, _)| p + "\n").collect();
     if out.is_empty() { (true, "no files matched".into()) } else { (true, truncate(&out, MAX_RESULT)) }
 }
@@ -501,7 +501,7 @@ pub fn list_dir(path: &str, depth: usize) -> (bool, String) {
         return (false, format!("not a directory: {path}"));
     }
     let mut v = Vec::new();
-    walk(root, root, if depth == 0 { 1 } else { depth }, 0, &mut usize::MAX, &mut v);
+    walk(root, root, if depth == 0 { 1 } else { depth }, 0, true, &mut { usize::MAX }, &mut v);
     if v.is_empty() {
         return (true, "(empty)".into());
     }
@@ -535,7 +535,7 @@ pub fn project_files(cap: usize) -> Vec<(String, bool)> {
     }
     let root = Path::new(".");
     let mut out = Vec::new();
-    walk(root, root, usize::MAX, 0, &mut { cap }, &mut out);
+    walk(root, root, usize::MAX, 0, false, &mut { cap }, &mut out);
     for e in &mut out {
         e.0 = e.0.trim_start_matches("./").to_string();
     }
@@ -543,8 +543,8 @@ pub fn project_files(cap: usize) -> Vec<(String, bool)> {
 }
 
 /// Collect (relative path with '/', is_dir) under `dir`, sorted, skipping SKIP_DIRS,
-/// until `files` more files are in. Symlinked folders are listed but not entered.
-fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, files: &mut usize, out: &mut Vec<(String, bool)>) {
+/// until `files` more files are in. Without `follow_links`, symlinked folders are listed but not entered.
+fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, follow_links: bool, files: &mut usize, out: &mut Vec<(String, bool)>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -562,8 +562,8 @@ fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, files: &mut usi
         out.push((rel, is_dir));
         if !is_dir {
             *files -= 1;
-        } else if depth + 1 < max_depth && e.file_type().map_or(false, |t| t.is_dir()) {
-            walk(root, &p, max_depth, depth + 1, files, out);
+        } else if depth + 1 < max_depth && (follow_links || e.file_type().map_or(false, |t| t.is_dir())) {
+            walk(root, &p, max_depth, depth + 1, follow_links, files, out);
         }
     }
 }
@@ -1006,6 +1006,32 @@ pub fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `@` fallback index lists a symlinked folder without entering it (a
+    /// link to an ancestor would recurse forever); the tools still follow it.
+    #[test]
+    fn walk_follows_links_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("rusti_walk_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/a.txt"), "").unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(dir.join("real"), dir.join("link"));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(dir.join("real"), dir.join("link"));
+        if linked.is_err() {
+            std::fs::remove_dir_all(&dir).ok();
+            return; // the OS refused to make a symlink
+        }
+        let list = |follow| {
+            let mut v = Vec::new();
+            walk(&dir, &dir, usize::MAX, 0, follow, &mut { usize::MAX }, &mut v);
+            v
+        };
+        let skip = list(false);
+        assert!(skip.contains(&("link".into(), true)) && !skip.iter().any(|(p, _)| p.starts_with("link/")), "{skip:?}");
+        assert!(list(true).contains(&("link/a.txt".into(), false)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// The `@` index lists the project's files and their folders with `/`,
     /// never .git or build output, and stops at the cap.
