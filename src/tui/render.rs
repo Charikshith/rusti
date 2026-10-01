@@ -175,7 +175,6 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         let styled = if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w), spin) };
         let t = theme::tints();
         frame.push(match st {
-            b'u' => band(t.user, &styled, w),
             b'x' => band(t.fail, &styled, w),
             b'a' => band(t.ask, &styled, w),
             _ => styled,
@@ -472,18 +471,7 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
             let (sign, rest) = s.split_at(cut);
             return format!("{colour}{sign}{RESET}{dim}{rest}{RESET}");
         }
-        // the user's own query: cyan "N›" marker so it's easy to find when
-        // scrolling back, text at full brightness like the model's answer.
-        // Wrapped rows carry no marker and must stay bright too — that's the
-        // whole reason this isn't b'k'.
-        b'u' => {
-            let i = s.bytes().take_while(u8::is_ascii_digit).count();
-            return if i > 0 && s[i..].starts_with("› ") {
-                format!("{}{}›{RESET}{}", t.user, &s[..i], &s[i + '›'.len_utf8()..])
-            } else {
-                format!("  {s}")
-            };
-        }
+        b'u' => return user_row(t, s),
         _ => {}
     }
     // b'k': tool rows. Coloured glyph, dim text, so a wall of tool output
@@ -505,6 +493,20 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         format!("  {}ℹ{RESET} {dim}{rest}{RESET}", t.info)
     } else {
         format!("  {dim}{s}{RESET}") // wrapped continuation of a tool row
+    }
+}
+
+/// The user's own query: cyan "N›" marker so it's easy to find when scrolling
+/// back, bold text so it stands apart from the model's answer. Wrapped rows
+/// carry no marker and must stay bold too — that's the whole reason this isn't
+/// b'k'. No background: a fill is only readable if it suits the terminal's own
+/// colours, which rusti cannot see, and a pale one under light text was not.
+fn user_row(t: &theme::Theme, s: &str) -> String {
+    let i = s.bytes().take_while(u8::is_ascii_digit).count();
+    if i > 0 && s[i..].starts_with("› ") {
+        format!("{}{}›{RESET}{BOLD}{}{RESET}", t.user, &s[..i], &s[i + '›'.len_utf8()..])
+    } else {
+        format!("{BOLD}  {s}{RESET}")
     }
 }
 
@@ -825,6 +827,35 @@ fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
 mod tests {
     use super::*;
 
+    /// Every theme's user row keeps the terminal's own background and draws
+    /// nothing faint, so the text is never light-on-pale.
+    #[test]
+    fn user_row_has_no_background_in_any_theme() {
+        for t in theme::THEMES {
+            for row in ["3› what is this", "wrapped tail of it"] {
+                let out = user_row(t, row);
+                assert!(bare(&out).contains(row.trim_start_matches("3› ")), "{}: text lost", t.name);
+                for sgr in out.split('\x1b').skip(1) {
+                    let params = sgr.strip_prefix('[').and_then(|r| r.split_once('m')).map_or("", |(p, _)| p);
+                    let codes: Vec<&str> = params.split(';').collect();
+                    let mut k = 0;
+                    while k < codes.len() {
+                        match codes[k] {
+                            // extended fg: skip its colour arguments
+                            "38" => k += if codes.get(k + 1) == Some(&"5") { 3 } else { 5 },
+                            c => {
+                                let n: u32 = c.parse().unwrap_or(0);
+                                assert!(!matches!(n, 2 | 7 | 40..=49 | 100..=107),
+                                    "{}: user row sets {n} (faint, reverse or background) in {out:?}", t.name);
+                                k += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 
     /// Strip SGR sequences: these tests care about layout and which colour a
     /// token got, not about where the escapes land.
@@ -959,7 +990,7 @@ mod tests {
         let q = rows("9› hello there, this is a long query that will certainly wrap past eighty columns");
         assert!(q[0].starts_with("\x1b[36m9›\x1b[0m"), "query marker must be cyan: {:?}", q[0]);
         assert!(q.len() > 1 && q.iter().all(|r| !r.contains(theme::current().dim)), "query must stay bright: {q:?}");
-        assert_eq!(first("12› hi there"), "\x1b[36m12›\x1b[0m hi there");
+        assert_eq!(first("12› hi there"), "\x1b[36m12›\x1b[0m\x1b[1m hi there\x1b[0m");
     }
 
     /// Markdown markers must be gone from the visible text, replaced by styling.

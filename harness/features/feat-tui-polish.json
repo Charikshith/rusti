@@ -1,0 +1,13 @@
+{
+  "id": "feat-tui-polish",
+  "name": "TUI polish: startup MCP rows clear on first message; readable user rows",
+  "description": "The '  ✓ mcp <name>: N tools' startup rows are removed from the transcript when the first message starts a task (start_task -> drop_mcp_ok); '  ✗ mcp' failure rows stay. The user's row is no longer drawn on a background band (the pale fill showed light text on near-white): the 'N›' marker keeps the theme's user colour and the text is bold, wrapped rows included.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: tui::app::tests::first_message_clears_mcp_startup_rows (✓ row gone, ✗ row kept, a live tool_line index shifts with its row); tui::render::tests::user_row_has_no_background_in_any_theme (every THEMES entry, marker and wrapped row: no faint, reverse or background SGR); status_markers_keep_their_colour_through_word_wrap updated to the bold form. ./init.sh passed.",
+  "decisions": [
+    "First message is the trigger, no timer: once you have typed you know what loaded.",
+    "No band at all rather than a darker one: rusti cannot see the terminal's background, so any fill can clash; the terminal's own fg/bg pair is readable by definition, and bold keeps the row distinct from the answer.",
+    "Tints.user removed, since nothing draws it any more; the fail and ask bands are unchanged."
+  ]
+}
