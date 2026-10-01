@@ -92,3 +92,8 @@
 
 ## 2026-10-01 (3) - Ctrl+T thinking toggle
 - word_wrap measures bytes, so "…" and "│" count 3 each: a 30-col test wrapped the fold row; use realistic widths in tests.
+
+## 2026-10-01 (4) - /new and auto-named sessions
+- Surprise: write_file refuses paths outside the project root, so a test that wants an undo snapshot must write a cwd-relative file (as self_test does), not one in temp_dir.
+- Surprise: no python3 on this box; bash heredocs to python fail, use the Edit tool.
+- Reused tui::app::utc_offset_min for local-time session names instead of a date crate.

@@ -1044,6 +1044,21 @@
         "N counts non-blank logical lines of the thought: wrapped rows depend on terminal width.",
         "No --hide-thinking flag for the plain path and no per-block mouse toggle: adjacent items, not asked for."
       ]
+    },
+    {
+      "id": "feat-081",
+      "name": "/new starts a new session in place; unnamed sessions are auto-named; undo stays in its session",
+      "description": "/new [name] (idle only, like /undo) saves the active session when it has entries, then starts an empty one at .rusti/sessions/NAME.json, or at an auto name s-YYYYMMDD-HHMM (local time, -2/-3… when that minute's file exists) when unnamed. The transcript is cleared via Event::Resumed while the input history, model, plan mode, MCP connections and background jobs carry over; the todo list is cleared. A bare launch (no --session) also gets an auto name instead of ./session.json, so it no longer overwrites the previous unnamed session (A2); --resume / --tree without --session open the most recently touched saved session (a legacy ./session.json is still listed and resumable). /undo's snapshots are reset on /new and /resume only (a /tree branch stays in the same session and keeps them), so /undo can no longer restore a previous session's files (A5). Added to CMDS, --help, readme and the docs topic map.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "cargo test 48 passed via ./init.sh (new: session::tests::unnamed_sessions_get_a_minute_stamp_and_never_the_root_file pins the date stamp incl. a leap day and the -2 suffix on a taken minute; tui::tests::new_session_saves_the_old_one_and_undo_cannot_reach_it checks the old session is saved, the new one is empty with the same model, a taken or invalid name is refused, an unnamed /new is auto-named, and undo_turn() is empty after /new even though write_file ran before it). Built binary in an empty dir: `--resume` exits 1 with 'no saved session to resume'; with only .rusti/sessions/s-20261001-1200.json present it resumes that file and no ./session.json is created.",
+      "decisions": [
+        "Save before picking the new path: an unsaved non-empty session must be on disk first, or an auto or typed name could land on its path and the next save would overwrite it.",
+        "Auto names use local time through the status line's existing utc_offset_min rather than a date crate; the date math is Hinnant's civil_from_days.",
+        "A fresh session's name is free at pick time, not reserved: two launches in the same minute that both save would share a file (ponytail comment names create_new as the upgrade).",
+        "The input history is sent with Job::New and handed back in Event::Resumed, so no new Event variant was needed.",
+        "The /resume picker's name column widened from 15 to 18 so an auto name with a suffix still has a gap after it."
+      ]
     }
   ]
 }

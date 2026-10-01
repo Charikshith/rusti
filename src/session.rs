@@ -1,7 +1,7 @@
 // Session persistence as a message TREE, mirroring pi's session model:
 // every entry has an id and parentId; the current position is the active
 // leaf. Branching = moving the leaf to an earlier entry and continuing —
-// no new files. Stored as one JSON file (session.json).
+// no new files. Stored as one JSON file per session under DIR.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -9,12 +9,48 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const PATH: &str = "session.json";
 
-/// Named sessions live here; the bare session.json at the root stays the
-/// unnamed default, so sessions saved before naming existed still load.
+/// Every session lives here now; the bare session.json at the root is only
+/// read, so sessions saved before naming existed still load.
 pub const DIR: &str = ".rusti/sessions";
 
 pub fn path_for(name: &str) -> String {
     format!("{DIR}/{name}.json")
+}
+
+/// Where a session nobody named goes: `s-YYYYMMDD-HHMM` under DIR, with -2,
+/// -3… when that minute is taken. Never the root session.json, so a fresh
+/// launch or /new can't overwrite the last unnamed session.
+// ponytail: free at pick time, not reserved — two launches in the same minute
+// that both save would share a file; create_new on first save if that bites.
+pub fn auto_path() -> String {
+    auto_path_at((epoch_secs() as i64 + crate::tui::utc_offset_min() * 60).max(0) as u64)
+}
+
+fn auto_path_at(secs: u64) -> String {
+    let base = stamp(secs);
+    (1..)
+        .map(|i| path_for(&if i == 1 { base.clone() } else { format!("{base}-{i}") }))
+        .find(|p| !std::path::Path::new(p).exists())
+        .unwrap()
+}
+
+/// "s-YYYYMMDD-HHMM" for `secs` already shifted to local time, from days
+/// since the epoch (Hinnant's civil_from_days) — no date crate for one stamp.
+fn stamp(secs: u64) -> String {
+    let z = (secs / 86400) as i64 + 719_468;
+    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("s-{y:04}{m:02}{d:02}-{:02}{:02}", secs % 86400 / 3600, secs % 3600 / 60)
+}
+
+/// The most recently touched saved session, for a bare --resume / --tree.
+pub fn latest() -> Option<String> {
+    list().into_iter().next().map(|i| i.path)
 }
 
 /// Display name of a session file: its stem, so
@@ -355,6 +391,23 @@ second".into()), Some(sys));
         assert_eq!(ago(600), "10m ago");
         assert_eq!(ago(7200), "2h ago");
         assert_eq!(ago(200_000), "2d ago");
+    }
+
+    #[test]
+    fn unnamed_sessions_get_a_minute_stamp_and_never_the_root_file() {
+        assert_eq!(stamp(1_790_858_040), "s-20261001-1234");
+        assert_eq!(stamp(1_709_251_140), "s-20240229-2359"); // leap day
+        assert_eq!(stamp(0), "s-19700101-0000");
+
+        // a taken minute gets a suffix rather than overwriting the file there
+        let first = auto_path_at(0);
+        assert_eq!(first, path_for("s-19700101-0000"));
+        std::fs::create_dir_all(DIR).unwrap();
+        std::fs::write(&first, "{}").unwrap();
+        let second = auto_path_at(0);
+        std::fs::remove_file(&first).ok();
+        assert_eq!(second, path_for("s-19700101-0000-2"));
+        assert_ne!(auto_path(), PATH);
     }
 
     #[test]
