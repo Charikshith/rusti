@@ -63,11 +63,15 @@ Theme files use rusti's own colour roles and inherit everything else from a `bas
 ```json
 {"name": "my-theme", "note": "nord, warmer", "base": "nord",
  "colors": {"user": "#88c0d0", "ok": "38;5;144", "think": "3;38;5;103"},
- "tints": {"fail": "#2a1618", "ask": "#2a2414"}}
+ "tints": {"fail": "#2a1618", "ask": "#2a2414", "fail_text": "#e4e4e4", "ask_text": "#e4e4e4"}}
 ```
 
 Roles: `user info ok fail warn add del code fenced think dim sel` plus the syntax colours
-`key string number boolean`; tints are the `fail` and `ask` row backgrounds. A value is
+`key string number boolean`; tints are the `fail` and `ask` row backgrounds, and
+`fail_text` / `ask_text` the text drawn on them. A tint you leave out keeps the default for
+the `"light"` setting. A 24-bit background (`#rrggbb` or `48;2;r;g;b`) with no text of its
+own gets whichever of the dark or bright default text reads better on it; a 256-colour or other
+SGR background leaves its text to the terminal. A value is
 `#rrggbb` or raw SGR parameters. A theme joins the built-ins in `/themes` with its note; the
 active one is re-read about once a second when its file changes, so you can edit it and watch.
 A typo in a role or value refuses the file and says which, instead of half applying it.

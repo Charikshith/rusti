@@ -40,12 +40,16 @@ each part but the mode; a narrow terminal cuts the mode's meaning first, never i
 
 ## transcript
 
-The transcript marks what needs your eye with a background: your own message (grey), a failed
-tool (red) and a tool waiting for your permission (amber). Other tool rows get only a thin
+The transcript marks what needs your eye. Your own message is bold. A failed tool sits on a
+dark red background and a tool waiting for your permission on a dark amber one, each with its
+own bright text so it reads whatever your terminal's colours are. Other tool rows get only a thin
 coloured edge: green when done, the spinner colour while running. A run of file reads folds
 into one row, the model's narration between tools is dimmed under a rail, and a tool's time
-leaves out the time you spent answering its permission prompt. On a light terminal set
-`"light": true` in `~/.rusti/config.json` for pale tints instead of dark ones.
+leaves out the time you spent answering its permission prompt. `"light": true` in
+`~/.rusti/config.json` is only for a terminal with a light background: it swaps those fills
+for pale ones with dark text. A project's `./model.json` can set `"light"` too, since its
+top-level keys override the global config. rusti cannot see your terminal's background, so turn
+it off again if you go back to a dark one.
 
 Model prose is rendered, not printed raw: ATX headings and `**bold**` come out bold, inline
 code in cyan, `-`/`*` bullets as bullet glyphs, and fenced blocks in their own colour with the
