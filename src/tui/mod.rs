@@ -912,10 +912,10 @@ mod tests {
         let mut st = render::RenderState::new();
         assert_eq!(st.cell(0, 0, 0), None, "an empty transcript has no cells");
         st.rows = vec![
-            (b'u', "1› hello there".into(), false),
-            (b'm', "  some \x1b[1mbold\x1b[0m prose that".into(), false),
-            (b'm', "  wraps onto a second row".into(), true),
-            (b'm', "  next line".into(), false),
+            (b'u', "1› hello there".into(), None),
+            (b'm', "  some \x1b[1mbold\x1b[0m prose that".into(), None),
+            (b'm', "  wraps onto a second row".into(), Some(" ")),
+            (b'm', "  next line".into(), None),
         ];
         st.inner_w = 40;
         // styles gone, the gutter dropped, the soft wrap rejoined with its space
@@ -942,6 +942,31 @@ mod tests {
         assert_eq!(st.cell(5, 7, 0), Some((1, 5)));
 
         assert_eq!(app::osc52("hello"), "\x1b]52;c;aGVsbG8=\x07");
+    }
+
+    /// Wide chars and tabs take more than one screen column, so a click maps
+    /// to the char drawn there; a hard break in a long word rejoins with no space.
+    #[test]
+    fn mouse_selection_follows_screen_columns_and_hard_wraps() {
+        let mut st = render::RenderState::new();
+        st.rows = vec![
+            (b'm', "  漢字 hello".into(), None),
+            (b'm', "  a\tbc x".into(), None),
+            (b'm', "  https://example.com/aaaa".into(), None),
+            (b'm', "  bbbb tail".into(), Some("")),
+        ];
+        st.inner_w = 40;
+        st.view_h = 4;
+        // 漢 and 字 fill columns 2-5, so column 7 is the 'h'
+        assert_eq!(st.cell(7, 0, 0), Some((0, 5)));
+        assert_eq!(st.cell(4, 0, 0), Some((0, 3)), "the second column of 字 is still 字");
+        assert_eq!(st.selected(st.expand(st.cell(8, 0, 0).unwrap(), 2)), "hello");
+        // the tab after 'a' (column 2) runs to column 8, where 'b' is drawn
+        assert_eq!(st.cell(5, 1, 0), Some((1, 3)));
+        assert_eq!(st.cell(8, 1, 0), Some((1, 4)));
+        assert_eq!(st.selected((st.cell(8, 1, 0).unwrap(), st.cell(9, 1, 0).unwrap())), "bc");
+        // a URL hard-wrapped mid-word copies back whole
+        assert_eq!(st.selected(((2, 0), (3, 5))), "https://example.com/aaaabbbb");
     }
 
     #[test]

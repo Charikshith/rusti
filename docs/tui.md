@@ -59,6 +59,11 @@ as plain text, with wrapped rows joined back into their lines, and `copied N lin
 the status line. Double-click copies a word, triple-click a whole line; a plain click or any
 key clears the highlight.
 
+Clicks are mapped to the text drawn under them: a tab counts to the next stop of 8, and CJK,
+Hangul, fullwidth forms and the common emoji take two columns. That table is hand-rolled, so a
+rarer wide character, or a zero-width one such as a combining accent, puts the selection a
+column off for the rest of its row.
+
 The copy goes two ways at once: OSC 52, which asks the terminal to set the clipboard (Windows
 Terminal, iTerm2, kitty and WezTerm honour it, over SSH too), and the platform's own tool:
 `clip.exe` on Windows, `pbcopy` on macOS, `wl-copy`, `xclip` or `xsel` on Linux. When none of

@@ -76,10 +76,11 @@ pub struct RenderState {
     /// terminal height — and the scroll keys need it, or scroll_up runs away
     /// past the top and every scroll back down is silently eaten.
     pub max_scroll: usize,
-    /// The whole wrapped transcript as of the last frame, (style, row,
-    /// soft-wrapped), with its height and width: what a mouse selection is
-    /// measured against.
-    pub rows: Vec<(u8, String, bool)>,
+    /// The whole wrapped transcript as of the last frame, (style, row, join),
+    /// with its height and width: what a mouse selection is measured against.
+    /// join is Some for a row a soft wrap split off the one above, holding what
+    /// the wrap dropped between them (a space, or nothing for a hard break).
+    pub rows: Vec<(u8, String, Option<&'static str>)>,
     pub view_h: usize,
     pub inner_w: usize,
 }
@@ -102,7 +103,8 @@ impl RenderState {
         } else if y - pad >= end - start {
             Some((end - 1, usize::MAX))
         } else {
-            Some((start + y - pad, x as usize))
+            let r = start + y - pad;
+            Some((r, char_at(&self.text(r), x as usize)))
         }
     }
 
@@ -117,8 +119,8 @@ impl RenderState {
     pub fn expand(&self, (r, c): (usize, usize), clicks: u8) -> ((usize, usize), (usize, usize)) {
         if clicks >= 3 {
             let (mut a, mut b) = (r, r);
-            while a > 0 && self.rows[a].2 { a -= 1; }
-            while b + 1 < self.rows.len() && self.rows[b + 1].2 { b += 1; }
+            while a > 0 && self.rows[a].2.is_some() { a -= 1; }
+            while b + 1 < self.rows.len() && self.rows[b + 1].2.is_some() { b += 1; }
             return ((a, 0), (b, usize::MAX));
         }
         let cs: Vec<char> = self.text(r).chars().collect();
@@ -147,9 +149,8 @@ impl RenderState {
             let part = part.trim_end();
             if i == lo.0 {
                 out.push_str(part);
-            } else if self.rows[i].2 {
-                // word_wrap and wrap_ranges both drop the space they broke at
-                out.push(' ');
+            } else if let Some(join) = self.rows[i].2 {
+                out.push_str(join);
                 out.push_str(part.trim_start());
             } else {
                 out.push('\n');
@@ -172,6 +173,34 @@ fn sel_cols(i: usize, lo: (usize, usize), hi: (usize, usize)) -> (usize, usize) 
     let x = if i == lo.0 { lo.1 } else { 0 };
     let y = if i == hi.0 { hi.1.saturating_add(1) } else { usize::MAX };
     (x, y)
+}
+
+/// The char of a plain row under screen column x, measured the way the
+/// terminal lays the row out from column 0: a tab runs to the next stop of 8
+/// and wide chars take two columns. Past the end, the columns beyond it count
+/// on as single cells.
+fn char_at(row: &str, x: usize) -> usize {
+    let mut col = 0;
+    let mut n = 0;
+    for c in row.chars() {
+        col += if c == '\t' { 8 - col % 8 } else if wide(c) { 2 } else { 1 };
+        if col > x {
+            return n;
+        }
+        n += 1;
+    }
+    n + (x - col)
+}
+
+/// Two-column chars: CJK, Hangul, fullwidth forms and the common emoji blocks.
+/// ponytail: hand-rolled ranges, not the full East Asian Width table; a rarer
+/// wide or zero-width char shifts the selection by a column after it.
+fn wide(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x1F300..=0x1F64F
+        | 0x1F680..=0x1F6FF | 0x1F900..=0x1F9FF | 0x20000..=0x3FFFD)
 }
 
 /// What the terminal shows for a styled row: the text without CSI escapes.
@@ -221,16 +250,16 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let bottom_rows = 3 + input.len() + panel.len() + pending.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
-    // (style, row, soft-wrapped). The style is read from the logical line ONCE and carried to
+    // (style, row, join). The style is read from the logical line ONCE and carried to
     // every row it wraps into — a marker only exists on the first row, so styling
     // each row on its own left the rest of a wrapped block looking like plain text.
-    // The flag marks a row that continues the one above, so a copy can rejoin them.
-    let mut all: Vec<(u8, String, bool)> = Vec::new();
-    let push_wrapped = |l: &str, all: &mut Vec<(u8, String, bool)>| {
+    // join marks a row that continues the one above, so a copy can rejoin them.
+    let mut all: Vec<(u8, String, Option<&'static str>)> = Vec::new();
+    let push_wrapped = |l: &str, all: &mut Vec<(u8, String, Option<&'static str>)>| {
         let st = line_style(l);
         if st != b'm' {
             for src in l.split('\n') {
-                all.extend(word_wrap(src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, k > 0)));
+                all.extend(word_wrap(src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
             }
             return;
         }
@@ -249,20 +278,23 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
                 continue; // the fence itself is not drawn; the body is coloured
             }
             if fence {
-                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w))), false));
+                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w))), None));
                 i += 1;
                 continue;
             }
             if let Some((rows, used)) = table_block(&src[i..]) {
                 for row in render_table(&rows, inner_w) {
-                    all.push((b'm', row, false));
+                    all.push((b'm', row, None));
                 }
                 i += used;
                 continue;
             }
             let (cs, runs) = md_line(line);
-            for (k, (x, y)) in wrap_ranges(&cs, inner_w).into_iter().enumerate() {
-                all.push((b'm', md_row(&cs, &runs, x, y), k > 0));
+            let mut prev = None;
+            for (x, y) in wrap_ranges(&cs, inner_w) {
+                let join = prev.map(|p: usize| if cs.get(p) == Some(&' ') { " " } else { "" });
+                all.push((b'm', md_row(&cs, &runs, x, y), join));
+                prev = Some(y);
             }
             i += 1;
         }
@@ -271,7 +303,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         push_wrapped(&l, &mut all);
     }
     if app.hide_thinking && app.current.starts_with(THINK) {
-        all.extend(thinking_preview(&app.current, inner_w).into_iter().map(|r| (b't', r, false)));
+        all.extend(thinking_preview(&app.current, inner_w).into_iter().map(|r| (b't', r, None)));
     } else if !app.current.is_empty() {
         push_wrapped(&app.current.clone(), &mut all);
     }
