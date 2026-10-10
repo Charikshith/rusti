@@ -108,5 +108,6 @@ switched mid-session with `/use`), and the visible transcript. It only runs when
 or Esc-interrupt the current turn first); a build failure is reported inline and leaves the
 running session untouched. An installed binary has no rusti source on the machine, so
 there `/reload` skips the build and restarts the same executable with the same session, model
-and flags, which re-reads `config.json`, models, themes and extensions. How the release build is tuned for that wait is in
+and flags, which re-reads `config.json`, models, themes and extensions. How the release build
+is tuned for that wait is in
 [architecture.md § build profile](architecture.md#build-profile).

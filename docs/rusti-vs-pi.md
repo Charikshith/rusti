@@ -35,7 +35,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
   - In Pi these are examples or packages: `examples/extensions/subagent/`, `todo.ts`, `question.ts`, `interactive-shell.ts`. Pi has no web-fetch tool in core; none is listed in `docs/cli.md` "Tools".
 - **One-level undo.** `/undo` puts back the files the last turn changed and rewinds the session (`ai_core/tools.rs`, `tui/mod.rs`). Not in Pi core; `examples/extensions/git-checkpoint.ts` is the closest thing.
 - **`/commit` macro.** It asks the model to stage and commit the work (`tui/app.rs`). Git branch and `git status` are also injected into every turn (`ai_core/mod.rs`). Pi only has example extensions (`auto-commit-on-exit.ts`, `dirty-repo-guard.ts`).
-- **`/reload` rebuilds rusti from its own source and relaunches it** with the session kept (`tui/mod.rs`). Pi's `/reload` reloads extensions, keybindings and resources, and does not rebuild.
+- **`/reload` rebuilds rusti from its own source and relaunches it** with the session kept (`tui/mod.rs`); an installed binary without the source just restarts. Pi's `/reload` reloads extensions, keybindings and resources, and does not rebuild.
 - **Single native binary.**
   - rusti is a Rust binary of about 2.2 MB, with no Node or Python needed (`readme.md`; `Cargo.toml` release profile).
   - Pi needs Node 22.19 or later (`README.md:27`), installed via npm or `pi.dev/install.sh`.
