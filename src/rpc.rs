@@ -28,9 +28,9 @@ pub fn event_json(ev: &Event) -> Option<Value> {
         Event::TextDelta(t) => json!({"type": "text_delta", "text": t}),
         Event::ReasoningDelta(t) => json!({"type": "thinking_delta", "text": t}),
         Event::Text(t) => json!({"type": "text", "text": t}),
-        Event::ToolStart(s) => json!({"type": "tool_start", "summary": s}),
-        Event::ToolEnd { summary, ok, ms, output } => {
-            json!({"type": "tool_end", "summary": summary, "ok": ok, "ms": *ms as u64, "output": output})
+        Event::ToolStart { id, summary } => json!({"type": "tool_start", "id": id, "summary": summary}),
+        Event::ToolEnd { id, summary, ok, ms, output } => {
+            json!({"type": "tool_end", "id": id, "summary": summary, "ok": ok, "ms": *ms as u64, "output": output})
         }
         Event::Resumed { msg_num, .. } => json!({"type": "resumed", "messages": msg_num}),
         Event::SessionName(n) => json!({"type": "session_name", "name": n}),
@@ -465,10 +465,10 @@ mod tests {
         let cases = [
             (Event::TextDelta("hi".into()), json!({"v": 1, "type": "text_delta", "text": "hi"})),
             (Event::ReasoningDelta("hm".into()), json!({"v": 1, "type": "thinking_delta", "text": "hm"})),
-            (Event::ToolStart("read a.rs".into()), json!({"v": 1, "type": "tool_start", "summary": "read a.rs"})),
+            (Event::ToolStart { id: 4, summary: "read a.rs".into() }, json!({"v": 1, "type": "tool_start", "id": 4, "summary": "read a.rs"})),
             (
-                Event::ToolEnd { summary: "run cargo test".into(), ok: false, ms: 1500, output: "[exit 101]".into() },
-                json!({"v": 1, "type": "tool_end", "summary": "run cargo test", "ok": false, "ms": 1500, "output": "[exit 101]"}),
+                Event::ToolEnd { id: 4, summary: "run cargo test".into(), ok: false, ms: 1500, output: "[exit 101]".into() },
+                json!({"v": 1, "type": "tool_end", "id": 4, "summary": "run cargo test", "ok": false, "ms": 1500, "output": "[exit 101]"}),
             ),
             (
                 Event::Usage { tokens: 7, prompt: 100, est: false, gen_ms: 30, cached: None },

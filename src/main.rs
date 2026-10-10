@@ -51,7 +51,9 @@ project (RUSTI_HOME moves it). ./model.json holds this project's \"allow\" (tool
 overrides the global one for this project. Flags and env override both.
 \"mcp\" lists MCP servers to start, each with a command, optional args/env,
 and \"enabled\". Their tools join the built-in ones as mcp__<server>__<tool>, are always
-permission-gated, and are refused in plan mode. Toggle them live with /mcp.
+permission-gated, and are refused in plan mode. Toggle them live with /mcp. \"defer\": true
+keeps a server's tools out of requests until the model loads them with tool_search.
+\"cache\" on a model profile sends explicit prompt-cache markers: \"anthropic\" or \"openai\".
 \"shell\" is the path of the shell every command runs in (~ is your home folder); unset, it is
 Git Bash (Windows), then bash on PATH, then cmd /C or sh -c. \"shell_command_prefix\" is
 put in front of every command, on its own line.
@@ -196,7 +198,7 @@ fn main() {
         }
     }
     ai_core::set_prompt_flags(values(&args, "--system-prompt").pop(), values(&args, "--append-system-prompt"));
-    let (url, key, model) = resolve_model(&args);
+    let (url, key, model, cache) = resolve_model(&args);
 
     // session + task first (so --tree can be cancelled before any model config)
     // --session NAME → .rusti/sessions/NAME.json; otherwise --resume/--tree
@@ -236,7 +238,8 @@ fn main() {
         task = if tui_mode || rpc { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
     }
 
-    let client = ai_core::llm::Client::new(url, key, model.clone());
+    let mut client = ai_core::llm::Client::new(url, key, model.clone());
+    client.cache = cache;
 
     if tui_mode {
         if let Err(e) = tui::run(tui::TuiConfig { client, session, model, cli_args: args.clone() }) {
@@ -317,7 +320,7 @@ fn prompt(label: &str, default: &str) -> String {
 
 /// Saved profile first; explicit flags/env override per field. When nothing
 /// is saved and no --url is given, ask interactively and persist the answer.
-fn resolve_model(args: &[String]) -> (String, String, String) {
+fn resolve_model(args: &[String]) -> (String, String, String, Option<config::CacheMode>) {
     let explicit_url = get(args, "--url", "LLM_URL");
     let explicit_key = get(args, "--key", "LLM_KEY");
     let explicit_model = get(args, "--model", "LLM_MODEL");
@@ -343,7 +346,7 @@ fn resolve_model(args: &[String]) -> (String, String, String) {
     let url = explicit_url.unwrap_or(prof.url);
     let key = explicit_key.unwrap_or(prof.key);
     let model = explicit_model.unwrap_or(if prof.model.is_empty() { "gpt-4o-mini".into() } else { prof.model });
-    (url, key, model)
+    (url, key, model, prof.cache)
 }
 
 #[cfg(test)]

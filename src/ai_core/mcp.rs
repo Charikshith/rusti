@@ -44,6 +44,8 @@ pub struct Server {
     /// kept beside the original so a call never has to parse the prefix back
     /// off, which would be ambiguous once slug() has turned '-' into '_'.
     pub tools: Vec<(String, String, Value)>,
+    /// Config's `defer`: tools stay out of requests until tool_search loads them.
+    pub defer: bool,
     stdin: Mutex<ChildStdin>,
     rx: Mutex<Receiver<String>>,
     child: Mutex<Child>,
@@ -52,10 +54,14 @@ pub struct Server {
 }
 
 impl Server {
+    /// The reader lock is held from send to reply, so two parallel calls to
+    /// one server take turns; otherwise one could read and skip the other's
+    /// reply. Different servers still overlap.
     fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+        let rx = self.rx.lock().map_err(|_| "mcp reader lock poisoned".to_string())?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
-        self.wait_for(id, timeout, method)
+        self.wait_for(&rx, id, timeout, method)
     }
 
     fn notify(&self, method: &str, params: Value) -> Result<(), String> {
@@ -71,8 +77,7 @@ impl Server {
     /// Read until the reply with this id arrives. Anything else on the pipe —
     /// notifications, log lines, replies we already timed out on — is skipped
     /// rather than treated as the answer.
-    fn wait_for(&self, id: u64, timeout: Duration, method: &str) -> Result<Value, String> {
-        let rx = self.rx.lock().map_err(|_| "mcp reader lock poisoned".to_string())?;
+    fn wait_for(&self, rx: &Receiver<String>, id: u64, timeout: Duration, method: &str) -> Result<Value, String> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -117,7 +122,7 @@ impl Drop for Server {
     }
 }
 
-static SERVERS: Mutex<Vec<Arc<Server>>> = Mutex::new(Vec::new());
+pub(crate) static SERVERS: Mutex<Vec<Arc<Server>>> = Mutex::new(Vec::new());
 
 /// Tool names must match [A-Za-z0-9_-]; anything else becomes '_'.
 fn slug(s: &str) -> String {
@@ -183,6 +188,7 @@ fn connect(name: &str, cfg: &McpServer) -> Result<Server, String> {
     let mut s = Server {
         name: name.to_string(),
         tools: Vec::new(),
+        defer: cfg.defer,
         stdin: Mutex::new(stdin),
         rx: Mutex::new(rx),
         child: Mutex::new(child),
@@ -241,7 +247,8 @@ pub fn connect_all() -> Vec<String> {
     for (name, s) in cfg.mcp.iter().filter(|(_, s)| s.enabled) {
         match connect(name, s) {
             Ok(srv) => {
-                out.push(format!("  ✓ mcp {name}: {} tools", srv.tools.len()));
+                let deferred = if srv.defer { "deferred " } else { "" };
+                out.push(format!("  ✓ mcp {name}: {} {deferred}tools", srv.tools.len()));
                 if let Ok(mut list) = SERVERS.lock() {
                     list.push(Arc::new(srv));
                 }
@@ -252,10 +259,130 @@ pub fn connect_all() -> Vec<String> {
     out
 }
 
-/// Every connected server's tools, as OpenAI-style function schemas.
+/// Every connected server's tools, as OpenAI-style function schemas, except
+/// a deferred server's: those wait for tool_search.
 pub fn schemas() -> Vec<Value> {
     let Ok(list) = SERVERS.lock() else { return Vec::new() };
-    list.iter().flat_map(|s| s.tools.iter().map(|(_, _, sch)| sch.clone())).collect()
+    list.iter().filter(|s| !s.defer).flat_map(|s| s.tools.iter().map(|(_, _, sch)| sch.clone())).collect()
+}
+
+/// Deferred servers' tools as (server, schema), in registry order.
+pub fn deferred() -> Vec<(String, Value)> {
+    let Ok(list) = SERVERS.lock() else { return Vec::new() };
+    list.iter()
+        .filter(|s| s.defer)
+        .flat_map(|s| s.tools.iter().map(|(_, _, sch)| (s.name.clone(), sch.clone())))
+        .collect()
+}
+
+/// Most tools one tool_search loads; the default is fewer.
+pub const SEARCH_MAX: usize = 8;
+
+/// tool_search: rank the deferred tools not yet loaded against `query` and
+/// load the best `limit`. Returns the result text and the names loaded.
+pub fn search(query: &str, limit: usize, loaded: &[String]) -> (String, Vec<String>) {
+    let pool: Vec<(String, Value)> = deferred()
+        .into_iter()
+        .filter(|(_, s)| !loaded.iter().any(|n| s["function"]["name"] == n.as_str()))
+        .collect();
+    let docs: Vec<String> = pool.iter().map(|(srv, s)| search_text(srv, s)).collect();
+    let hits: Vec<&Value> = bm25(query, &docs).into_iter().take(limit.clamp(1, SEARCH_MAX)).map(|(i, _)| &pool[i].1).collect();
+    if hits.is_empty() {
+        return (format!("No deferred tool matches \"{query}\" ({} not loaded yet). Try other words.", pool.len()), vec![]);
+    }
+    let names: Vec<String> = hits.iter().map(|s| s["function"]["name"].as_str().unwrap_or("").to_string()).collect();
+    let rows: Vec<String> = hits
+        .iter()
+        .map(|s| {
+            let desc = s["function"]["description"].as_str().unwrap_or("").lines().next().unwrap_or("");
+            format!("- {} — {desc}", s["function"]["name"].as_str().unwrap_or(""))
+        })
+        .collect();
+    let n = names.len();
+    (format!("Loaded {n} tool{}, available from your next call:\n{}", if n == 1 { "" } else { "s" }, rows.join("\n")), names)
+}
+
+/// What a deferred tool is searchable by: its server, its name (the tokenizer
+/// splits `get_issue` and `getIssue` into words), description, and each
+/// parameter's name and description.
+fn search_text(server: &str, schema: &Value) -> String {
+    let f = &schema["function"];
+    let mut t = format!("{server} {} {}", f["name"].as_str().unwrap_or(""), f["description"].as_str().unwrap_or(""));
+    if let Some(props) = f["parameters"]["properties"].as_object() {
+        for (k, v) in props {
+            t.push_str(&format!(" {k} {}", v["description"].as_str().unwrap_or("")));
+        }
+    }
+    t
+}
+
+const STOP: &[&str] = &["a", "an", "and", "are", "by", "for", "from", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "with"];
+
+/// Lowercase words, split at anything not alphanumeric and at camelCase
+/// humps, stop words dropped, naively stemmed (plural s, -ing) so "issues"
+/// finds "issue". ponytail: no real stemmer; "created" misses "create".
+fn words(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut w = String::new();
+    let mut prev_lower = false;
+    for c in text.chars().chain([' ']) {
+        if !c.is_alphanumeric() || (c.is_uppercase() && prev_lower) {
+            if !w.is_empty() && !STOP.contains(&w.as_str()) {
+                out.push(stem(&w).to_string());
+            }
+            w.clear();
+        }
+        if c.is_alphanumeric() {
+            w.extend(c.to_lowercase());
+        }
+        prev_lower = c.is_lowercase();
+    }
+    out
+}
+
+fn stem(w: &str) -> &str {
+    if w.len() > 5 && w.ends_with("ing") {
+        &w[..w.len() - 3]
+    } else if w.len() > 3 && w.ends_with('s') && !w.ends_with("ss") {
+        &w[..w.len() - 1]
+    } else {
+        w
+    }
+}
+
+/// Okapi BM25 (k1 1.2, b 0.75): (doc index, score) for every doc sharing a
+/// word with the query, best first, ties in doc order. ponytail: rebuilt per
+/// search, which is nothing next to the network call around it.
+fn bm25(query: &str, docs: &[String]) -> Vec<(usize, f64)> {
+    let (k1, b) = (1.2, 0.75);
+    let docs: Vec<Vec<String>> = docs.iter().map(|d| words(d)).collect();
+    let n = docs.len() as f64;
+    let avg = docs.iter().map(Vec::len).sum::<usize>() as f64 / n.max(1.0);
+    let mut q = words(query);
+    q.sort();
+    q.dedup();
+    let mut scored: Vec<(usize, f64)> = docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let score = q
+                .iter()
+                .map(|t| {
+                    let tf = d.iter().filter(|w| *w == t).count() as f64;
+                    if tf == 0.0 {
+                        return 0.0;
+                    }
+                    let df = docs.iter().filter(|d| d.contains(t)).count() as f64;
+                    let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+                    idf * tf * (k1 + 1.0) / (tf + k1 * (1.0 - b + b * d.len() as f64 / avg.max(1.0)))
+                })
+                .sum::<f64>();
+            (i, score)
+        })
+        .filter(|(_, s)| *s > 0.0)
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored
 }
 
 /// Call a tool by its advertised "mcp__server__tool" name.
@@ -339,6 +466,28 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
 }
 
 #[cfg(test)]
+/// A Server whose child has already exited, for registry tests that never
+/// call it.
+pub(crate) fn dead_server(name: &str, defer: bool, tools: Vec<(String, String, Value)>) -> Server {
+    let mut child = Command::new(if cfg!(windows) { "cmd" } else { "true" })
+        .args(if cfg!(windows) { &["/C", "exit"][..] } else { &[][..] })
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    Server {
+        name: name.into(),
+        tools,
+        defer,
+        stdin: Mutex::new(stdin),
+        rx: Mutex::new(mpsc::channel().1),
+        child: Mutex::new(child),
+        errs: Arc::new(Mutex::new(VecDeque::new())),
+        next_id: AtomicU64::new(1),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -369,6 +518,7 @@ mod tests {
             args: vec!["tests/fake_mcp_server.py".into()],
             env: Default::default(),
             enabled: true,
+            defer: false,
         }
     }
 
@@ -407,6 +557,50 @@ mod tests {
         assert!(!ok && out.contains("unknown mcp tool"), "got {out}");
 
         SERVERS.lock().unwrap().retain(|s| s.name != "fake");
+    }
+
+    /// BM25 ranks the tool that matches the most query words, rarer words
+    /// weighing more; plurals and camelCase still match, and a query sharing
+    /// no word with any tool loads nothing (F08).
+    #[test]
+    fn bm25_ranks_deferred_tools_by_relevance() {
+        let docs = vec![
+            "github create_pull_request Open a pull request from a branch".to_string(),
+            "github getIssue Fetch one issue by number number The issue number".to_string(),
+            "github list_issues List issues in a repository state open or closed".to_string(),
+            "slack post_message Send a message to a channel".to_string(),
+        ];
+        let order = |q: &str| bm25(q, &docs).into_iter().map(|(i, _)| i).collect::<Vec<_>>();
+        assert_eq!(order("pull request"), [0]);
+        assert_eq!(order("get issue")[0], 1, "camelCase splits: getIssue answers 'get issue'");
+        assert_eq!(order("issues")[..2], [1, 2], "a plural matches the singular");
+        assert_eq!(order("list open issues")[0], 2, "more matched words outrank one");
+        assert_eq!(order("send slack message"), [3]);
+        assert!(order("the of and").is_empty(), "stop words alone match nothing");
+        assert!(order("kubernetes").is_empty());
+        assert_eq!(words("getIssue list_issues"), ["get", "issue", "list", "issue"]);
+
+        // search() over the live registry: loaded tools are not offered again
+        let schema = |n: &str, d: &str| json!({"type": "function", "function": {"name": n, "description": d,
+            "parameters": {"type": "object", "properties": {"repo": {"type": "string", "description": "owner/name"}}}}});
+        let srv = dead_server("bm25test", true, vec![
+            ("mcp__bm25test__get_issue".into(), "get_issue".into(), schema("mcp__bm25test__get_issue", "Fetch one issue\nmore text")),
+            ("mcp__bm25test__send".into(), "send".into(), schema("mcp__bm25test__send", "Send a chat message")),
+        ]);
+        SERVERS.lock().unwrap().push(Arc::new(srv));
+        assert!(!schemas().iter().any(|s| s["function"]["name"] == "mcp__bm25test__get_issue"), "deferred: not declared");
+        let (text, names) = search("issue", 5, &[]);
+        assert_eq!(names, ["mcp__bm25test__get_issue"]);
+        assert_eq!(text, "Loaded 1 tool, available from your next call:\n- mcp__bm25test__get_issue — Fetch one issue");
+        let (text, names) = search("issue", 5, &names);
+        assert!(names.is_empty() && text.starts_with("No deferred tool matches"), "{text}");
+        assert_eq!(search("owner name", 1, &[]).1.len(), 1, "parameter descriptions are searched; limit caps");
+        // declared: tool_search while something is deferred, and a load appends at the very end
+        let declared = |loaded: &[String]| super::super::tool_schemas(loaded).iter().map(|t| t["function"]["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let plain = declared(&[]);
+        assert!(plain.contains(&"tool_search".to_string()) && !plain.contains(&"mcp__bm25test__get_issue".to_string()));
+        assert_eq!(declared(&["mcp__bm25test__get_issue".to_string()]).last().unwrap(), "mcp__bm25test__get_issue");
+        SERVERS.lock().unwrap().retain(|s| s.name != "bm25test");
     }
 
     /// edit_stat reads back the "+N -M" the edit tools write. It must not fire

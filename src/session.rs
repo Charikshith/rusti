@@ -173,6 +173,11 @@ pub struct Entry {
     /// prefix cache keeps matching. The transcript and export never show it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// Deferred MCP tools a tool_search call loaded, on that call's tool
+    /// entry. Kept in the tree rather than a registry, so a load holds on the
+    /// branch it happened on and nowhere else: resume and /tree get it free.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loaded: Vec<String>,
     /// Set on the summary entry a compaction writes: what the next compaction
     /// updates instead of starting over, and the files the summarized part touched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,7 +199,7 @@ pub struct Compaction {
 
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, compaction: None, ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, loaded: Vec::new(), compaction: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.
@@ -325,6 +330,17 @@ impl Session {
         let parents: std::collections::HashSet<&str> =
             self.entries.iter().filter_map(|e| e.parent.as_deref()).collect();
         self.entries.iter().filter(|e| !parents.contains(e.id.as_str())).count()
+    }
+
+    /// Every tool loaded by tool_search on the active path, first load first.
+    pub fn loaded(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for n in self.path().into_iter().flat_map(|e| &e.loaded) {
+            if !out.contains(n) {
+                out.push(n.clone());
+            }
+        }
+        out
     }
 
     /// Active path in OpenAI message format.
@@ -466,6 +482,36 @@ second".into()), Some(sys));
         assert_eq!(clip("abcdef", 3), "abc…");
         assert_eq!(clip("abc", 3), "abc");
         assert_eq!(clip("héllo wörld", 4), "héll…"); // clips on chars, not bytes
+    }
+}
+
+#[cfg(test)]
+mod loaded_tests {
+    use super::*;
+
+    /// A tool_search load lives on its branch: the active path sees it, a
+    /// sibling branch does not, and it survives a save and reload (F08).
+    #[test]
+    fn loaded_tools_follow_the_active_branch() {
+        let p = std::env::temp_dir().join(format!("rusti_loaded_{}.json", std::process::id()));
+        let mut s = Session::with_path("m".into(), &p.to_string_lossy());
+        let sys = s.add(Entry::new("system", "sys".into()), None);
+        let u = s.add(Entry::new("user", "find it".into()), Some(sys));
+        let mut t = Entry::new("tool", "Loaded 2 tools".into());
+        t.loaded = vec!["mcp__gh__get_issue".into(), "mcp__gh__list_issues".into()];
+        let t = s.add(t, Some(u.clone()));
+        let mut again = Entry::new("tool", "Loaded 1 tool".into());
+        again.loaded = vec!["mcp__gh__get_issue".into(), "mcp__gh__create_pr".into()];
+        s.add(again, Some(t));
+        assert_eq!(s.loaded(), ["mcp__gh__get_issue", "mcp__gh__list_issues", "mcp__gh__create_pr"], "path order, once each");
+
+        s.save().unwrap();
+        assert_eq!(Session::load_from(&p.to_string_lossy()).loaded().len(), 3, "survives resume");
+        std::fs::remove_file(&p).ok();
+
+        s.add(Entry::new("assistant", "other branch".into()), Some(u));
+        assert!(s.loaded().is_empty(), "a sibling branch never loaded them");
+        assert!(!serde_json::to_string(&Entry::new("tool", "x".into())).unwrap().contains("loaded"), "no loads, no key");
     }
 }
 

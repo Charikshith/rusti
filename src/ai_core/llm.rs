@@ -4,6 +4,7 @@
 // accumulated per call index (same pattern pi's parseStreamingJson does).
 
 use super::{emit, Event};
+use crate::config::CacheMode;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -28,6 +29,8 @@ pub struct Client {
     /// is one profile, so it stops sending it for the Client's lifetime: until
     /// /model switches profile or rusti restarts.
     no_stream_options: AtomicBool,
+    /// The profile's `"cache"`: which explicit prompt-cache markers to send.
+    pub cache: Option<CacheMode>,
     /// Sent as `reasoning_effort` when set (RPC set_thinking); None sends nothing.
     pub reasoning: Option<String>,
 }
@@ -66,13 +69,14 @@ impl Client {
         // a pooled connection reused next turn is dead -> "error sending request".
         // No pooling = fresh connection per request (localhost handshake is free).
         let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
-        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), reasoning: None }
+        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), cache: None, reasoning: None }
     }
 
     pub async fn chat_stream(
         &self,
         messages: &[Value],
         tools: Option<&[Value]>,
+        cache_key: &str,
         cancel: &AtomicBool,
         quiet: bool, // stream no text or thinking deltas: a compaction summary is not a reply
     ) -> Result<ChatResult, String> {
@@ -82,6 +86,9 @@ impl Client {
         }
         if let Some(r) = &self.reasoning {
             body["reasoning_effort"] = json!(r);
+        }
+        if let Some(mode) = self.cache {
+            mark_cache(&mut body, mode, cache_key);
         }
         // without it OpenAI streams no usage at all, so every count is a guess
         if !self.no_stream_options.load(Ordering::Relaxed) {
@@ -186,6 +193,59 @@ impl Client {
             .unwrap_or_else(|| if tool_calls.is_empty() { "stop".to_string() } else { "tool_calls".to_string() });
         Ok(ChatResult { content, tool_calls, finish_reason, prompt_tokens })
     }
+}
+
+/// Explicit cache markers, opt-in per profile. Anthropic-format endpoints
+/// cache up to each `cache_control` breakpoint: the system prompt, the end of
+/// the tools, and the newest message, so the next request reads the whole
+/// conversation back. OpenAI caches by prefix on its own; `prompt_cache_key`
+/// only routes one session's requests to the same cache.
+pub fn mark_cache(body: &mut Value, mode: CacheMode, key: &str) {
+    match mode {
+        CacheMode::Openai => body["prompt_cache_key"] = json!(key),
+        CacheMode::Anthropic => {
+            let mark = json!({"type": "ephemeral"});
+            if let Some(t) = body["tools"].as_array_mut().and_then(|t| t.last_mut()) {
+                t["cache_control"] = mark.clone();
+            }
+            let Some(msgs) = body["messages"].as_array_mut() else { return };
+            if let Some(sys) = msgs.first_mut().filter(|m| m["role"] == "system") {
+                mark_text(sys, &mark);
+            }
+            // the newest message with text, a tool result included: marking
+            // only user/assistant turns would leave a tool loop's results uncached
+            for m in msgs.iter_mut().skip(1).rev() {
+                if mark_text(m, &mark) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Put `mark` on a message's last text part, turning string content into one
+/// part first. False when it has no text to carry it (an empty tool-call turn).
+fn mark_text(m: &mut Value, mark: &Value) -> bool {
+    if let Some(t) = m["content"].as_str().filter(|t| !t.is_empty()) {
+        m["content"] = json!([{"type": "text", "text": t, "cache_control": mark}]);
+        return true;
+    }
+    let part = m["content"].as_array_mut().and_then(|p| p.iter_mut().rev().find(|p| p["type"] == "text"));
+    match part {
+        Some(p) => {
+            p["cache_control"] = mark.clone();
+            true
+        }
+        None => false,
+    }
+}
+
+/// A session's prompt_cache_key: FNV-1a of its absolute path, stable across
+/// runs and rusti versions, so a resumed session routes to its old cache.
+pub fn cache_key(session_path: &str) -> String {
+    let abs = std::env::current_dir().map(|d| d.join(session_path)).unwrap_or_else(|_| session_path.into());
+    let h = abs.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    format!("rusti-{h:016x}")
 }
 
 pub struct ToolCall {
@@ -336,6 +396,46 @@ mod tests {
         assert!(rejects_stream_options(400, r#"{"error":"Unrecognized request argument supplied: stream_options"}"#));
         assert!(!rejects_stream_options(400, "model not found"), "only the field's own rejection drops it");
         assert!(!rejects_stream_options(500, "stream_options"));
+    }
+
+    /// Anthropic markers sit on the system prompt, the last tool and the
+    /// newest message with text, a tool result included, and nowhere else;
+    /// OpenAI gets a stable per-session key instead; no profile mode, no
+    /// marker at all (F10 C3).
+    #[test]
+    fn cache_markers_land_on_the_three_breakpoints() {
+        let body = || json!({
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "data:x"}}]},
+                {"role": "assistant", "content": "", "tool_calls": []},
+                {"role": "tool", "tool_call_id": "c1", "content": "result"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "a"}}, {"type": "function", "function": {"name": "b"}}],
+        });
+        let mut b = body();
+        mark_cache(&mut b, CacheMode::Anthropic, "k");
+        let mark = json!({"type": "ephemeral"});
+        assert_eq!(b["messages"][0]["content"], json!([{"type": "text", "text": "sys", "cache_control": mark}]));
+        assert_eq!(b["messages"][3]["content"][0]["cache_control"], mark, "the newest message, a tool result");
+        assert_eq!(b["tools"][1]["cache_control"], mark);
+        assert_eq!(b.to_string().matches("cache_control").count(), 3, "three breakpoints, no more: {b}");
+        assert!(b.get("prompt_cache_key").is_none());
+
+        // an empty newest message passes the marker back to the last one with text
+        let mut b = body();
+        b["messages"].as_array_mut().unwrap().truncate(3);
+        mark_cache(&mut b, CacheMode::Anthropic, "k");
+        assert_eq!(b["messages"][1]["content"][0]["cache_control"], mark, "the text part, not the image");
+        assert!(b["messages"][1]["content"][1].get("cache_control").is_none());
+        assert_eq!(b["messages"][2]["content"], "", "the empty tool-call turn is left as it was");
+
+        let mut b = body();
+        mark_cache(&mut b, CacheMode::Openai, &cache_key(".rusti/sessions/a.json"));
+        assert!(!b.to_string().contains("cache_control"));
+        assert_eq!(b["prompt_cache_key"], cache_key(".rusti/sessions/a.json"), "stable for one session");
+        assert_ne!(cache_key(".rusti/sessions/a.json"), cache_key(".rusti/sessions/b.json"));
+        assert!(Client::new("u".into(), "".into(), "m".into()).cache.is_none(), "off unless the profile asks");
     }
 
     #[test]

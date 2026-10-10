@@ -141,8 +141,8 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Web search | **no** (open-work) | not in core | Neither |
 | Output limits | `read_file`: 2000 lines or 50 KB with a continuation offset, `read_max_bytes` (see `readme.md`); other tools 20,000 bytes per result (`ai_core/tools.rs`) | 2000 lines or 50 KB (`dist/core/tools/truncate.js:10-11`) | Same read cap; Pi allows more per call for other tools |
 | Tool allowlisting | **no** | **yes**: `--tools`, `-xt`, `-nbt`, `-nt`, `defaultTools` with `+`/`-` | |
-| Parallel or scripted calls | **no**: deliberately skipped (open-work "Parallel Tool Calls") | **yes**: `codemode` runs JavaScript in QuickJS that calls tools in parallel; opt-in (`docs/cli.md:148-178`) | |
-| Tool search | **no** | **yes**: `tool_search`, opt-in (`docs/cli.md:180-182`) | |
+| Parallel or scripted calls | **parallel yes, scripted no**: permissions first in call order, then adjacent reads, commands and MCP calls run concurrently while writes, `ask_user` and `delegate` run alone in place; results in call order; a `batch` tool; codemode deferred (`ai_core/mod.rs`) | **yes**: `codemode` runs JavaScript in QuickJS that calls tools in parallel; opt-in (`docs/cli.md:148-178`) | |
+| Tool search | **yes**: `"defer": true` per MCP server, `tool_search` (BM25), loads recorded on the session branch (`ai_core/mcp.rs`) | **yes**: `tool_search`, opt-in (`docs/cli.md:180-182`) | |
 | Override built-ins | **no** | **yes**: an extension registers the same tool name (`docs/extensions.md`) | |
 
 ## 4. User shell commands
@@ -171,7 +171,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Local models | **yes**: any OpenAI-compatible server (Ollama example in `readme.md`) | **yes**: Ollama, LM Studio, vLLM, llama.cpp router (`docs/llama-cpp.md`) | |
 | Custom provider code | **no** | **yes**: `pi.registerProvider()`, virtual models (`docs/custom-provider.md`, `docs/virtual-models.md`) | |
 | Retry | **yes**: 3 tries with 1, 2 and 4 s backoff on 408, 429 and 5xx; no Retry-After (`ai_core/llm.rs`) | **yes**: configurable `retry.*` | |
-| Prompt caching | **partial**: stable system prompt (git status and plan mode ride on the user turn), `stream_options` usage, cache hits in footer and stats row; explicit cache markers still open-work (`ai_core/mod.rs`, `ai_core/llm.rs`) | **yes**: `PI_CACHE_RETENTION`; footer shows cache usage | |
+| Prompt caching | **partial**: stable system prompt (git status and plan mode ride on the user turn), `stream_options` usage, cache hits in footer and stats row; opt-in `"cache": "anthropic"` (`cache_control` markers) or `"openai"` (`prompt_cache_key`) per profile (`ai_core/mod.rs`, `ai_core/llm.rs`) | **yes**: `PI_CACHE_RETENTION`; footer shows cache usage | |
 
 ## 6. Context and compaction
 

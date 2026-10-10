@@ -72,6 +72,12 @@ user message instead, so a provider's prompt cache can reuse everything sent bef
 {"default": "ollama", "models": [{"name": "ollama", "url": "http://localhost:11434/v1/chat/completions", "key": "", "model": "llama3.2"}]}
 ```
 
+`"cache"` on a profile adds explicit prompt-cache markers, off by default because a server
+that does not know the fields may reject the request. `"anthropic"` (for Anthropic-format
+endpoints such as OpenRouter's `anthropic/*`) puts `cache_control` on the system prompt, the
+last tool and the newest message; `"openai"` sends a `prompt_cache_key` derived from the
+session file, so one session's requests share a cache across restarts.
+
 It doubles as the project config. Answering `[a]lways` at a permission prompt appends the
 tool to `"allow"`, so the next run doesn't ask again; `"max_iters"` and `"context"` set
 per-project defaults that flags and env still override:
@@ -85,6 +91,13 @@ the rest; a single line over the cap gets a `sed -n 'Np' FILE | head -c N` hint 
 `"read_max_bytes"` (in either file) changes the byte cap; `0` removes both caps, at your own
 risk: every result is re-sent on each later turn until compaction.
 
+When the model asks for several tools in one turn, every permission prompt comes first, one
+at a time in call order. Then reads, searches, `run_command`, `run_background`, `web_fetch`
+and MCP calls that sit next to each other run at the same time; a write, `ask_user`,
+`delegate` or `todo` runs alone in its place, so a read the model put after a write sees it.
+Results reach the model in call order. The `batch` tool (`{"calls": [{"name", "args"}]}`)
+does the same for a model that makes one call per turn, and returns one combined result.
+
 ## architecture
 
 ```
@@ -96,8 +109,9 @@ main.rs      CLI
 └── ai_core  agent loop, LLM client, tool dispatch, event system
     ├── llm    reqwest SSE streaming client
     └── tools  read/write/edit/multi_edit/delete/move file, grep/glob/list_dir, run command (timeout),
-    │          background jobs, todo, delegate (sub-agent), ask user, web_fetch;
-    │          permission gate + project-root guard
+    │          background jobs, todo, delegate (sub-agent), ask user, web_fetch, batch;
+    │          permission gate + project-root guard; parallel-safe calls run concurrently
+    └── mcp    stdio MCP client; deferred servers + tool_search (BM25)
 
 mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 ```
@@ -243,6 +257,14 @@ so you pay network latency at startup and accept whatever the registry serves th
 `/mcp` lists them with their live state and switches them on or off — turning one on
 connects it there and then, turning one off kills the child process. The choice is
 written back to `model.json`, so it survives a restart.
+
+A server with dozens of tools puts every schema into every request. `"defer": true` on its
+entry keeps its tools out until the model asks for them: rusti then declares a `tool_search`
+tool naming each deferred server and its tool count, ranks the deferred tools against the
+model's query (BM25 over names, descriptions and parameters) and loads the best matches
+(5 by default, at most 8) from the next request on. A load is recorded on that tool result in
+the session, so it holds after `--resume` and on that `/tree` branch only. Each load changes
+the tool list once, which costs one prompt-cache miss.
 
 Transport is stdio with JSON-RPC 2.0, implemented directly against `std::process`
 and serde_json — **no MCP SDK and no added dependency**; rusti's own side stays pure
@@ -391,8 +413,8 @@ rusti --json "run the tests and fix what fails" | jq -c 'select(.type=="tool_end
 | `session` | `name`, `path`, `model`, `messages` (user messages on the path), `cwd`, `thinking` |
 | `text_delta` / `thinking_delta` | `text`: a streamed chunk of the reply / of the model's reasoning |
 | `text` | `text`: a whole transcript line (attachments, todo lists, warnings) |
-| `tool_start` | `summary`, e.g. `"read src/main.rs"` |
-| `tool_end` | `summary`, `ok`, `ms`, `output` (the tool's result) |
+| `tool_start` | `id`, `summary`, e.g. `"read src/main.rs"` |
+| `tool_end` | `id`, `summary`, `ok`, `ms`, `output` (the tool's result) |
 | `usage` | `tokens`, `prompt`, `estimated`, `gen_ms`, `cached` (null when not reported) |
 | `retry` | `attempt`, `of`, `wait_ms`, `error` |
 | `ask` | `id`, `question`, `choices`: `[{label, value}]`, empty for a free-text question |
@@ -402,7 +424,7 @@ rusti --json "run the tests and fix what fails" | jq -c 'select(.type=="tool_end
 | `notice`, `git`, `session_name`, `resumed` | status: `text`, `branch`, `name`, `messages` |
 | `task_end` | `ok`, `error` (`"interrupted"` after an abort); `--json` adds `answer` |
 
-Tool calls run one at a time, so a `tool_end` belongs to the `tool_start` before it.
+Tool calls can run in parallel, so a `tool_end` belongs to the `tool_start` with the same `id`.
 
 **`rusti --rpc [flags]`** stays up and reads one command per stdin line. It writes the
 `session` line at start, then a `response` for every command and the same events as
@@ -434,11 +456,11 @@ fresh `session` line. Permission prompts and `ask_user` become `ask` lines that 
 ```
 → {"id":1,"type":"prompt","text":"add a --version flag"}
 ← {"v":1,"type":"response","id":1,"command":"prompt","ok":true,"data":{"accepted":"run"}}
-← {"v":1,"type":"tool_start","summary":"edit src/main.rs"}
+← {"v":1,"type":"tool_start","id":1,"summary":"edit src/main.rs"}
 ← {"v":1,"type":"ask","id":"q1","question":"allow edit_file edit src/main.rs?","choices":[...]}
 → {"id":2,"type":"answer","ask":"q1","text":"yes"}
 ← {"v":1,"type":"response","id":2,"command":"answer","ok":true,"data":{}}
-← {"v":1,"type":"tool_end","summary":"edit src/main.rs  +3 -0","ok":true,"ms":2,"output":"..."}
+← {"v":1,"type":"tool_end","id":1,"summary":"edit src/main.rs  +3 -0","ok":true,"ms":2,"output":"..."}
 ← {"v":1,"type":"task_end","ok":true,"error":null}
 ```
 
