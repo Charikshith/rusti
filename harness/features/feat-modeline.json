@@ -1,0 +1,12 @@
+{
+  "id": "feat-modeline",
+  "name": "Permission mode lives in the status line, not the transcript",
+  "description": "Shift+Tab and /plan change the mode silently; the status line always leads with the mode name and a one-line meaning (app::mode_label), rewritten in place, coloured per mode by theme role (manual dim, plan info, auto warn, DEVIL fail bold). footer_right fits to the terminal width: the meaning is ellipsised, then dropped, before the name. /settings cannot hide the mode.",
+  "dependencies": ["feat-shifttab-modes"],
+  "status": "done",
+  "evidence": "cargo test all pass: tui::tests::footer_always_names_and_explains_the_mode, footer_shows_only_the_parts_that_exist, settings_hide_footer_segments_but_never_the_mode; tui::app::tests::plan_toggle_leaves_the_transcript_alone. rusti --self-test OK.",
+  "decisions": [
+    "Captain overrode the 3-second hint mid-task: the meaning stays permanently, so no expiry clock.",
+    "Shift+Tab itself is inline in the key loop; the no-transcript check runs through /plan, which mutates the same global."
+  ]
+}

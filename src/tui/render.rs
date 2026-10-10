@@ -376,13 +376,21 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let mode = crate::ai_core::mode();
     let footer = app::footer_right(
         &app.footer, mode, &app.session, &app.model, &app.branch,
-        app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(), app.cache_pct,
+        app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(), app.cache_pct, w,
     );
     let t = theme::current();
-    // devil mode must be impossible to miss: its segment leads, in the warning colour
-    let footer = match truncate_str(&footer, w).strip_prefix("DEVIL").filter(|_| mode == crate::ai_core::Mode::Devil) {
-        Some(rest) => format!("{}{BOLD}DEVIL{RESET}{}{rest}", t.warn, t.dim),
-        None => truncate_str(&footer, w),
+    // the mode leads in its own colour: manual plain, plan info, auto warn,
+    // devil fail and bold so it is impossible to miss
+    let (name, _) = app::mode_label(mode);
+    let tint = match mode {
+        crate::ai_core::Mode::Manual => t.dim.to_string(),
+        crate::ai_core::Mode::Plan => t.info.to_string(),
+        crate::ai_core::Mode::Auto => t.warn.to_string(),
+        crate::ai_core::Mode::Devil => format!("{}{BOLD}", t.fail),
+    };
+    let footer = match footer.strip_prefix(name) {
+        Some(rest) => format!("{tint}{name}{RESET}{}{rest}", t.dim),
+        None => footer,
     };
     frame.push(format!("{}{footer}{RESET}", t.dim));
 

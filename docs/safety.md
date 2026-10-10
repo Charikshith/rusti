@@ -19,15 +19,18 @@ pass `--yolo` for scripted runs.
 
 ## permission modes
 
-Shift+Tab in the TUI cycles four modes, manual → plan → auto → devil; the status line names
-every one but manual (`plan`, `auto`, or `DEVIL` in the warning colour).
+Shift+Tab in the TUI cycles four modes, manual → plan → auto → devil. The status line leads with
+the mode and a one-line meaning (`plan: read-only, writes and commands refused`), rewritten in
+place on every change, so cycling adds nothing to the transcript. Each mode has its colour:
+manual plain, plan in the info colour, auto in the warning colour, `DEVIL` in bold failure red.
+On a narrow terminal the meaning is cut first; the name always shows.
 
 | mode | what happens |
 |---|---|
 | manual | the default: every tool above asks |
 | plan | reads and searches only; every tool above is refused, whatever the saved answers say (same as `/plan`; leaving it returns to manual) |
 | auto | runs without asking: `write_file`, `edit_file`, `multi_edit` and `move_file` inside the project root, and `run_command` / `run_background` unless the command is risky (below). Still asks: `delete_file`, `web_fetch`, every MCP tool not already answered [a]lways, and risky commands |
-| devil | no prompts and no project-root guard, the same as `--yolo`; entering it warns in the transcript |
+| devil | no prompts and no project-root guard, the same as `--yolo` |
 
 Risky commands, which auto mode still asks about:
 

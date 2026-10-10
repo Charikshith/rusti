@@ -43,7 +43,7 @@ override the saved settings, as do their env vars `RUSTI_MAX_ITERS` and `RUSTI_C
 
 | in the TUI | does |
 |---|---|
-| Shift+Tab | cycle the permission mode (below) |
+| Shift+Tab | cycle the permission mode (below); the status line shows it |
 | Enter while working | steer: sent after the current tool calls |
 | Ctrl+Q | follow-up: runs as its own task when this one ends |
 | Esc | interrupt the running turn |
