@@ -212,10 +212,10 @@ fn tints_for(t: &Theme, light: bool) -> Tints {
 }
 
 /// Text for a theme file's fill that names no text: whichever of the two
-/// defaults reads better on it, or the terminal's own when the fill is not a
-/// 24-bit colour rusti can measure.
+/// defaults reads better on it when the fill is a 24-bit background (#rrggbb
+/// or 48;2;r;g;b), or the terminal's own for any other SGR.
 fn text_on(fill: &str) -> &'static str {
-    let Some(bg) = rgb(fill).map(lum) else { return "" };
+    let Some(bg) = rgb(fill).filter(|_| fill.starts_with("[48;")).map(lum) else { return "" };
     let ratio = |c: [f64; 3]| { let (a, b) = (lum(c), bg); (a.max(b) + 0.05) / (a.min(b) + 0.05) };
     if ratio([28.0; 3]) >= ratio([228.0; 3]) { LIGHT.fail_text } else { DARK.fail_text }
 }
