@@ -1,0 +1,14 @@
+{
+  "id": "feat-shifttab-modes",
+  "name": "Shift+Tab permission modes: manual, plan, auto, devil",
+  "description": "One permission-mode state (ai_core::Mode, an AtomicU8: Manual, Plan, Auto, Devil) replaces the PLAN flag and tools::YOLO; permitted(), plan_blocks() and tools::guard() all read it, and plan_mode()/set_plan() keep their meaning (set_plan(false) leaves plan for manual and leaves other modes alone). --yolo / RUSTI_YOLO=1 start in devil, everything else in manual. In the TUI KeyCode::BackTab cycles manual -> plan -> auto -> devil -> manual and pushes a transcript notice (devil's is a warning row saying prompts and the project-root guard are off). Auto runs unasked: write_file/edit_file/multi_edit/move_file inside the project root, run_command/run_background unless risky(); still asks for delete_file, web_fetch, MCP tools not answered always, and risky commands (RISKY word rows matched in order per ;/&/| segment, a fetcher plus a shell runner, or a writer/redirect naming a path outside the root). gate() now passes the (possibly hook-rewritten) args to the permission closure so auto judges what will actually run. The status line leads with plan, auto or DEVIL (warning colour, bold).",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test (all pass, unit + rpc + trust): ai_core::tests::permission_modes_cycle_and_decide (cycle order; manual/auto/devil decision for read, in/out-of-root writes and moves, routine and risky commands, delete, web_fetch, MCP; risky command shapes ask in auto, including env-var, joined-flag and remote write targets; routine ones do not); ai_core::tests::plan_refuses_writes_and_returns_to_manual; main::tests::yolo_flag_or_env_starts_in_devil (start_mode: --yolo / RUSTI_YOLO=1 pick devil, else manual); tui footer tests cover plan/auto/DEVIL segments and the devil notice. rusti --self-test OK.",
+  "decisions": [
+    "Auto's risky check is a word table, not a shell parser or a model classifier (out of scope); it errs toward asking.",
+    "Writes in auto are allowed only when the guard would accept the path, so an outside-root write asks (then the guard refuses) exactly as in manual.",
+    "No RPC `mode` field: the --yolo start mapping is the pure main::start_mode, unit-tested.",
+    "No unit test sets Devil: tools::guard reads the global mode and a parallel test asserting outside-root refusals would flake."
+  ]
+}

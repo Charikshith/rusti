@@ -49,21 +49,22 @@ rusti
 ./target/release/rusti --context 60000 "task"   # compact history once the prompt exceeds N tokens (default 100000, env RUSTI_CONTEXT; see § compaction)
 ./target/release/rusti --json "task"            # the run as JSON lines on stdout, for programs (see § JSON and RPC modes)
 ./target/release/rusti --rpc                    # drive rusti over JSON lines on stdin/stdout
-./target/release/rusti --yolo "task"            # no permission prompts, no project-root guard (env RUSTI_YOLO=1)
+./target/release/rusti --yolo "task"            # start in devil mode: no permission prompts, no project-root guard (env RUSTI_YOLO=1)
 ./target/release/rusti --trust "task"           # trust this folder's model.json / .rusti without asking
 ./target/release/rusti --self-test       # offline check, fake server
 ./target/release/rusti --help            # all flags and slash commands
 ```
 
-In the TUI: `/plan` toggles plan mode (the agent reads and proposes but every write and
-command is refused), `/tree` browses and branches the session, `/undo` puts back the files
+In the TUI: Shift+Tab cycles the permission mode, manual → plan → auto → devil (see
+"safety" for what each allows), and `/plan` toggles plan mode (the agent reads and proposes
+but every write and command is refused; leaving it returns to manual), `/tree` browses and branches the session, `/undo` puts back the files
 the last turn changed, `/commit` stages and commits the work, `/export` writes the
 transcript out as markdown, `/settings` chooses which status-line segments are shown,
 `/mcp` switches MCP servers on and off, `!cargo test` runs a shell command whose output the model
 sees on the next turn, and `!!git log` runs one whose output only you see. Your own prompt
-templates, skills and MCP prompts join the `/` menu too (see "extensions"). `/new [name]` saves the session and starts an empty one in place, keeping the model, plan mode, MCP servers and background jobs. `/resume` with no argument lists saved sessions and switches to the
+templates, skills and MCP prompts join the `/` menu too (see "extensions"). `/new [name]` saves the session and starts an empty one in place, keeping the model, permission mode, MCP servers and background jobs. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
-plan mode, the session, model, git branch, tokens used, how full the context is and, when
+the permission mode (`plan`, `auto`, or `DEVIL` in the warning colour; manual shows nothing), the session, model, git branch, tokens used, how full the context is and, when
 the provider reports it, how much of the last prompt came from its cache (`cache 82%`).
 The system prompt holds only what rarely changes; git status and plan mode travel on each
 user message instead, so a provider's prompt cache can reuse everything sent before.
@@ -151,9 +152,23 @@ toggle it back off. A denial is returned to the model
 as a tool error so it can explain or ask instead of retrying. With piped stdin there
 is nobody to answer, so everything is denied — pass `--yolo` for scripted runs.
 
+Shift+Tab in the TUI cycles four permission modes; the status line names every one but manual:
+
+| mode | what happens |
+|---|---|
+| manual | the default: every tool above asks |
+| plan | reads and searches only; every tool above is refused (same as `/plan`) |
+| auto | runs without asking: `write_file`, `edit_file`, `multi_edit` and `move_file` inside the project root, and `run_command` / `run_background` unless the command is risky. Still asks: `delete_file`, `web_fetch`, every MCP tool not already answered [a]lways, and risky commands — `rm`, `rmdir`, `del`, `erase`, `rd`, `Remove-Item`, `sudo`, `chmod`, `chown`, `icacls`, `takeown`, `git push`, `git reset --hard`, `git clean`, `git checkout --`, `git restore`, `git branch -D`, `find -delete`, package installs and removals (`npm`/`pnpm`/`yarn`, `pip`, `uv`, `cargo install`/`add`/`remove`, `gem`, `go install`, `apt`, `brew`, `winget`, `choco`, `scoop`), a download in the same command as a shell (`curl … \| sh`, `irm … \| iex`), and a write (`>`, `cp`, `mv`, `tee`, `mkdir`, `sed`, `perl`, `curl`, `wget`, `tar`, `unzip`, `git clone`, `Copy-Item`, `Set-Content`, …) naming a path outside the project root (`..`, `~`, `$HOME`, `%USERPROFILE%`, an absolute path elsewhere, also as `of=/x`, `--output=../x` or `-C/x`, or a remote `host:/x` target) |
+| devil | no prompts and no project-root guard, the same as `--yolo`; entering it warns in the transcript |
+
+The risky-command check matches words, not shell semantics, so it errs toward asking. In
+every mode but devil the project-root guard stays on, and in auto denials, project trust,
+`pre_tool` hooks and saved [a]lways answers work as in manual. `--yolo` / `RUSTI_YOLO=1` start in devil;
+any other run starts in manual.
+
 Writes are also refused outside the working directory (`../x`, absolute paths
 elsewhere), even for files that do not exist yet. Reads are deliberately open so the
-model can inspect dependency sources. `--yolo` lifts both the prompts and the guard.
+model can inspect dependency sources. `--yolo` (devil mode) lifts both the prompts and the guard.
 
 ### project trust
 

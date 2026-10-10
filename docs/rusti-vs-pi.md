@@ -194,10 +194,10 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 |---|---|---|---|
 | Approval prompts | **yes**: gated tools and every MCP tool ask Yes, No or "stop asking" (`ai_core/mod.rs`) | **no**: "does not ask for approval before every tool call" (`docs/security.md:3`) | Opposite defaults |
 | Saved approvals | **yes**: per-project `allow` in `./model.json`; no UI to forget them (open-work) | n/a | |
-| Plan mode | **yes**: `/plan` in the TUI; no `--plan` flag | **no** in core (example `plan-mode/`) | |
+| Plan mode | **yes**: `/plan` or Shift+Tab in the TUI; no `--plan` flag | **no** in core (example `plan-mode/`) | |
 | Write guard | **yes**: project-root guard (`ai_core/tools.rs`) | **no** in core (example `protected-paths.ts`) | |
 | Read sandbox | **no**: open by design (open-work) | **no** | Same |
-| Bypass | `--yolo` / `RUSTI_YOLO=1` | n/a; already ungated | |
+| Bypass | `--yolo` / `RUSTI_YOLO=1`, or devil mode via Shift+Tab; auto mode skips prompts for routine work (`readme.md` "safety") | n/a; already ungated | |
 | Non-interactive | piped runs deny every gated tool unless `--yolo` is given (`readme.md` "safety") | runs ungated | |
 | Project trust | **yes**: a `./model.json` that sets `mcp`, `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow`, or a `./.rusti/` with prompts, skills, themes, `SYSTEM.md` or `APPEND_SYSTEM.md`, or a `./.agents/skills`, is asked about once (Yes / No / Always, saved in `~/.rusti/trust.json`); piped and one-shot runs need `--trust` (`config.rs`) | **partial**: gates loading of project settings, extensions, skills, prompts, themes, `SYSTEM.md` and `mcp.json`, but not tool actions or context files. Decided by `/trust`, `-a/--approve` or `defaultProjectTrust` (`docs/security.md:27-57`) | Both gate startup config, not tool actions |
 | OS or container sandbox | none | documented recipes only (`docs/containerization.md`; example `sandbox/`) | |
