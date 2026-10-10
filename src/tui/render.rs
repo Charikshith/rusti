@@ -76,12 +76,160 @@ pub struct RenderState {
     /// terminal height — and the scroll keys need it, or scroll_up runs away
     /// past the top and every scroll back down is silently eaten.
     pub max_scroll: usize,
+    /// The whole wrapped transcript as of the last frame, (style, row, join),
+    /// with its height and width: what a mouse selection is measured against.
+    /// join is Some for a row a soft wrap split off the one above, holding what
+    /// the wrap dropped between them (a space, or nothing for a hard break).
+    pub rows: Vec<(u8, String, Option<&'static str>)>,
+    pub view_h: usize,
+    pub inner_w: usize,
 }
 
 impl RenderState {
     pub fn new() -> Self {
-        Self { prev_lines: Vec::new(), prev_rows: 0, max_scroll: 0 }
+        Self { prev_lines: Vec::new(), prev_rows: 0, max_scroll: 0, rows: Vec::new(), view_h: 0, inner_w: 0 }
     }
+
+    /// The transcript cell under screen (x, y) as (row, column) with the
+    /// transcript scrolled to scroll_up. Above the first row is its start and
+    /// below the last is its end, so a drag past either edge still selects.
+    pub fn cell(&self, x: u16, y: u16, scroll_up: usize) -> Option<(usize, usize)> {
+        let (pad, start, end) = transcript_window(self.rows.len(), self.view_h, scroll_up);
+        let y = y as usize;
+        if start == end {
+            None
+        } else if y < pad {
+            Some((start, 0))
+        } else if y - pad >= end - start {
+            Some((end - 1, usize::MAX))
+        } else {
+            let r = start + y - pad;
+            Some((r, char_at(&self.text(r), x as usize)))
+        }
+    }
+
+    /// Row i as the terminal shows it, without escapes.
+    fn text(&self, i: usize) -> String {
+        let (st, row, _) = &self.rows[i];
+        plain(&styled(*st, row, self.inner_w, SPINNER[0]))
+    }
+
+    /// Double-click: the word under a cell. Triple-click: the whole logical
+    /// line it sits in, every row it wrapped into.
+    pub fn expand(&self, (r, c): (usize, usize), clicks: u8) -> ((usize, usize), (usize, usize)) {
+        if clicks >= 3 {
+            let (mut a, mut b) = (r, r);
+            while a > 0 && self.rows[a].2.is_some() { a -= 1; }
+            while b + 1 < self.rows.len() && self.rows[b + 1].2.is_some() { b += 1; }
+            return ((a, 0), (b, usize::MAX));
+        }
+        let cs: Vec<char> = self.text(r).chars().collect();
+        if c >= cs.len() || cs[c].is_whitespace() {
+            return ((r, c), (r, c));
+        }
+        let (mut a, mut b) = (c, c);
+        while a > 0 && !cs[a - 1].is_whitespace() { a -= 1; }
+        while b + 1 < cs.len() && !cs[b + 1].is_whitespace() { b += 1; }
+        ((r, a), (r, b))
+    }
+
+    /// The selected text, plain: rows a soft wrap split are joined back into
+    /// their line; the gutter (its ▎ edge or narration's │ rail included) and
+    /// trailing padding are dropped.
+    pub fn selected(&self, (a, b): ((usize, usize), (usize, usize))) -> String {
+        let (lo, hi) = (a.min(b), a.max(b));
+        let mut out = String::new();
+        for i in lo.0..=hi.0.min(self.rows.len().saturating_sub(1)) {
+            let cs: Vec<char> = self.text(i).chars().collect();
+            let (mut x, y) = sel_cols(i, lo, hi);
+            if self.rows[i].0 == b'n' {
+                x = x.max(4);
+            } else if cs.starts_with(&[' ', ' ']) || cs.starts_with(&['▎', ' ']) {
+                x = x.max(2);
+            }
+            let (x, y) = (x.min(cs.len()), y.min(cs.len()));
+            let part: String = cs[x..y.max(x)].iter().collect();
+            let part = part.trim_end();
+            if i == lo.0 {
+                out.push_str(part);
+            } else if let Some(join) = self.rows[i].2 {
+                out.push_str(join);
+                out.push_str(part.trim_start());
+            } else {
+                out.push('\n');
+                out.push_str(part);
+            }
+        }
+        out
+    }
+}
+
+/// One transcript row styled for the screen. Markdown rows are already
+/// wrapped and styled; truncating would cut an escape sequence in half.
+fn styled(st: u8, row: &str, inner_w: usize, spin: char) -> String {
+    if st == b'm' { row.to_string() } else { colorize_row(st, &truncate_str(row, inner_w), spin) }
+}
+
+/// The columns [x, y) of row i inside a selection running lo..=hi (both ends
+/// included, so a one-cell selection still holds that cell).
+fn sel_cols(i: usize, lo: (usize, usize), hi: (usize, usize)) -> (usize, usize) {
+    let x = if i == lo.0 { lo.1 } else { 0 };
+    let y = if i == hi.0 { hi.1.saturating_add(1) } else { usize::MAX };
+    (x, y)
+}
+
+/// The char of a plain row under screen column x, measured the way the
+/// terminal lays the row out from column 0: a tab runs to the next stop of 8
+/// and wide chars take two columns. Past the end, the columns beyond it count
+/// on as single cells.
+fn char_at(row: &str, x: usize) -> usize {
+    let mut col = 0;
+    let mut n = 0;
+    for c in row.chars() {
+        col += if c == '\t' { 8 - col % 8 } else if wide(c) { 2 } else { 1 };
+        if col > x {
+            return n;
+        }
+        n += 1;
+    }
+    n + (x - col)
+}
+
+/// Two-column chars: CJK, Hangul, fullwidth forms and the common emoji blocks.
+/// ponytail: hand-rolled ranges, not the full East Asian Width table; a rarer
+/// wide or zero-width char shifts the selection by a column after it.
+fn wide(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x1F300..=0x1F64F
+        | 0x1F680..=0x1F6FF | 0x1F900..=0x1F9FF | 0x20000..=0x3FFFD)
+}
+
+/// What the terminal shows for a styled row: the text without CSI escapes.
+pub fn plain(row: &str) -> String {
+    let mut out = String::new();
+    let mut esc = false;
+    for c in row.chars() {
+        match c {
+            '\x1b' => esc = true,
+            c if esc => esc = !c.is_ascii_alphabetic(),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A selected row: columns [x, y) in reverse video. The row is drawn plain —
+/// the highlight is what needs to be seen, not the colours under it.
+fn reverse(row: &str, (x, y): (usize, usize)) -> String {
+    let cs: Vec<char> = plain(row).chars().collect();
+    let (x, y) = (x.min(cs.len()), y.min(cs.len()));
+    if x >= y {
+        return row.to_string();
+    }
+    let s = |r: &[char]| r.iter().collect::<String>();
+    format!("{}\x1b[7m{}{RESET}{}", s(&cs[..x]), s(&cs[x..y]), s(&cs[y..]))
 }
 
 /// Render one frame. Diff against previous frame — only changed lines are redrawn.
@@ -105,14 +253,17 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let bottom_rows = 3 + input.len() + panel.len() + pending.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
-    // (style, row). The style is read from the logical line ONCE and carried to
+    // (style, row, join). The style is read from the logical line ONCE and carried to
     // every row it wraps into — a marker only exists on the first row, so styling
     // each row on its own left the rest of a wrapped block looking like plain text.
-    let mut all: Vec<(u8, String)> = Vec::new();
-    let push_wrapped = |l: &str, all: &mut Vec<(u8, String)>| {
+    // join marks a row that continues the one above, so a copy can rejoin them.
+    let mut all: Vec<(u8, String, Option<&'static str>)> = Vec::new();
+    let push_wrapped = |l: &str, all: &mut Vec<(u8, String, Option<&'static str>)>| {
         let st = line_style(l);
         if st != b'm' {
-            all.extend(word_wrap(l, inner_w).into_iter().map(|r| (st, r)));
+            for src in l.split('\n') {
+                all.extend(word_wrap(src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
+            }
             return;
         }
         // model prose: markdown, one source line at a time so ``` fences keep
@@ -130,20 +281,20 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
                 continue; // the fence itself is not drawn; the body is coloured
             }
             if fence {
-                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w)))));
+                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w))), None));
                 i += 1;
                 continue;
             }
             if let Some((rows, used)) = table_block(&src[i..]) {
                 for row in render_table(&rows, inner_w) {
-                    all.push((b'm', row));
+                    all.push((b'm', row, None));
                 }
                 i += used;
                 continue;
             }
             let (cs, runs) = md_line(line);
-            for (x, y) in wrap_ranges(&cs, inner_w) {
-                all.push((b'm', md_row(&cs, &runs, x, y)));
+            for (x, y, join) in wrap_ranges(&cs, inner_w) {
+                all.push((b'm', md_row(&cs, &runs, x, y), join));
             }
             i += 1;
         }
@@ -152,7 +303,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         push_wrapped(&l, &mut all);
     }
     if app.hide_thinking && app.current.starts_with(THINK) {
-        all.extend(thinking_preview(&app.current, inner_w).into_iter().map(|r| (b't', r)));
+        all.extend(thinking_preview(&app.current, inner_w).into_iter().map(|r| (b't', r, None)));
     } else if !app.current.is_empty() {
         push_wrapped(&app.current.clone(), &mut all);
     }
@@ -169,17 +320,23 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     for _ in 0..pad {
         frame.push(String::new());
     }
-    for (st, row) in &all[start..end] {
-        // markdown rows are already wrapped and styled; truncating would cut
-        // an escape sequence in half
-        let styled = if *st == b'm' { row.clone() } else { colorize_row(*st, &truncate_str(row, inner_w), spin) };
+    let sel = app.sel.map(|(a, b)| (a.min(b), a.max(b)));
+    for (i, (st, row, _)) in all.iter().enumerate().take(end).skip(start) {
+        let styled = styled(*st, row, inner_w, spin);
         let t = theme::tints();
-        frame.push(match st {
+        let styled = match st {
             b'x' => band(t.fail, &styled, w),
             b'a' => band(t.ask, &styled, w),
             _ => styled,
+        };
+        frame.push(match sel.filter(|(lo, hi)| (lo.0..=hi.0).contains(&i)) {
+            Some((lo, hi)) => reverse(&styled, sel_cols(i, lo, hi)),
+            None => styled,
         });
     }
+    state.rows = all;
+    state.view_h = transcript_h;
+    state.inner_w = inner_w;
 
     frame.push(String::new()); // blank spacer
 
@@ -738,28 +895,32 @@ fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
     (out, runs)
 }
 
-/// Greedy word wrap over chars, returning each row's range. Ranges (not strings)
-/// keep the style runs addressable after wrapping.
-fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize)> {
+/// Greedy word wrap over chars, returning each row's range and its join: what
+/// the break before it dropped (a space, or nothing for a hard break inside a
+/// word), None on the first row. Ranges (not strings) keep the style runs
+/// addressable after wrapping.
+fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize, Option<&'static str>)> {
     let width = width.max(1);
     let mut rows = Vec::new();
     let mut start = 0;
+    let mut join = None;
     while start < cs.len() {
         if cs.len() - start <= width {
-            rows.push((start, cs.len()));
+            rows.push((start, cs.len(), join));
             break;
         }
         let hard = start + width;
         let brk = (start..hard).rev().find(|&j| cs[j] == ' ').unwrap_or(start);
         let end = if brk == start { hard } else { brk };
-        rows.push((start, end));
+        rows.push((start, end, join));
+        join = Some(if cs[end] == ' ' { " " } else { "" });
         start = end;
         while start < cs.len() && cs[start] == ' ' {
             start += 1;
         }
     }
     if rows.is_empty() {
-        rows.push((0, 0)); // a blank source line is still a blank row
+        rows.push((0, 0, None)); // a blank source line is still a blank row
     }
     rows
 }
@@ -1038,14 +1199,20 @@ mod tests {
         // width is charged against the text the user sees, not the markers
         let (cs, _) = md_line("**aaaa** bbbb cccc dddd");
         let rows = wrap_ranges(&cs, 10);
-        assert!(rows.iter().all(|(x, y)| y - x <= 10), "{rows:?}");
-        assert_eq!(rows.iter().map(|(x, y)| cs[*x..*y].iter().collect::<String>()).collect::<Vec<_>>(),
+        assert!(rows.iter().all(|(x, y, _)| y - x <= 10), "{rows:?}");
+        assert_eq!(rows.iter().map(|(x, y, _)| cs[*x..*y].iter().collect::<String>()).collect::<Vec<_>>(),
                    vec!["aaaa bbbb", "cccc dddd"]);
         // a word longer than the width is hard-cut rather than dropped
         let long: Vec<char> = "supercalifragilistic".chars().collect();
         assert_eq!(wrap_ranges(&long, 5).len(), 4);
+        // a copy rejoins a space break with its space, a hard cut with nothing
+        let joins = |cs: &[char], w| wrap_ranges(cs, w).into_iter().map(|r| r.2).collect::<Vec<_>>();
+        assert_eq!(joins(&cs, 10), vec![None, Some(" ")]);
+        assert_eq!(joins(&long, 5), vec![None, Some(""), Some(""), Some("")]);
+        let exact: Vec<char> = "aaaa bbbb".chars().collect();
+        assert_eq!(joins(&exact, 4), vec![None, Some(" ")], "a cut that lands on a space dropped it");
         // blank source line still produces one row
-        assert_eq!(wrap_ranges(&[], 10), vec![(0, 0)]);
+        assert_eq!(wrap_ranges(&[], 10), vec![(0, 0, None)]);
     }
 
     /// The regression behind "I can't see any difference": reasoning wraps over

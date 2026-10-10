@@ -102,7 +102,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Image input | **yes**: Alt+V or `@img` attaches on submit, auto-resize with a coordinate note, `vision` flag per profile (F03) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi attaches directly only for CLI `@` arguments and routes TUI pastes through `read`; rusti attaches every `@` image directly. No inline display in rusti |
 | Queue while streaming | **yes**: steer (Enter), follow-up (Ctrl+Q), dequeue (Alt+Up / Alt+Q, and Esc) (feat-queue-while-working, `tui/app.rs`) | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Pi's follow-up key is Alt+Enter, rusti's newline key; Pi delivers steers one at a time by default |
 | Footer | **yes**: plan, session, model, branch, tokens, ctx %, cache %; toggled with `/settings` (`tui/app.rs`) | **yes**: cwd, session, tokens, cache, cost, ctx, model | Pi shows cost |
-| Clipboard copy of reply | **no** (open-work, low priority) | **yes**: `/copy` | |
+| Clipboard copy of reply | **partial**: mouse drag selects transcript text and copies it on release (feat-mouse-select, `docs/tui.md`); no `/copy` | **yes**: `/copy` | |
 | Extension UI (widgets, overlays) | **no** | **yes** (`docs/tui.md`) | |
 | Unicode-width wrapping | **no**: byte-based (`tui/mod.rs`) | not stated in docs (presumably handled) | rusti's CJK and emoji wrapping is naive |
 

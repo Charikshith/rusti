@@ -1,0 +1,14 @@
+{
+  "id": "feat-mouse-select",
+  "name": "Select and copy transcript text with the mouse",
+  "description": "Mouse capture (kept so the wheel scrolls the transcript) took the terminal's own click-and-drag selection. Left-drag over the transcript now selects in-app: reverse-video highlight that follows the drag, one-row auto-scroll at the top/bottom edge, copy on release as plain text with soft-wrapped rows rejoined, and a 'copied N lines' notice. Double-click copies a word, triple-click a logical line; a plain click, any key or a resize clears it. The copy is OSC 52 plus the platform tool (clip.exe as UTF-16LE, pbcopy, wl-copy/xclip/xsel); the notice says when no tool worked. Shift+drag still reaches the terminal's native selection (documented in --help and docs/tui.md).",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: tui::tests::mouse_selection_copies_plain_text_and_rejoins_wrapped_rows (styled spans stripped, gutter dropped, wrap rejoined, reversed drag, word/line expand, cell mapping when scrolled, short transcript and past the edge, OSC 52 encoding); tui::tests::mouse_selection_follows_screen_columns_and_hard_wraps (clicks after CJK and a tab land on the char drawn there, a hard-wrapped URL rejoins with no space);ai_core::tools::tests::clip_cmds_pick_the_platform_tool. Manual: copy_text round-tripped 'héllo ✓ 漢字\nline2' through clip.exe and Get-Clipboard on Windows 11; clip.exe takes 1-char ASCII UTF-16LE too. ./init.sh and cargo clippy --all-targets clean.",
+  "decisions": [
+    "Selection is (row, column) in the whole wrapped transcript, not screen rows, so it stays on its text while the wheel scrolls; RenderState keeps the last frame's rows to measure against.",
+    "Selected rows are drawn plain in reverse video rather than splicing escapes into the styled row: far less code, and the highlight is what matters.",
+    "Both OSC 52 and the local tool run on every copy: neither can detect the other failing, and OSC 52 alone misses terminals that ignore it while the tool alone misses SSH.",
+    "clip.exe gets UTF-16LE without a BOM (with one, the BOM lands on the clipboard); no PowerShell fallback since clip.exe ships with every Windows."
+  ]
+}

@@ -931,6 +931,78 @@ mod tests {
         assert!(app::filter_cmds(&cmds, "/zz").is_empty());
     }
 
+    /// Mouse selection: screen cell -> wrapped row, and rows -> the plain text
+    /// that lands on the clipboard.
+    #[test]
+    fn mouse_selection_copies_plain_text_and_rejoins_wrapped_rows() {
+        let mut st = render::RenderState::new();
+        assert_eq!(st.cell(0, 0, 0), None, "an empty transcript has no cells");
+        st.rows = vec![
+            (b'u', "1› hello there".into(), None),
+            (b'm', "  some \x1b[1mbold\x1b[0m prose that".into(), None),
+            (b'm', "  wraps onto a second row".into(), Some(" ")),
+            (b'm', "  next line".into(), None),
+        ];
+        st.inner_w = 40;
+        // styles gone, the gutter dropped, the soft wrap rejoined with its space
+        assert_eq!(st.selected(((0, 0), (3, usize::MAX))),
+                   "1› hello there\nsome bold prose that wraps onto a second row\nnext line");
+        // mid-row ends, dragged backwards: the anchor after the head selects the same
+        assert_eq!(st.selected(((2, 6), (1, 7))), "bold prose that wraps");
+        // double-click a word; triple-click the whole line it wrapped into
+        assert_eq!(st.expand((1, 9), 2), ((1, 7), (1, 10)));
+        assert_eq!(st.selected(st.expand((2, 3), 3)), "some bold prose that wraps onto a second row");
+        // narration's │ rail and a tool row's ▎ edge are drawn, not copied
+        let mut rail = render::RenderState::new();
+        rail.inner_w = 40;
+        rail.rows = word_wrap("  ┆ Let me try cd instead and then read the files", 30)
+            .into_iter().enumerate().map(|(k, r)| (b'n', r, (k > 0).then_some(" "))).collect();
+        rail.rows.push((b'k', "  ✓ read a.rs".into(), None));
+        assert_eq!(rail.selected(((0, 0), (2, usize::MAX))),
+                   "Let me try cd instead and then read the files\n✓ read a.rs");
+
+        // 4 rows, 2 on screen: following the bottom shows rows 2-3
+        st.view_h = 2;
+        assert_eq!(st.cell(5, 0, 0), Some((2, 5)));
+        assert_eq!(st.cell(5, 1, 0), Some((3, 5)));
+        // scrolled up 2, the same screen rows are rows 0-1
+        assert_eq!(st.cell(5, 0, 2), Some((0, 5)));
+        assert_eq!(st.selected((st.cell(0, 0, 2).unwrap(), st.cell(5, 1, 2).unwrap())), "1› hello there\nsome");
+        // dragged below the transcript: to the end of its last visible row
+        assert_eq!(st.cell(5, 7, 2), Some((1, usize::MAX)));
+        // short transcript resting on the input: the blank above is the first row's start
+        st.view_h = 10;
+        assert_eq!(st.cell(5, 2, 0), Some((0, 0)));
+        assert_eq!(st.cell(5, 7, 0), Some((1, 5)));
+
+        assert_eq!(app::osc52("hello"), "\x1b]52;c;aGVsbG8=\x07");
+    }
+
+    /// Wide chars and tabs take more than one screen column, so a click maps
+    /// to the char drawn there; a hard break in a long word rejoins with no space.
+    #[test]
+    fn mouse_selection_follows_screen_columns_and_hard_wraps() {
+        let mut st = render::RenderState::new();
+        st.rows = vec![
+            (b'm', "  漢字 hello".into(), None),
+            (b'm', "  a\tbc x".into(), None),
+            (b'm', "  https://example.com/aaaa".into(), None),
+            (b'm', "  bbbb tail".into(), Some("")),
+        ];
+        st.inner_w = 40;
+        st.view_h = 4;
+        // 漢 and 字 fill columns 2-5, so column 7 is the 'h'
+        assert_eq!(st.cell(7, 0, 0), Some((0, 5)));
+        assert_eq!(st.cell(4, 0, 0), Some((0, 3)), "the second column of 字 is still 字");
+        assert_eq!(st.selected(st.expand(st.cell(8, 0, 0).unwrap(), 2)), "hello");
+        // the tab after 'a' (column 2) runs to column 8, where 'b' is drawn
+        assert_eq!(st.cell(5, 1, 0), Some((1, 3)));
+        assert_eq!(st.cell(8, 1, 0), Some((1, 4)));
+        assert_eq!(st.selected((st.cell(8, 1, 0).unwrap(), st.cell(9, 1, 0).unwrap())), "bc");
+        // a URL hard-wrapped mid-word copies back whole
+        assert_eq!(st.selected(((2, 0), (3, 5))), "https://example.com/aaaabbbb");
+    }
+
     #[test]
     fn transcript_sits_on_the_input_instead_of_floating_at_the_top() {
         // short transcript: the gap goes ABOVE it, so the first message is
