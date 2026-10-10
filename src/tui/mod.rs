@@ -659,8 +659,9 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
 }
 
 /// First line of an entry, capped — for /tree output.
-/// Word wrap on byte length. Ponytail: naive — fine for ASCII.
-pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
+/// Word wrap measured as drawn: drawn(row) is the columns a row takes on
+/// screen once styled, so a gutter the raw row lacks still moves its tabs.
+pub fn word_wrap(s: &str, width: usize, drawn: impl Fn(&str) -> usize) -> Vec<String> {
     if width == 0 { return vec![String::new()]; }
     let mut out = Vec::new();
     for src in s.split('\n') {
@@ -670,13 +671,12 @@ pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
         // be dropped, leaving every status row uncolored.
         let body = src.trim_start_matches(' ');
         let indent = &src[..src.len() - body.len()];
-        let w = width.saturating_sub(indent.len()).max(1);
         let first = out.len();
         let mut line = String::new();
         for word in body.split(' ') {
             if line.is_empty() {
                 line = word.to_string();
-            } else if columns(&format!("{indent}{line} {word}")) > indent.len() + w {
+            } else if drawn(&format!("{}{line} {word}", if out.len() == first { indent } else { "" })) > width {
                 out.push(line);
                 line = word.to_string();
             } else {
@@ -698,20 +698,20 @@ mod tests {
     #[test]
     fn word_wrap_keeps_the_marker_indent_that_colorize_row_matches_on() {
         // the indent IS the colour key: drop it and ✓/✗/⠋/│/· all render plain
-        assert_eq!(word_wrap("  ✓ Cargo.toml  0ms", 80), vec!["  ✓ Cargo.toml  0ms"]);
-        assert_eq!(word_wrap("  │ thinking out loud", 80), vec!["  │ thinking out loud"]);
-        assert_eq!(word_wrap("1› hello", 80), vec!["1› hello"]);
+        assert_eq!(word_wrap("  ✓ Cargo.toml  0ms", 80, columns), vec!["  ✓ Cargo.toml  0ms"]);
+        assert_eq!(word_wrap("  │ thinking out loud", 80, columns), vec!["  │ thinking out loud"]);
+        assert_eq!(word_wrap("1› hello", 80, columns), vec!["1› hello"]);
         // wrapping still happens, and the indent is charged against the width
         // so the first row + its indent still fits (truncate_str would cut it)
-        let rows = word_wrap("  ✓ aaaa bbbb cccc", 10);
+        let rows = word_wrap("  ✓ aaaa bbbb cccc", 10, columns);
         assert_eq!(rows[0], "  ✓ aaaa");
         assert!(rows.iter().all(|r| r.len() <= 10), "{rows:?}");
         assert_eq!(rows.concat().replace(' ', ""), "✓aaaabbbbcccc");
         // F5: a wide char counts two columns, not its three UTF-8 bytes
-        assert_eq!(word_wrap("  · 修复 登录 错误", 11), vec!["  · 修复", "登录 错误"]);
+        assert_eq!(word_wrap("  · 修复 登录 错误", 11, columns), vec!["  · 修复", "登录 错误"]);
         // blank and all-space lines survive unchanged
-        assert_eq!(word_wrap("", 80), vec![""]);
-        assert_eq!(word_wrap("  ", 80), vec!["  "]);
+        assert_eq!(word_wrap("", 80, columns), vec![""]);
+        assert_eq!(word_wrap("  ", 80, columns), vec!["  "]);
     }
 
     /// `!` output streams to the screen and joins the session for the model;
@@ -958,7 +958,7 @@ mod tests {
         // narration's │ rail and a tool row's ▎ edge are drawn, not copied
         let mut rail = render::RenderState::new();
         rail.inner_w = 40;
-        rail.rows = word_wrap("  ┆ Let me try cd instead and then read the files", 30)
+        rail.rows = word_wrap("  ┆ Let me try cd instead and then read the files", 30, columns)
             .into_iter().enumerate().map(|(k, r)| (b'n', r, (k > 0).then_some(" "))).collect();
         rail.rows.push((b'k', "  ✓ read a.rs".into(), None));
         assert_eq!(rail.selected(((0, 0), (2, usize::MAX))),

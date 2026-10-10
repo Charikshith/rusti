@@ -59,10 +59,10 @@ fn thinking_fold(l: &str) -> String {
 /// the thought, so you can still watch the model work. The count of rows is
 /// fixed once two exist, so streaming never makes the block jump.
 fn thinking_preview(l: &str, w: usize) -> Vec<String> {
-    let mut rows = word_wrap(&thinking_fold(l), w);
+    let mut rows = wrap(b't', &thinking_fold(l), w);
     // paragraph breaks and the bare sentinel are blank rows, not a preview
     let body: Vec<String> =
-        word_wrap(l, w).into_iter().filter(|r| !matches!(r.trim(), "" | "│")).collect();
+        wrap(b't', l, w).into_iter().filter(|r| !matches!(r.trim(), "" | "│")).collect();
     rows.extend_from_slice(&body[body.len().saturating_sub(2)..]);
     rows
 }
@@ -162,6 +162,13 @@ impl RenderState {
         }
         out
     }
+}
+
+/// Rows of style st that each fit w columns where colorize_row draws them.
+/// ponytail: styles each candidate row to measure it; a per-style gutter
+/// width if wrapping ever shows up in a profile
+fn wrap(st: u8, s: &str, w: usize) -> Vec<String> {
+    word_wrap(s, w, |r| columns(&plain(&colorize_row(st, r, ' '))))
 }
 
 /// One transcript row styled for the screen. Markdown rows are already
@@ -321,7 +328,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         let st = line_style(l);
         if st != b'm' {
             for src in l.split('\n') {
-                all.extend(word_wrap(src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
+                all.extend(wrap(st, src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
             }
             return;
         }
@@ -1261,7 +1268,7 @@ mod tests {
         // every row of a logical line, the way draw() feeds them
         let rows = |line: &str| -> Vec<String> {
             let st = line_style(line);
-            word_wrap(line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80), '⠋')).collect()
+            wrap(st, line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80), '⠋')).collect()
         };
         let first = |line: &str| rows(line).remove(0);
         // a running tool must be impossible to mistake for a finished one:
@@ -1354,7 +1361,7 @@ mod tests {
         let long = "  │ ".to_string() + &"thinking ".repeat(60);
         let st = line_style(&long);
         let rows: Vec<String> =
-            word_wrap(&long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40), '⠋')).collect();
+            wrap(st, &long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40), '⠋')).collect();
         assert!(rows.len() > 3, "expected a wrapped block, got {}", rows.len());
         assert!(rows.iter().all(|r| r.contains(theme::current().think)), "every row must be italic grey: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains('│')), "the sentinel bar is never drawn");
@@ -1363,7 +1370,7 @@ mod tests {
         // paragraph breaks inside a block survive and stay styled
         let two = "  │ first thought\n\nsecond thought";
         let st = line_style(two);
-        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(theme::current().think)));
+        assert!(wrap(st, two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(theme::current().think)));
     }
 
     /// Ctrl+O reveals a successful tool's output. The rows are always in
@@ -1480,18 +1487,25 @@ last bit";
         assert!(!expand_tabs(&styled(b's', &state.rows[1].1, 40, '⠋')).contains('\t'));
         assert_eq!(fit("\tab", 2, 9), "\ta", "a tab drawn from column 2 takes 6");
 
-        // a wrapped row is drawn after a gutter its raw text lacks, which moves
-        // its tabs: it is cut where it is drawn, never past the terminal
-        let thought = format!("  │ {} abcdef\t{}", "x".repeat(70), "y".repeat(68));
-        let mut state = RenderState::new();
-        state.inner_w = 78;
-        state.rows = word_wrap(&thought, 78).into_iter().enumerate().map(|(k, r)| (b't', r, (k > 0).then_some(" "))).collect();
-        for st in [b't', b'k', b'n', b'x', b'a', b'u', b's'] {
-            for (_, row, _) in &state.rows {
-                assert!(columns(&plain(&expand_tabs(&styled(st, row, 78, '⠋')))) <= 80, "{}: {row:?}", st as char);
+        // a row drawn after a gutter its raw text lacks has its tabs moved: it
+        // wraps where it is drawn, so nothing is cut and the copy is whole
+        let words = format!("abcdef\t{}", "yy ".repeat(40).trim_end());
+        for (st, line, copy) in [
+            (b't', format!("  │ {words}"), words.clone()),
+            (b'n', format!("  ┆ {words}"), words.clone()),
+            (b'u', format!("1› q\n{words}"), format!("1› q\n{words}")),
+        ] {
+            assert_eq!(line_style(&line), st);
+            let mut state = RenderState::new();
+            state.inner_w = 78;
+            for src in line.split('\n') {
+                state.rows.extend(wrap(st, src, 78).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
             }
+            for (_, row, _) in &state.rows {
+                assert!(columns(&plain(&expand_tabs(&styled(st, row, 78, '⠋')))) <= 78, "{}: {row:?}", st as char);
+            }
+            assert_eq!(state.selected(((0, 0), (state.rows.len() - 1, usize::MAX))), copy, "{}", st as char);
         }
-        assert!(state.selected(((0, 0), (1, usize::MAX))).contains("abcdef\t"), "the copy keeps the tab");
     }
 
     /// F5: rows are measured in terminal columns. A CJK char takes two and a
