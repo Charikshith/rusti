@@ -218,9 +218,13 @@ fn touched_files(entries: &[Entry], prev: Option<&crate::session::Compaction>) -
     use std::collections::BTreeSet;
     let mut read: BTreeSet<String> = prev.map(|p| p.read_files.iter().cloned().collect()).unwrap_or_default();
     let mut modified: BTreeSet<String> = prev.map(|p| p.modified_files.iter().cloned().collect()).unwrap_or_default();
-    for (name, args) in entries.iter().flat_map(calls_of) {
+    let calls = entries.iter().flat_map(calls_of).flat_map(|(name, args)| match name {
+        "batch" => batch_calls(&args),
+        _ => vec![(name.to_string(), args)],
+    });
+    for (name, args) in calls {
         let arg = |k: &str| args[k].as_str().map(str::to_string);
-        match name {
+        match name.as_str() {
             "read_file" => read.extend(arg("path")),
             "write_file" | "edit_file" | "multi_edit" | "delete_file" => modified.extend(arg("path")),
             "move_file" => modified.extend(arg("from").into_iter().chain(arg("to"))),
@@ -1917,6 +1921,10 @@ branch: "), "{c2}");
             ("read_file", json!({"path": "src/b.rs"})),
             ("edit_file", json!({"path": "src/b.rs", "old_text": "x", "new_text": "y"})),
             ("move_file", json!({"from": "src/c.rs", "to": "src/d.rs"})),
+            ("batch", json!({"calls": [
+                {"name": "read_file", "args": {"path": "src/f.rs"}},
+                {"name": "edit_file", "args": {"path": "src/g.rs", "old_text": "x", "new_text": "y"}},
+            ]})),
         ] {
             leaf = session.add(call(name, args), Some(leaf));
             leaf = session.add(Entry::new("tool", "ok".into()), Some(leaf));
@@ -1945,8 +1953,8 @@ branch: "), "{c2}");
         let info = head.compaction.clone().expect("the summary entry records the compaction");
         assert_eq!(info.summary, "## Goal\nfirst summary");
         assert!(head.content.starts_with(SUMMARY_HEAD));
-        assert!(head.content.contains("<read-files>\nsrc/a.rs\n</read-files>"), "{}", head.content);
-        assert!(head.content.contains("<modified-files>\nsrc/b.rs\nsrc/c.rs\nsrc/d.rs\n</modified-files>"), "read then edited: listed as changed");
+        assert!(head.content.contains("<read-files>\nsrc/a.rs\nsrc/f.rs\n</read-files>"), "{}", head.content);
+        assert!(head.content.contains("<modified-files>\nsrc/b.rs\nsrc/c.rs\nsrc/d.rs\nsrc/g.rs\n</modified-files>"), "read then edited: listed as changed; batch calls count");
 
         // more work, then compact again with a focus
         let mut leaf = session.active.clone().unwrap();
@@ -1962,7 +1970,7 @@ branch: "), "{c2}");
         assert!(user.ends_with("focus on: the parser tests"));
         let info = session.path()[1].compaction.clone().unwrap();
         assert_eq!(info.summary, "## Goal\nsecond summary");
-        assert_eq!(info.modified_files, ["src/b.rs", "src/c.rs", "src/d.rs", "src/e.rs"], "carried forward, plus the new ones");
+        assert_eq!(info.modified_files, ["src/b.rs", "src/c.rs", "src/d.rs", "src/e.rs", "src/g.rs"], "carried forward, plus the new ones");
         assert_eq!(session.path().iter().filter(|e| e.compaction.is_some()).count(), 1, "one summary on the path");
     }
 

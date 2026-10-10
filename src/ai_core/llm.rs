@@ -172,13 +172,15 @@ impl Client {
         // don't, streaming); otherwise the 4-chars-a-token rule of thumb,
         // flagged as an estimate in the UI
         let prompt_tokens = prompt.unwrap_or((body.to_string().len() as u64 + 3) / 4);
-        emit(Event::Usage {
-            tokens: usage.unwrap_or((content.chars().count() as u64 + 3) / 4),
-            prompt: prompt_tokens,
-            est: usage.is_none() || prompt.is_none(),
-            gen_ms: first.map(|t| t.elapsed().as_millis()).unwrap_or(0),
-            cached,
-        });
+        if !quiet {
+            emit(Event::Usage {
+                tokens: usage.unwrap_or((content.chars().count() as u64 + 3) / 4),
+                prompt: prompt_tokens,
+                est: usage.is_none() || prompt.is_none(),
+                gen_ms: first.map(|t| t.elapsed().as_millis()).unwrap_or(0),
+                cached,
+            });
+        }
 
         let tool_calls: Vec<ToolCall> = calls
             .into_iter()

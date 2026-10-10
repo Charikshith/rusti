@@ -552,8 +552,8 @@ the queue finish, refuses any question still open, and exits 0.
 | `get_messages` | | `messages`: the active path in chat-completions form, as last saved |
 
 `new_session`, `resume_session`, `set_model`, `set_thinking` and `compact` need the agent
-idle and fail with an error while a task runs, and their response marks the end; the session-changing ones are followed by a
-fresh `session` line. Permission prompts and `ask_user` become `ask` lines that wait for an
+idle and fail with an error while a task runs, and their response marks the end; `new_session`, `resume_session`, `set_model` and
+`set_thinking` send a fresh `session` line (when it changed) before that response. Permission prompts and `ask_user` become `ask` lines that wait for an
 `answer` (`--yolo` skips permission prompts as anywhere else).
 
 ```
