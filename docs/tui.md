@@ -106,5 +106,8 @@ Inside the TUI, `/reload` rebuilds rusti from its own source and relaunches in p
 developing rusti with rusti. It preserves the session (`--resume`), the active model (even if
 switched mid-session with `/use`), and the visible transcript. It only runs when idle (finish
 or Esc-interrupt the current turn first); a build failure is reported inline and leaves the
-running session untouched. How the release build is tuned for that wait is in
+running session untouched. An installed binary has no rusti source on the machine, so
+there `/reload` skips the build and restarts the same executable with the same session, model
+and flags, which re-reads `config.json`, models, themes and extensions. How the release build
+is tuned for that wait is in
 [architecture.md § build profile](architecture.md#build-profile).

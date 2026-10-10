@@ -53,7 +53,7 @@ override the saved settings, as do their env vars `RUSTI_MAX_ITERS` and `RUSTI_C
 | `/model`, `/new`, `/resume`, `/tree` | switch model, new session, switch session, branch |
 | `/undo`, `/commit`, `/export` | revert the last turn's files, commit the work, save the transcript |
 | `/plan`, `/compact`, `/mcp`, `/themes`, `/settings` | plan mode, compact now, MCP servers, palette, status line |
-| `/reload` | rebuild rusti from source and relaunch in place |
+| `/reload` | rebuild rusti from source and relaunch in place; an installed binary just restarts to reload config |
 
 Your own prompt templates, skills and MCP prompts join the `/` menu too.
 

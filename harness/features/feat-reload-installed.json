@@ -1,0 +1,12 @@
+{
+  "id": "feat-reload-installed",
+  "name": "/reload on an installed binary restarts instead of failing the build",
+  "description": "Job::Reload ran `cargo build --release` against MANIFEST_DIR = env!(\"CARGO_MANIFEST_DIR\"), the compile-time source path; on a release binary that is the GitHub Actions dir (D:\\a\\rusti\\rusti), so /reload always failed with 'manifest path ... does not exist'. tui::reload_exe(manifest_dir, event_tx) now picks the binary to relaunch: with MANIFEST_DIR/Cargo.toml present it builds and stages exactly as before; without it, it posts a notice ('reload: no rusti source on this machine - restarting the installed rusti to reload config') and returns std::env::current_exe(). Both branches share build_relaunch_args and Event::Reload, so the session, model, url, key and flags carry over and config.json, models, themes and extensions are re-read.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test (all pass): tui::tests::reload_without_source_relaunches_current_exe (non-existent manifest dir -> Some(current_exe), only the notice event, no cargo ToolStart or TaskEnd); relaunch_args_replace_model_and_dedupe_resume unchanged. Help text, /reload BUILTINS row, readme table and docs/tui.md updated.",
+  "decisions": [
+    "Relaunching the running exe needs no staging: running an exe again is allowed while it is held, and Windows' thin-wrapper relaunch in run() already waits on the child.",
+    "No self-update: an installed /reload only restarts the same version."
+  ]
+}

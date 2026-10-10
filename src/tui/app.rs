@@ -40,7 +40,7 @@ const BUILTINS: &[(&str, &str, bool)] = &[
     ("/rename", "/rename <new-name> - rename the active session", false),
     ("/new", "/new [name] - save this session and start a new one", false),
     ("/tree", "browse the session tree and branch from an earlier entry", false),
-    ("/reload", "rebuild rusti from source and relaunch", false),
+    ("/reload", "rebuild from source (or restart) and relaunch", false),
     ("/quit", "exit rusti (same as ctrl+c twice)", false),
     ("/undo", "put back the files the last turn changed and rewind to before it", false),
     ("/commit", "stage the work and commit it with a drafted message", false),
