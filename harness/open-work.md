@@ -74,6 +74,11 @@ When: Model reads/lists/greps paths outside the project (../, absolute, ~) — w
 What: Extend `tools::guard` to read_file/list_dir/grep/glob behind an `--allow-outside` flag; today reads are deliberately open so the model can look at dependency sources
 Where: ai_core/tools.rs guard()
 
+### Outside-Root Edits Ask Before Being Refused
+When: Manual mode, an edit to a path outside the project: the user answers Yes, then the root guard refuses it anyway
+What: Check the root guard before the permission prompt, so a call that will be refused is not asked about first
+Where: ai_core/mod.rs permitted(), ai_core/tools.rs guard()
+
 ### Project Config Follow-ups
 When: feat-038 put `allow` / `max_iters` / `context` in model.json (not the separate `.rusti/config.json` first
 sketched — one file and one loader beat two, and the profile default already lived there)
@@ -120,6 +125,11 @@ Where: ai_core/llm.rs, config.rs
 When: A long write_file looks frozen while arguments stream
 What: Show the tool name as soon as it's known and a byte counter while raw_arguments accumulate
 Where: ai_core/llm.rs handle_event emit, tui/app.rs ToolStart
+
+### Object-Valued Tool Arguments
+When: A proxy sends `function.arguments` as a JSON object rather than a string (not seen yet: 9router sends strings)
+What: Serialize the object into raw_arguments instead of dropping it; today the call arrives with no arguments
+Where: ai_core/llm.rs handle_event
 
 ## Tools / Ecosystem
 

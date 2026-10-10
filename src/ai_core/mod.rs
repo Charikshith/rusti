@@ -1206,14 +1206,22 @@ pub async fn run_agent(
         let mut spans = Vec::new(); // the calls each tool call became
         for tc in &res.tool_calls {
             let start = calls.len();
+            // arguments that are not JSON reach here as null, and the call would
+            // run on its defaults (ask_user with no question); refuse it so the
+            // model resends it. Empty arguments are a call that takes none.
+            let unparsed = match tc.raw_arguments.trim() {
+                "" => None,
+                raw => serde_json::from_str::<Value>(raw).err(),
+            };
             let subs = if tc.name == "batch" { batch_calls(&tc.arguments) } else { vec![(tc.name.clone(), tc.arguments.clone())] };
             for (name, args) in subs {
                 let id = TOOL_ID.fetch_add(1, Ordering::Relaxed);
                 let summary = tool_summary(&name, &args);
                 emit(Event::ToolStart { id, summary: summary.clone() });
-                let run = match name.as_str() {
-                    "batch" => Err("batch cannot nest; list the calls directly".into()),
-                    "" => Err("this call has no `name`; each entry needs {name, args}".into()),
+                let run = match (name.as_str(), &unparsed) {
+                    ("batch", _) => Err("batch cannot nest; list the calls directly".into()),
+                    ("", _) => Err("this call has no `name`; each entry needs {name, args}".into()),
+                    (_, Some(e)) => Err(format!("the arguments are not valid JSON ({e}); resend the call with its arguments as one JSON object")),
                     _ => gate(&name, &args, &summary, hooks::of("pre_tool"), |s, a| {
                         let name = name.clone();
                         async move { permitted(&name, &a, &s).await }
@@ -1467,7 +1475,11 @@ async fn dispatch(client: &llm::Client, name: &str, args: &Value, cancel: &Atomi
             r
         }
         "delegate" => delegate(client, args["task"].as_str().unwrap_or(""), cancel).await,
-        "ask_user" => tools::ask_user(args["question"].as_str().unwrap_or("")).await,
+        // no question, no ask: an empty one waited unseen under "working…" for an answer
+        "ask_user" => match args["question"].as_str().filter(|q| !q.trim().is_empty()) {
+            Some(q) => tools::ask_user(q).await,
+            None => (false, "ask_user needs a non-empty \"question\" string; call it again with the question to ask".into()),
+        },
         "web_fetch" => tools::web_fetch(args["url"].as_str().unwrap_or("")).await,
         // the blocking pool, so a group of these overlaps even on the agent's
         // current_thread runtime; writes stay inline, they run alone anyway

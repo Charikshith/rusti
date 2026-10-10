@@ -346,20 +346,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // Two rows, not one: the hint rides ABOVE the input because it is what
     // changes mid-turn and belongs next to the caret, while session/model/branch
     // stays BELOW, pinned to the bottom edge where it can be read at a glance.
-    let armed = app.armed();
-    let hint = if armed {
-        "press ctrl+c again to exit".to_string()
-    } else if let Some(n) = app.notice() {
-        format!("ℹ {n}")
-    } else if !app.done {
-        format!("{spin} working…")
-    } else if app.fresh || app.scroll_up > 0 {
-        // onboarding, not status: shown on a fresh prompt, and again when the
-        // transcript is scrolled off the bottom (you're looking for the way out)
-        "ctrl+c twice to quit".to_string()
-    } else {
-        String::new()
-    };
+    let hint = hint_text(app, spin);
     // the live frame gets the accent; every other hint is plain dim text
     frame.push(match hint.as_str() {
         "" => String::new(),
@@ -433,6 +420,26 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     state.prev_lines = frame;
     state.prev_rows = h;
     Ok(())
+}
+
+/// The hint row above the input: what the turn is waiting on, or how to get out.
+fn hint_text(app: &App, spin: char) -> String {
+    if app.armed() {
+        "press ctrl+c again to exit".to_string()
+    } else if let Some(n) = app.notice() {
+        format!("ℹ {n}")
+    } else if app.ask.is_some() && app.pick.is_none() {
+        // the turn is waiting on you, not the model; a picker shows its own keys
+        "answer above · enter sends · esc cancels".to_string()
+    } else if !app.done {
+        format!("{spin} working…")
+    } else if app.fresh || app.scroll_up > 0 {
+        // onboarding, not status: shown on a fresh prompt, and again when the
+        // transcript is scrolled off the bottom (you're looking for the way out)
+        "ctrl+c twice to quit".to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// Messages typed while the agent works, one dim row each above the panel:
@@ -1312,5 +1319,17 @@ last bit";
         assert_eq!(line_style("  ┆ narration"), b'n');
         assert_eq!(line_style("  ✓ read x"), b'k', "a success gets an edge, not a band");
         assert!(colorize_row(b'k', "  ✓ read x", '⠋').contains('▎'));
+    }
+
+    /// A free-text question waits on the user, not the model: while one is
+    /// pending the hint says how to answer instead of "working…", which made an
+    /// unanswered ask_user look like a hang. A permission picker shows its own keys.
+    #[test]
+    fn a_pending_question_asks_for_an_answer_not_working() {
+        let mut app = app::App::new("m".into(), "s".into(), vec![], vec![], 0, Default::default());
+        app.done = false;
+        assert_eq!(hint_text(&app, '⠋'), "⠋ working…");
+        app.ask = Some(("push where?".into(), tokio::sync::oneshot::channel().0));
+        assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
     }
 }

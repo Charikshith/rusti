@@ -14,6 +14,12 @@ use std::time::{Duration, Instant};
 const RETRIES: u32 = 3;
 /// First backoff step; doubles per attempt (1s, 2s, 4s). Tests shrink it.
 pub static RETRY_BASE_MS: AtomicU64 = AtomicU64::new(1000);
+/// A server silent this long (no headers, or no bytes mid-stream) has stalled:
+/// the call fails instead of waiting forever. Thinking models stream their
+/// reasoning, so a live reply is never quiet this long.
+const STALL: Duration = Duration::from_secs(120);
+/// How often a wait on the server wakes to look at the cancel flag (Esc).
+const TICK: Duration = Duration::from_millis(100);
 
 /// Transient statuses worth a retry; other 4xx are the caller's fault.
 pub fn retryable(status: u16) -> bool {
@@ -33,6 +39,8 @@ pub struct Client {
     pub cache: Option<CacheMode>,
     /// Sent as `reasoning_effort` when set (RPC set_thinking); None sends nothing.
     pub reasoning: Option<String>,
+    /// STALL; a field so a test can shorten it.
+    stall: Duration,
 }
 
 /// A provider error saying the request did not fit the model's context:
@@ -69,7 +77,25 @@ impl Client {
         // a pooled connection reused next turn is dead -> "error sending request".
         // No pooling = fresh connection per request (localhost handshake is free).
         let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
-        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), cache: None, reasoning: None }
+        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), cache: None, reasoning: None, stall: STALL }
+    }
+
+    /// Await `fut`, waking every TICK so Esc ends the wait at once, and give up
+    /// once the server has been silent for `stall`. Without this a stalled
+    /// provider left the turn on "working…" with Esc unable to reach it.
+    async fn wait<F: std::future::Future>(&self, fut: F, cancel: &AtomicBool) -> Result<F::Output, String> {
+        let mut fut = std::pin::pin!(fut);
+        let t0 = Instant::now();
+        loop {
+            match tokio::time::timeout(TICK, &mut fut).await {
+                Ok(v) => return Ok(v),
+                Err(_) if cancel.load(Ordering::Relaxed) => return Err("interrupted".into()),
+                Err(_) if t0.elapsed() >= self.stall => {
+                    return Err(format!("stream stalled: no data for {}s", self.stall.as_secs()))
+                }
+                Err(_) => {}
+            }
+        }
     }
 
     pub async fn chat_stream(
@@ -102,11 +128,11 @@ impl Client {
             if !self.key.is_empty() {
                 req = req.bearer_auth(&self.key);
             }
-            let err = match req.send().await {
+            let err = match self.wait(req.send(), cancel).await? {
                 Ok(r) if r.status().is_success() => break r,
                 Ok(r) => {
                     let status = r.status();
-                    let text = r.text().await.unwrap_or_default();
+                    let text = self.wait(r.text(), cancel).await?.unwrap_or_default();
                     let msg = format!("HTTP {status}: {}", truncate(&text, 500));
                     // once: the field is gone after this, so a second 400 is a real error
                     if body.get("stream_options").is_some() && rejects_stream_options(status.as_u16(), &text) {
@@ -147,22 +173,25 @@ impl Client {
         let mut usage: Option<u64> = None;
         let mut prompt: Option<u64> = None;
         let mut cached: Option<u64> = None;
-        loop {
+        // the reply ends at [DONE], not when the server gets round to closing:
+        // one that keeps the socket open would otherwise hold the turn forever
+        let mut done = false;
+        while !done {
             if cancel.load(Ordering::Relaxed) {
                 return Err("interrupted".into());
             }
-            match stream.next().await {
+            match self.wait(stream.next(), cancel).await? {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
                     for ev in take_sse_events(&mut buf) {
-                        handle_event(&ev, quiet, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
+                        done |= handle_event(&ev, quiet, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
                     }
                 }
                 Some(Err(e)) => return Err(format!("stream error: {e}")),
                 None => break,
             }
         }
-        if !buf.is_empty() {
+        if !done && !buf.is_empty() {
             // server closed without a trailing blank line
             let ev = String::from_utf8_lossy(&buf).into_owned();
             handle_event(&ev, quiet, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
@@ -281,14 +310,14 @@ fn handle_event(
     usage: &mut Option<u64>,
     prompt: &mut Option<u64>,
     cached: &mut Option<u64>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     for line in ev.lines() {
         let data = match line.trim_start().strip_prefix("data:") {
             Some(d) => d.trim(),
             None => continue,
         };
         if data == "[DONE]" {
-            continue;
+            return Ok(true); // the end of the reply
         }
         let v: Value = serde_json::from_str(data).map_err(|e| format!("bad SSE JSON: {e}"))?;
         if let Some(err) = v.get("error") {
@@ -354,7 +383,7 @@ fn handle_event(
             }
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Split complete SSE events ("\n\n" or "\r\n\r\n" separated) out of the
@@ -386,6 +415,30 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that goes quiet mid-reply with the socket still open fails the
+    /// call once the stall limit passes, rather than holding the turn forever.
+    #[test]
+    fn a_silent_stream_fails_as_stalled() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.read(&mut [0u8; 65536]);
+            let part = r#"data: {"choices":[{"delta":{"content":"half a reply"},"finish_reason":null}]}"#;
+            s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n{part}\n\n").as_bytes()).unwrap();
+            std::thread::sleep(Duration::from_secs(30)); // silent, socket open
+        });
+        let mut c = Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), String::new(), "m".into());
+        c.stall = Duration::from_millis(300);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let t0 = Instant::now();
+        let r = rt.block_on(c.chat_stream(&[json!({"role": "user", "content": "hi"})], None, "k", &AtomicBool::new(false), true));
+        let err = r.err().unwrap_or_default();
+        assert!(err.starts_with("stream stalled: no data for"), "{err}");
+        assert!(t0.elapsed() < Duration::from_secs(5), "gave up after the limit, not the server");
+    }
 
     #[test]
     fn cache_hits_read_under_each_providers_name() {

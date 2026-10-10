@@ -81,6 +81,14 @@ The model's thinking is shown in italic grey. Ctrl+T hides it: each finished blo
 that row, so you can see the model working. The choice is saved as `"hide_thinking": true` in
 `~/.rusti/config.json`; press Ctrl+T again to show it.
 
+## waiting
+
+The row above the input says what the turn is waiting on. `working…` means the model. When
+`ask_user` has asked you something it reads `answer above · enter sends · esc cancels`: type
+the answer and press Enter. Esc interrupts the turn at any point, including while the provider
+has gone quiet mid-reply, and a provider that sends nothing for 120 seconds fails the turn with
+`stream stalled: no data for 120s`.
+
 ## steering and follow-ups
 
 You can type while the agent works.
