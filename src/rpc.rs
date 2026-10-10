@@ -85,6 +85,7 @@ struct Asks {
     next: AtomicU64,
     open: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     closed: AtomicBool, // nobody left to answer: stdin is gone
+    cancel: Arc<AtomicBool>, // the run was aborted: nobody will answer it
 }
 
 impl Asks {
@@ -102,7 +103,7 @@ impl Asks {
 
 /// Write agent events to `out` until `stop` is set and nothing is left. An
 /// `ask` is held in `asks` for an `answer` (RPC); with no `asks` (--json) or
-/// after stdin closed, it is answered NO_ANSWER at once.
+/// after stdin closed or an abort, it is answered NO_ANSWER at once.
 fn pump(rx: mpsc::Receiver<Event>, out: Out, asks: Option<Arc<Asks>>, stop: Arc<AtomicBool>) {
     loop {
         let ev = match rx.recv_timeout(Duration::from_millis(50)) {
@@ -118,7 +119,7 @@ fn pump(rx: mpsc::Receiver<Event>, out: Out, asks: Option<Arc<Asks>>, stop: Arc<
                     v["id"] = json!(id);
                     // held before the line goes out, so an instant answer finds it
                     let mut open = a.open.lock().unwrap();
-                    match a.closed.load(Ordering::Relaxed) {
+                    match a.closed.load(Ordering::Relaxed) || a.cancel.load(Ordering::Relaxed) {
                         true => drop(reply.send(NO_ANSWER.into())),
                         false => drop(open.insert(id, reply)),
                     }
@@ -192,7 +193,6 @@ struct Queue {
 struct Rpc {
     out: Out,
     asks: Arc<Asks>,
-    cancel: Arc<AtomicBool>,
     queue: Arc<Mutex<Queue>>,
     info: Arc<Mutex<Value>>, // the last `session` line, for get_state and get_messages
     jobs: mpsc::Sender<Job>,
@@ -254,7 +254,7 @@ impl Rpc {
             return Some(response(id, &command, Err("a task is running: wait for task_end, or abort".into())));
         }
         q.busy = true;
-        self.cancel.store(false, Ordering::Relaxed);
+        self.asks.cancel.store(false, Ordering::Relaxed);
         let _ = self.jobs.send(Job { id, command, work });
         None
     }
@@ -267,7 +267,7 @@ impl Rpc {
         let how = match (q.busy, mode) {
             (false, _) => {
                 q.busy = true;
-                self.cancel.store(false, Ordering::Relaxed);
+                self.asks.cancel.store(false, Ordering::Relaxed);
                 let _ = self.jobs.send(Job { id: Value::Null, command: "prompt".into(), work: Work::Prompt(text) });
                 "run"
             }
@@ -290,7 +290,7 @@ impl Rpc {
     /// it was waiting on is answered no, so the run can unwind.
     fn abort(&self) -> Value {
         let mut q = self.queue.lock().unwrap();
-        self.cancel.store(true, Ordering::Relaxed);
+        self.asks.cancel.store(true, Ordering::Relaxed);
         let dropped = ai_core::take_steers().len() + std::mem::take(&mut q.follow).len();
         drop(q);
         self.asks.drop_all(false);
@@ -363,6 +363,7 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
                     let reasoning = client.reasoning.take();
                     client = llm::Client::new(p.url, p.key, p.model.clone());
                     client.reasoning = reasoning;
+                    client.cache = p.cache;
                     session.model = p.model.clone();
                     Ok(json!({"model": p.model, "context_limit": ai_core::context_limit()}))
                 }
@@ -426,13 +427,12 @@ pub fn run_rpc(client: llm::Client, session: Session) -> i32 {
     let rpc = Rpc {
         out: out.clone(),
         asks,
-        cancel: Arc::new(AtomicBool::new(false)),
         queue: Arc::new(Mutex::new(Queue::default())),
         info: Arc::new(Mutex::new(header)),
         jobs,
     };
     let working = {
-        let (out, cancel, queue, info) = (out.clone(), rpc.cancel.clone(), rpc.queue.clone(), rpc.info.clone());
+        let (out, cancel, queue, info) = (out.clone(), rpc.asks.cancel.clone(), rpc.queue.clone(), rpc.info.clone());
         std::thread::spawn(move || agent(job_rx, client, session, out, cancel, queue, info))
     };
     for line in std::io::stdin().lock().lines() {
@@ -505,7 +505,6 @@ mod tests {
         let r = Rpc {
             out: Out(Arc::new(Mutex::new(Box::new(Vec::new())))),
             asks: Arc::new(Asks::default()),
-            cancel: Arc::new(AtomicBool::new(false)),
             queue: Arc::new(Mutex::new(Queue::default())),
             info: Arc::new(Mutex::new(info)),
             jobs,
@@ -557,7 +556,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         r.asks.open.lock().unwrap().insert("q2".into(), tx);
         assert_eq!(r.command(r#"{"id":11,"type":"abort"}"#).unwrap()["data"], json!({"dropped": 2}));
-        assert!(r.cancel.load(Ordering::Relaxed) && ai_core::steers().is_empty());
+        assert!(r.asks.cancel.load(Ordering::Relaxed) && ai_core::steers().is_empty());
         assert_eq!(rx.try_recv().unwrap(), NO_ANSWER);
 
         // idle again: session work goes to the agent thread, which answers it
@@ -597,5 +596,21 @@ mod tests {
         let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         assert_eq!(lines.len(), 2);
         assert!(lines.iter().all(|l| l["type"] == "ask" && l["v"] == 1));
+    }
+
+    /// A question the aborted run asked before the pump saw it, after the
+    /// abort found nothing open, is answered no rather than left hanging.
+    #[test]
+    fn a_question_reaching_the_pump_after_abort_is_refused() {
+        let _q = ai_core::STEER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let (r, _jobs) = rpc();
+        assert_eq!(r.command(r#"{"id":1,"type":"prompt","text":"go"}"#).unwrap()["data"]["accepted"], "run");
+        let (tx, rx) = mpsc::channel();
+        let (reply, mut answer) = tokio::sync::oneshot::channel();
+        tx.send(Event::Ask { question: "allow run_command?".into(), choices: vec![], reply }).unwrap();
+        assert_eq!(r.command(r#"{"id":2,"type":"abort"}"#).unwrap()["data"], json!({"dropped": 0}));
+        pump(rx, r.out.clone(), Some(r.asks.clone()), Arc::new(AtomicBool::new(true)));
+        assert_eq!(answer.try_recv().unwrap(), NO_ANSWER);
+        assert!(r.asks.open.lock().unwrap().is_empty());
     }
 }
