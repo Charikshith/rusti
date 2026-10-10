@@ -1746,7 +1746,7 @@ branch: "), "{c2}");
     #[test]
     fn compaction_cut_keeps_a_token_window_and_never_orphans_a_tool_result() {
         let mut long = vec![("system", 10), ("user", 10)];
-        long.extend(std::iter::repeat([("assistant", 10), ("tool", 10)]).take(6).flatten()); // 14 entries
+        long.extend(std::iter::repeat_n([("assistant", 10), ("tool", 10)], 6).flatten()); // 14 entries
         assert_eq!(compact_cut(&long, 1, 20), Some(12), "the last 20 tokens start on an assistant entry");
         assert_eq!(compact_cut(&long, 1, 30), Some(10), "landing on a tool result steps back to its call");
         assert_eq!(compact_cut(&long, 1, 1000), None, "the whole path fits: nothing to compact");
@@ -1756,7 +1756,7 @@ branch: "), "{c2}");
 
         // one call with many results: back to the call, never between results
         let mut tools_only = vec![("system", 10), ("user", 10), ("assistant", 10)];
-        tools_only.extend(std::iter::repeat(("tool", 10)).take(10));
+        tools_only.extend(std::iter::repeat_n(("tool", 10), 10));
         assert_eq!(compact_cut(&tools_only, 1, 30), Some(2));
         // ...and no call before them at all: forward, past the results
         assert_eq!(compact_cut(&[("system", 1), ("tool", 10), ("tool", 10), ("user", 10)], 1, 15), Some(3));
