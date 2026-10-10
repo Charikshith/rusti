@@ -360,3 +360,46 @@ fn rpc_and_json_without_a_model_exit_instead_of_asking() {
         assert!(err.contains("no model configured") && !err.contains("add one"), "{args:?}: {err}");
     }
 }
+
+/// A background job runs in a process group of its own, out of the terminal's
+/// reach, so closing the terminal no longer killed it. It dies with rusti
+/// instead: when rusti exits, and when it is told to stop (SIGTERM).
+#[cfg(unix)]
+#[test]
+fn a_background_job_dies_with_rusti() {
+    for how in ["exit", "SIGTERM"] {
+        let call = sse(json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+            "function": {"name": "run_background", "arguments": json!({"command": "echo $$ > job.pid; exec sleep 300"}).to_string()}}]}), "tool_calls");
+        let (url, _) = fake_llm(vec![call, sse(json!({"content": "started"}), "stop")]);
+        let name = "rpc_job_dies";
+        let (mut child, rx) = spawn(name, &url, &["--rpc", "--yolo"]);
+        let pidfile = std::env::temp_dir().join(format!("rusti_{name}_e2e_{}", std::process::id())).join("job.pid");
+        let mut stdin = child.stdin.take().unwrap();
+        until(&rx, "session");
+        writeln!(stdin, "{}", json!({"id": 1, "type": "prompt", "text": "start the server"})).unwrap();
+        until(&rx, "task_end");
+        let end = Instant::now() + Duration::from_secs(10);
+        let pid = loop {
+            if let Some(p) = std::fs::read_to_string(&pidfile).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
+                break p;
+            }
+            assert!(Instant::now() < end, "{how}: the job never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        if how == "SIGTERM" {
+            Command::new("kill").args(["-TERM", &child.id().to_string()]).status().unwrap();
+        } else {
+            drop(stdin);
+        }
+        child.wait().unwrap();
+        let alive = || Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().unwrap().success();
+        let end = Instant::now() + Duration::from_secs(5);
+        while alive() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if alive() {
+            let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+            panic!("{how}: the job outlived rusti");
+        }
+    }
+}

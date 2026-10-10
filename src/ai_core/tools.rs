@@ -559,6 +559,7 @@ pub fn run_command_live(cmd: &str, timeout_secs: u64, live: Arc<dyn Fn(&str) + S
     };
     let code = status.code().unwrap_or(-1);
     let ([out, err], held) = drain([out, err]);
+    tree.done(held);
     let mut s = format!("[exit {code}]\n{}{}", String::from_utf8_lossy(&out), String::from_utf8_lossy(&err));
     if held {
         s.push_str("\n[something it started in the background still holds the output; use run_background for servers and watchers]");
@@ -571,7 +572,9 @@ pub(crate) type Reader = (Arc<Mutex<Vec<u8>>>, std::thread::JoinHandle<()>);
 
 /// Read a pipe to the end, passing each complete line to `live` on the way.
 /// The bytes collect where the caller can take them before the end, since the
-/// end may never come (see drain).
+/// end may never come (see drain). Once the caller has let go of them, what a
+/// child left running still writes is read and dropped: kept, it grew without
+/// end and reached the transcript in the middle of later turns.
 pub(crate) fn read_live(mut r: impl std::io::Read + Send + 'static, live: Arc<dyn Fn(&str) + Send + Sync>) -> Reader {
     let all = Arc::new(Mutex::new(Vec::new()));
     let buf = all.clone();
@@ -579,6 +582,10 @@ pub(crate) fn read_live(mut r: impl std::io::Read + Send + 'static, live: Arc<dy
         let (mut line, mut chunk) = (Vec::new(), [0u8; 8192]);
         while let Ok(n) = r.read(&mut chunk) {
             if n == 0 { break; }
+            if Arc::strong_count(&buf) == 1 {
+                line.clear();
+                continue;
+            }
             buf.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]);
             line.extend_from_slice(&chunk[..n]);
             let mut from = 0;
@@ -624,7 +631,7 @@ pub(crate) fn own_group(c: &mut Command) -> &mut Command {
 /// Unix: the process group own_group made. Windows: a job object, because
 /// taskkill /T loses MSYS programs (Git Bash is the default shell), where each
 /// exec starts a process whose Windows parent has already exited.
-pub(crate) struct Tree(#[cfg(windows)] win::Job);
+pub(crate) struct Tree(#[cfg(windows)] win::Job, #[cfg(unix)] i32);
 
 impl Tree {
     /// The tree of a child just spawned (through own_group). ponytail: on
@@ -633,12 +640,23 @@ impl Tree {
     pub(crate) fn of(child: &std::process::Child) -> Tree {
         #[cfg(windows)]
         let tree = Tree(win::Job::holding(child));
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         let tree = {
-            let _ = child;
-            Tree()
+            let group = child.id() as i32;
+            unix::track(group);
+            Tree(group)
         };
         tree
+    }
+
+    /// The command exited by itself; `held` is whether something it started
+    /// still runs, and then its group still dies with rusti.
+    pub(crate) fn done(self, held: bool) {
+        #[cfg(unix)]
+        if !held {
+            unix::untrack(self.0);
+        }
+        let _ = held;
     }
 
     /// Kill the whole tree, then reap the child.
@@ -648,12 +666,93 @@ impl Tree {
         // the group is ours only while the child is unreaped: once waited on,
         // its pid is free for some other process to lead a group with
         #[cfg(unix)]
-        if let Ok(None) = child.try_wait() {
-            let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())])
-                .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        {
+            if let Ok(None) = child.try_wait() {
+                unix::kill_group(self.0);
+            }
+            unix::untrack(self.0);
         }
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+/// Kill every command, job and hook still running, as the terminal's hangup
+/// did when they shared rusti's process group (own_group took them out of it).
+/// For when rusti exits; Windows leaves them be, as before.
+pub fn kill_groups() {
+    #[cfg(unix)]
+    unix::kill_all();
+}
+
+/// Have SIGHUP (the terminal closed), SIGTERM and SIGINT (Ctrl+C outside the
+/// TUI) take the groups down with rusti.
+pub fn die_with_groups() {
+    #[cfg(unix)]
+    unix::on_signals();
+}
+
+#[cfg(unix)]
+mod unix {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+        fn signal(sig: i32, handler: usize) -> usize;
+        fn raise(sig: i32) -> i32;
+    }
+
+    const SIGHUP: i32 = 1;
+    const SIGINT: i32 = 2;
+    const SIGKILL: i32 = 9;
+    const SIGTERM: i32 = 15;
+    const SIG_DFL: usize = 0;
+
+    /// The live groups, 0 for a free slot; atomics, as a signal handler reads
+    /// them. ponytail: 64 slots, a group past them is not killed at exit; and
+    /// a group whose every process has since ended may have had its number
+    /// reused by the time rusti exits.
+    static GROUPS: [AtomicI32; 64] = [const { AtomicI32::new(0) }; 64];
+
+    pub fn track(group: i32) {
+        let _ = GROUPS.iter().find(|g| g.compare_exchange(0, group, Ordering::SeqCst, Ordering::SeqCst).is_ok());
+    }
+
+    pub fn untrack(group: i32) {
+        for g in &GROUPS {
+            let _ = g.compare_exchange(group, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+
+    pub fn kill_group(group: i32) {
+        // SAFETY: kill(2) on a negative pid signals that group; no memory involved
+        unsafe { kill(-group, SIGKILL) };
+    }
+
+    pub fn kill_all() {
+        for g in &GROUPS {
+            match g.swap(0, Ordering::SeqCst) {
+                0 => {}
+                group => kill_group(group),
+            }
+        }
+    }
+
+    extern "C" fn on_signal(sig: i32) {
+        kill_all();
+        // SAFETY: async-signal-safe calls: back to the default action, then
+        // the signal again, so rusti ends the way it would have without us
+        unsafe {
+            signal(sig, SIG_DFL);
+            raise(sig);
+        }
+    }
+
+    pub fn on_signals() {
+        for sig in [SIGHUP, SIGINT, SIGTERM] {
+            // SAFETY: on_signal only touches atomics and async-signal-safe calls
+            unsafe { signal(sig, on_signal as extern "C" fn(i32) as usize) };
+        }
     }
 }
 
@@ -1191,8 +1290,9 @@ pub(crate) fn shell(cmd: &str) -> Command {
 }
 
 // ---- background jobs -------------------------------------------------------
-// ponytail: jobs outlive the agent process if not stopped; the system prompt tells
-// the model to job_stop what it started. A Windows job object would auto-kill them.
+// ponytail: on Windows jobs outlive the agent process if not stopped; the system
+// prompt tells the model to job_stop what it started. On Unix they die with rusti
+// (kill_groups).
 
 struct Job {
     cmd: String,
@@ -1678,6 +1778,22 @@ mod tests {
         let (ok, out) = run_command("sleep 6 & echo started", 30);
         assert!(ok && out.contains("started"), "{out}");
         assert!(t0.elapsed() < Duration::from_secs(4), "returned after {:?}", t0.elapsed());
+    }
+
+    /// What that child writes after the call has returned goes nowhere: it was
+    /// still handed to `live`, which the TUI shows in the middle of later turns.
+    #[test]
+    fn a_backgrounded_child_is_not_heard_after_the_call() {
+        if !posix_shell() {
+            return;
+        }
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let s = seen.clone();
+        let live: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |l: &str| s.lock().unwrap().push(l.to_string()));
+        let (ok, out) = run_command_live("(sleep 1; echo late) & echo started", 30, live, &AtomicBool::new(false));
+        assert!(ok && out.contains("started"), "{out}");
+        std::thread::sleep(Duration::from_secs(2));
+        assert_eq!(*seen.lock().unwrap(), ["started"]);
     }
 
     /// A timed-out or interrupted command is killed with everything it

@@ -1130,6 +1130,9 @@ pub async fn unpanic<T>(fut: impl std::future::Future<Output = Result<T, String>
 }
 
 /// One task through the agent loop; a panic in it comes back as its error.
+/// A turn that failed between its tool calls and their results leaves the
+/// leaf on calls nothing answered, and every later request was refused for
+/// them; the leaf goes back to before the calls.
 pub async fn run_agent(
     client: &llm::Client,
     session: &mut Session,
@@ -1137,7 +1140,12 @@ pub async fn run_agent(
     images: &[String],
     cancel: &AtomicBool,
 ) -> Result<String, String> {
-    unpanic(turn(client, session, task, images, cancel)).await
+    let r = unpanic(turn(client, session, task, images, cancel)).await;
+    let unanswered = session.path().last().filter(|e| e.role == "assistant" && e.tool_calls.is_some()).map(|e| e.parent.clone());
+    if let (Err(_), Some(before)) = (&r, unanswered) {
+        session.active = before;
+    }
+    r
 }
 
 async fn turn(
@@ -1430,7 +1438,7 @@ fn tool_schemas(loaded: &[String]) -> Vec<Value> {
     let mut v = vec![
         json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files. A long read is cut (by default at 2000 lines or 50 KB) and ends with the offset to continue from; keep reading from it until you have what you need. A .png/.jpg/.gif/.webp path is read as an image and attached to the conversation for you to look at.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"write_file","description":"Write content to a file, overwriting it.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}),
-        json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120).","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
+        json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120). Nothing can answer a terminal prompt (ssh/git password, sudo): such a command waits out its timeout, so use key-based or non-interactive auth.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
         json!({"type":"function","function":{"name":"edit_file","description":"Replace one exact text occurrence in a file. old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}}}),
         json!({"type":"function","function":{"name":"multi_edit","description":"Apply several exact replacements to one file in order, all-or-nothing. Each old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"]}}},"required":["path","edits"]}}}),
         json!({"type":"function","function":{"name":"grep","description":"Search file contents for a regex. Returns path:line:text. path defaults to '.'; glob (e.g. '*.rs') filters files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"}},"required":["pattern"]}}}),

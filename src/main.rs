@@ -268,12 +268,14 @@ fn main() {
 
     let mut client = ai_core::llm::Client::new(url, key, model.clone());
     client.cache = cache;
+    ai_core::tools::die_with_groups();
 
     if tui_mode {
         if let Err(e) = tui::run(tui::TuiConfig { client, session, model, cli_args: args.clone() }) {
             eprintln!("tui error: {e}");
-            std::process::exit(1);
+            quit(1);
         }
+        ai_core::tools::kill_groups();
         return;
     }
 
@@ -284,10 +286,10 @@ fn main() {
     }
 
     if rpc {
-        std::process::exit(rpc::run_rpc(client, session));
+        quit(rpc::run_rpc(client, session));
     }
     if json {
-        std::process::exit(rpc::run_json(client, session, &task));
+        quit(rpc::run_json(client, session, &task));
     }
 
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -301,9 +303,16 @@ fn main() {
         }
         Err(e) => {
             eprintln!("\nerror: {e}");
-            std::process::exit(1);
+            quit(1);
         }
     }
+    ai_core::tools::kill_groups();
+}
+
+/// Exit, taking along what commands and jobs still run (tools::kill_groups).
+fn quit(code: i32) -> ! {
+    ai_core::tools::kill_groups();
+    std::process::exit(code)
 }
 
 /// Flags that consume the next argument — their values are not the task.

@@ -18,6 +18,10 @@ refused the same way rather than shown to you as an empty one.
 hold the call open: the result comes back when the shell exits, with a note to use
 `run_background` for servers and watchers.
 
+A command that asks on the terminal (an ssh or git password, `sudo`) cannot prompt inside
+rusti: it waits until its timeout and is killed. Use key-based or otherwise non-interactive
+auth, or run such commands outside rusti.
+
 ## read_file limits
 
 `read_file` returns at most 2000 lines or 50 KB per call. A cut read ends with
@@ -44,6 +48,7 @@ call per turn, and returns one combined result.
   subtask's reads and edits out of the main context. One level deep; the sub-agent streams
   into the same transcript.
 - `run_background` starts a server or watcher and returns a job id; `job_output` reads what
-  it has printed so far, `job_stop` kills the whole process tree. Jobs outlive the agent if
-  not stopped.
+  it has printed so far, `job_stop` kills the whole process tree. On Linux and macOS jobs,
+  commands and hooks still running die with rusti (when it exits, or its terminal closes, or
+  it gets SIGTERM); on Windows jobs outlive the agent if not stopped.
 - `todo` lets the model keep a visible checklist for multi-step work.

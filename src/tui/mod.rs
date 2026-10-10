@@ -641,6 +641,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::process::CommandExt;
+                crate::ai_core::tools::kill_groups(); // the new rusti cannot reach them
                 let e = cmd.exec(); // only returns on failure
                 Err(io::Error::new(io::ErrorKind::Other, format!("relaunch failed: {e}")))
             }
