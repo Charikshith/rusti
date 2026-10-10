@@ -315,10 +315,11 @@ its line number and a suggested fix. Change nothing.
 
 Saved as `~/.rusti/prompts/review.md`, `/review src/main.rs "error handling"` sends that text
 with `$1` = `src/main.rs` and `$2` = `error handling`. Arguments split like a shell's
-(quotes group, `\` escapes); `$1`…`$9` are positional, `$@` and `$ARGUMENTS` are all of
-them, and `${1:-default}` falls back when the argument is missing or empty. Arguments a
-template never uses are added after a blank line rather than dropped. The transcript shows
-`/review src/main.rs …` as you typed it; the model gets the expansion.
+(quotes group; `\` escapes a quote, a space or another `\`, and any other
+backslash is kept, so `src\tui\app.rs` arrives intact); `$1`…`$9` are positional, `$@` and
+`$ARGUMENTS` are all of them, and `${1:-default}` falls back when the argument is missing or
+empty. Arguments a template never uses are added after a blank line rather than dropped.
+The transcript shows `/review src/main.rs …` as you typed it; the model gets the expansion.
 
 **Skills** are [Agent Skills](https://agentskills.io): a folder with a `SKILL.md` whose
 frontmatter has a `name` and a `description`, found up to three folders deep. The system
@@ -364,7 +365,8 @@ what the ones before it rewrote.
 ```
 
 `block` is the reason shown, or `true`. `pre_tool` runs after rusti's own permission prompt,
-so a hook can refuse a call you allowed but can never allow one you refused. `user_shell` is
+so a hook can refuse a call you allowed but can never allow one you refused; a call a
+hook rewrote goes back through the prompt with its new arguments. `user_shell` is
 the `!` hook: rewrite `!cargo test` into `ssh box 'cd /srv && cargo test'`, run it yourself
 and return the output, or refuse it. A hook that exits non-zero, times out or answers with
 something that is not a JSON object blocks what it guards; for `post_tool` the output is
