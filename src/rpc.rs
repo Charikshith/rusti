@@ -324,16 +324,16 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
     let run = |client: &llm::Client, session: &mut Session, task: String| {
         cancel.store(false, Ordering::Relaxed);
         let images = crate::tui::image_refs(&task);
-        let ev = match rt.block_on(ai_core::run_agent(client, session, &task, &images, &cancel)) {
+        match rt.block_on(ai_core::run_agent(client, session, &task, &images, &cancel)) {
             Ok(_) => Event::TaskEnd { ok: true, error: None },
             Err(e) => Event::TaskEnd { ok: false, error: Some(e) },
-        };
-        ai_core::emit(ev);
+        }
     };
     for job in rx {
+        let mut end = None;
         let r = match job.work {
             Work::Prompt(task) => {
-                run(&client, &mut session, task);
+                end = Some(run(&client, &mut session, task));
                 None
             }
             Work::New(name) => Some(crate::tui::new_session(&mut session, name.as_deref()).map(|n| json!({"name": n}))),
@@ -395,8 +395,11 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
                     None
                 }
             };
+            if let Some(ev) = end.take() {
+                ai_core::emit(ev);
+            }
             match next {
-                Some(task) => run(&client, &mut session, task),
+                Some(task) => end = Some(run(&client, &mut session, task)),
                 None => break,
             }
         }

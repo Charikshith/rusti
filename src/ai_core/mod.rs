@@ -330,7 +330,7 @@ pub async fn compact(
     let first = if prev.is_some() { 2 } else { 1 };
     let sizes: Vec<(&str, u64)> = path.iter().map(|e| (e.role.as_str(), estimate_tokens(e))).collect();
     let Some(cut) = compact_cut(&sizes, first, keep_tokens()) else { return Ok(false) };
-    let tokens_before = sizes.iter().map(|s| s.1).sum();
+    let tokens_before: u64 = sizes.iter().map(|s| s.1).sum();
     let old = &path[first..cut];
     emit(Event::CompactStart { reason: reason.into(), messages: old.len(), tokens: tokens_before });
     let (read_files, modified_files) = touched_files(old, prev.as_ref());
@@ -346,7 +346,7 @@ pub async fn compact(
     if summary.is_empty() {
         return Err("compaction failed: the model returned an empty summary".into());
     }
-    let info = crate::session::Compaction { summary: summary.clone(), read_files, modified_files, tokens_before };
+    let info = crate::session::Compaction { summary: summary.clone(), read_files, modified_files };
     let mut head = Entry::new("user", summary_text(&info));
     if path[cut..].iter().all(|e| e.context.is_none()) {
         head.context = path[..cut].iter().rev().find_map(|e| e.context.clone());

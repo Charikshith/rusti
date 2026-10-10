@@ -190,9 +190,6 @@ pub struct Compaction {
     pub read_files: Vec<String>,
     #[serde(default)]
     pub modified_files: Vec<String>,
-    /// Estimated tokens of the path before this compaction.
-    #[serde(default)]
-    pub tokens_before: u64,
 }
 
 impl Entry {
