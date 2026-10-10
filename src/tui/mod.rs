@@ -926,6 +926,14 @@ mod tests {
         // double-click a word; triple-click the whole line it wrapped into
         assert_eq!(st.expand((1, 9), 2), ((1, 7), (1, 10)));
         assert_eq!(st.selected(st.expand((2, 3), 3)), "some bold prose that wraps onto a second row");
+        // narration's │ rail and a tool row's ▎ edge are drawn, not copied
+        let mut rail = render::RenderState::new();
+        rail.inner_w = 40;
+        rail.rows = word_wrap("  ┆ Let me try cd instead and then read the files", 30)
+            .into_iter().enumerate().map(|(k, r)| (b'n', r, (k > 0).then_some(" "))).collect();
+        rail.rows.push((b'k', "  ✓ read a.rs".into(), None));
+        assert_eq!(rail.selected(((0, 0), (2, usize::MAX))),
+                   "Let me try cd instead and then read the files\n✓ read a.rs");
 
         // 4 rows, 2 on screen: following the bottom shows rows 2-3
         st.view_h = 2;

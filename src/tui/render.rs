@@ -134,14 +134,17 @@ impl RenderState {
     }
 
     /// The selected text, plain: rows a soft wrap split are joined back into
-    /// their line; the two-column gutter and trailing padding are dropped.
+    /// their line; the gutter (its ▎ edge or narration's │ rail included) and
+    /// trailing padding are dropped.
     pub fn selected(&self, (a, b): ((usize, usize), (usize, usize))) -> String {
         let (lo, hi) = (a.min(b), a.max(b));
         let mut out = String::new();
         for i in lo.0..=hi.0.min(self.rows.len().saturating_sub(1)) {
             let cs: Vec<char> = self.text(i).chars().collect();
             let (mut x, y) = sel_cols(i, lo, hi);
-            if cs.starts_with(&[' ', ' ']) {
+            if self.rows[i].0 == b'n' {
+                x = x.max(4);
+            } else if cs.starts_with(&[' ', ' ']) || cs.starts_with(&['▎', ' ']) {
                 x = x.max(2);
             }
             let (x, y) = (x.min(cs.len()), y.min(cs.len()));
