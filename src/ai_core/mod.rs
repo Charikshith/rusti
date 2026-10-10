@@ -536,10 +536,14 @@ fn prompt_base(dirs: &[std::path::PathBuf], system: Option<&str>, append: &[Stri
 /// Where SYSTEM.md and APPEND_SYSTEM.md are looked for: ~/.rusti, then the
 /// project's .rusti only once the folder is trusted, so a cloned repo cannot
 /// rewrite the prompt. Relative, so the startup note says `.rusti/SYSTEM.md`.
+/// Run from the home folder, the two are one folder and it is read once.
 fn prompt_dirs() -> Vec<std::path::PathBuf> {
-    let mut d = vec![crate::config::home_dir()];
-    if crate::config::trusted() {
-        d.push(".rusti".into());
+    let home = crate::config::home_dir();
+    let proj = std::path::PathBuf::from(".rusti");
+    let same = std::fs::canonicalize(&proj).ok() == std::fs::canonicalize(&home).ok();
+    let mut d = vec![home];
+    if crate::config::trusted() && !same {
+        d.push(proj);
     }
     d
 }
