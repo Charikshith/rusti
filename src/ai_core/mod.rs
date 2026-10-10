@@ -750,11 +750,11 @@ fn risky(cmd: &str) -> bool {
 /// Whether auto mode runs a gated call without asking: in-project edits and
 /// moves, and commands off the risky list. delete_file, web_fetch and MCP tools still ask.
 fn auto_allows(name: &str, args: &Value) -> bool {
-    let inside = |k: &str| args[k].as_str().map_or(false, |p| tools::guard(p).is_ok());
+    let inside = |k: &str| args[k].as_str().is_some_and(|p| tools::guard(p).is_ok());
     match name {
         "write_file" | "edit_file" | "multi_edit" => inside("path"),
         "move_file" => inside("from") && inside("to"),
-        "run_command" | "run_background" => args["command"].as_str().map_or(false, |c| !risky(c)),
+        "run_command" | "run_background" => args["command"].as_str().is_some_and(|c| !risky(c)),
         _ => false,
     }
 }
