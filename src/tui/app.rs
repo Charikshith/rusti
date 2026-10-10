@@ -1973,13 +1973,24 @@ mod tests {
     /// must hand the connect off and return at once with a progress notice.
     #[test]
     fn mcp_toggle_does_not_wait_for_the_handshake() {
-        // ponytail: RUSTI_HOME stays set for the rest of the run; no test may rely
-        // on a real ~/.rusti anyway (CI has none). Add a home lock if one ever does.
-        let home = std::env::temp_dir().join(format!("rusti_mcp_toggle_{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        // sort reads stdin to EOF and prints nothing until then: a silent server
-        std::fs::write(home.join("config.json"), r#"{"mcp":{"silent":{"command":"sort","enabled":false}}}"#).unwrap();
-        std::env::set_var("RUSTI_HOME", &home);
+        // RUSTI_HOME is set only in a child run of this one test, so the other
+        // tests in this process never see the temp home or its connect thread
+        if std::env::var_os("RUSTI_HOME").is_none() {
+            let home = std::env::temp_dir().join(format!("rusti_mcp_toggle_{}", std::process::id()));
+            std::fs::create_dir_all(&home).unwrap();
+            // sort reads stdin to EOF and prints nothing until then: a silent server
+            std::fs::write(home.join("config.json"), r#"{"mcp":{"silent":{"command":"sort","enabled":false}}}"#).unwrap();
+            let test = concat!(module_path!(), "::mcp_toggle_does_not_wait_for_the_handshake");
+            let test = test.split_once("::").unwrap().1;
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([test, "--exact", "--nocapture"])
+                .env("RUSTI_HOME", &home)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        }
         let mut a = app();
         let t = std::time::Instant::now();
         toggle_mcp(&mut a, "silent");

@@ -154,7 +154,8 @@ pub fn is_mcp(name: &str) -> bool {
 
 fn build(cfg: &McpServer) -> Command {
     let program = if cfg!(windows) {
-        resolve(&cfg.command, &std::env::var_os("PATH").unwrap_or_default())
+        let path = cfg.env.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).map(|(_, v)| v.into());
+        resolve(&cfg.command, &path.or_else(|| std::env::var_os("PATH")).unwrap_or_default())
     } else {
         cfg.command.clone().into()
     };
@@ -647,6 +648,11 @@ mod tests {
         let out = build(&cfg).output().unwrap();
         let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         assert!(stdout.contains(dsn) && stderr.is_empty(), "stdout {stdout:?} stderr {stderr:?}");
+        // a server's own env PATH is where its bare command is looked up, as cmd did
+        let env = [("Path".to_string(), dir.to_string_lossy().into_owned())].into();
+        let cfg = McpServer { command: "argecho".into(), args: vec!["hi".into()], env, ..fake() };
+        let out = build(&cfg).output().unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("hi"), "{out:?}");
     }
 
     fn fake() -> McpServer {
