@@ -194,9 +194,7 @@ fn main() {
         ai_core::tools::set_read_max(n);
     }
 
-    if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTI_YOLO").map_or(false, |v| v == "1") {
-        ai_core::set_mode(ai_core::Mode::Devil);
-    }
+    ai_core::set_mode(start_mode(&args, std::env::var("RUSTI_YOLO").ok().as_deref()));
     if let Some(n) = get(&args, "--max-iters", "RUSTI_MAX_ITERS") {
         match n.parse::<usize>() {
             Ok(n) if n > 0 => ai_core::set_max_iters(n),
@@ -313,6 +311,11 @@ fn get(args: &[String], flag: &str, env: &str) -> Option<String> {
         .or_else(|| std::env::var(env).ok())
 }
 
+/// --yolo or RUSTI_YOLO=1 starts in devil mode; every other run in manual.
+fn start_mode(args: &[String], yolo_env: Option<&str>) -> ai_core::Mode {
+    if args.iter().any(|a| a == "--yolo") || yolo_env == Some("1") { ai_core::Mode::Devil } else { ai_core::Mode::Manual }
+}
+
 /// Every value of a repeatable flag, in order.
 fn values(args: &[String], flag: &str) -> Vec<String> {
     args.windows(2).filter(|w| w[0] == flag).map(|w| w[1].clone()).collect()
@@ -370,5 +373,15 @@ mod tests {
         assert_eq!(super::task_arg(&a(&["--url", "http://x", "--tui"])), None);
         assert_eq!(super::task_arg(&a(&["do it"])), Some("do it".into()));
         assert_eq!(super::task_arg(&a(&["--append-system-prompt", "be terse", "do it"])), Some("do it".into()));
+    }
+
+    #[test]
+    fn yolo_flag_or_env_starts_in_devil() {
+        use crate::ai_core::Mode::*;
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(super::start_mode(&a(&["--tui"]), None), Manual);
+        assert_eq!(super::start_mode(&a(&["--tui"]), Some("0")), Manual);
+        assert_eq!(super::start_mode(&a(&["--yolo", "do it"]), None), Devil);
+        assert_eq!(super::start_mode(&a(&["do it"]), Some("1")), Devil);
     }
 }

@@ -158,7 +158,7 @@ Shift+Tab in the TUI cycles four permission modes; the status line names every o
 |---|---|
 | manual | the default: every tool above asks |
 | plan | reads and searches only; every tool above is refused (same as `/plan`) |
-| auto | runs without asking: `write_file`, `edit_file`, `multi_edit` and `move_file` inside the project root, and `run_command` / `run_background` unless the command is risky. Still asks: `delete_file`, `web_fetch`, every MCP tool not already answered [a]lways, and risky commands — `rm`, `rmdir`, `del`, `erase`, `rd`, `Remove-Item`, `sudo`, `chmod`, `chown`, `icacls`, `takeown`, `git push`, `git reset --hard`, `git clean`, `git checkout --`, `git branch -D`, package installs and removals (`npm`/`pnpm`/`yarn`, `pip`, `uv`, `cargo install`/`add`/`remove`, `gem`, `go install`, `apt`, `brew`, `winget`, `choco`, `scoop`), a download in the same command as a shell (`curl … \| sh`, `irm … \| iex`), and a write (`>`, `cp`, `mv`, `tee`, `mkdir`, `Copy-Item`, `Set-Content`, …) naming a path outside the project root (`..`, `~`, an absolute path elsewhere) |
+| auto | runs without asking: `write_file`, `edit_file`, `multi_edit` and `move_file` inside the project root, and `run_command` / `run_background` unless the command is risky. Still asks: `delete_file`, `web_fetch`, every MCP tool not already answered [a]lways, and risky commands — `rm`, `rmdir`, `del`, `erase`, `rd`, `Remove-Item`, `sudo`, `chmod`, `chown`, `icacls`, `takeown`, `git push`, `git reset --hard`, `git clean`, `git checkout --`, `git restore`, `git branch -D`, `find -delete`, package installs and removals (`npm`/`pnpm`/`yarn`, `pip`, `uv`, `cargo install`/`add`/`remove`, `gem`, `go install`, `apt`, `brew`, `winget`, `choco`, `scoop`), a download in the same command as a shell (`curl … \| sh`, `irm … \| iex`), and a write (`>`, `cp`, `mv`, `tee`, `mkdir`, `sed`, `perl`, `curl`, `wget`, `tar`, `unzip`, `git clone`, `Copy-Item`, `Set-Content`, …) naming a path outside the project root (`..`, `~`, an absolute path elsewhere) |
 | devil | no prompts and no project-root guard, the same as `--yolo`; entering it warns in the transcript |
 
 The risky-command check matches words, not shell semantics, so it errs toward asking. In
@@ -563,7 +563,7 @@ the queue finish, refuses any question still open, and exits 0.
 | `set_thinking` | `level`? | sends `reasoning_effort: level` (e.g. `low`, `high`) from the next request; none clears it |
 | `set_plan` | `on` | plan mode on or off (writes and commands refused) |
 | `compact` | `instructions`? | compacts now, focused on the instructions; `compacted`: false when it all fits |
-| `get_state` | | `busy`, `session`, `thinking`, `plan`, `mode` (`manual`, `plan`, `auto` or `devil`), `context_limit`, `steers`, `follow_ups`, `asks` (open ask ids) |
+| `get_state` | | `busy`, `session`, `thinking`, `plan`, `context_limit`, `steers`, `follow_ups`, `asks` (open ask ids) |
 | `get_messages` | | `messages`: the active path in chat-completions form, as last saved |
 
 `new_session`, `resume_session`, `set_model`, `set_thinking` and `compact` need the agent

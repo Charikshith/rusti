@@ -216,13 +216,14 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let input_len = input.len();
     frame.extend(input);
 
+    let mode = crate::ai_core::mode();
     let footer = app::footer_right(
-        &app.footer, crate::ai_core::mode(), &app.session, &app.model, &app.branch,
+        &app.footer, mode, &app.session, &app.model, &app.branch,
         app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(), app.cache_pct,
     );
     let t = theme::current();
     // devil mode must be impossible to miss: its segment leads, in the warning colour
-    let footer = match truncate_str(&footer, w).strip_prefix("DEVIL") {
+    let footer = match truncate_str(&footer, w).strip_prefix("DEVIL").filter(|_| mode == crate::ai_core::Mode::Devil) {
         Some(rest) => format!("{}{BOLD}DEVIL{RESET}{}{rest}", t.warn, t.dim),
         None => truncate_str(&footer, w),
     };

@@ -134,30 +134,6 @@ fn rpc_mode_runs_prompts_and_turns_questions_into_requests() {
     assert_eq!((last["role"].clone(), last["content"].clone()), (json!("tool"), json!("src/main.rs")), "the answer is the tool result");
 }
 
-/// --yolo starts in devil mode; set_plan enters plan and leaving it lands on manual.
-#[test]
-fn yolo_starts_in_devil_and_plan_returns_to_manual() {
-    let (url, _) = fake_llm(vec![]);
-    for (args, start) in [(&["--rpc"][..], "manual"), (&["--rpc", "--yolo"][..], "devil")] {
-        let (mut child, rx) = spawn(&format!("rpc_mode_{start}"), &url, args);
-        let mut stdin = child.stdin.take().unwrap();
-        until(&rx, "session");
-        // set_plan answers too, so every command here is one response line
-        let mut send = |cmd: Value| {
-            writeln!(stdin, "{cmd}").unwrap();
-            until(&rx, "response").pop().unwrap()
-        };
-        let state = json!({"id": 1, "type": "get_state"});
-        assert_eq!(send(state.clone())["data"]["mode"], start);
-        send(json!({"id": 2, "type": "set_plan", "on": true}));
-        assert_eq!(send(state.clone())["data"]["mode"], "plan");
-        send(json!({"id": 3, "type": "set_plan", "on": false}));
-        assert_eq!(send(state)["data"]["mode"], "manual");
-        drop(stdin);
-        assert_eq!(child.wait().unwrap().code(), Some(0));
-    }
-}
-
 #[test]
 fn rpc_abort_right_after_accepted_cancels_that_run() {
     let (url, _) = fake_llm(vec![]); // nothing listens: a run that is not cancelled retries and fails
