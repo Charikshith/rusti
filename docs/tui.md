@@ -50,6 +50,25 @@ code in cyan, `-`/`*` bullets as bullet glyphs, and fenced blocks in their own c
 fence lines hidden. No parser crate: markers become style runs over the visible text, so
 wrapping still measures real columns. Fenced bodies are truncated rather than reflowed.
 
+## selecting and copying
+
+rusti captures the mouse so the wheel scrolls the transcript, which also takes the terminal's
+own click-and-drag selection. Selection is done in the app instead: drag over the transcript
+to highlight text (dragging to the top or bottom edge scrolls it), and on release it is copied
+as plain text, with wrapped rows joined back into their lines, and `copied N lines` shows on
+the status line. Double-click copies a word, triple-click a whole line; a plain click or any
+key clears the highlight.
+
+The copy goes two ways at once: OSC 52, which asks the terminal to set the clipboard (Windows
+Terminal, iTerm2, kitty and WezTerm honour it, over SSH too), and the platform's own tool:
+`clip.exe` on Windows, `pbcopy` on macOS, `wl-copy`, `xclip` or `xsel` on Linux. When none of
+those tools works the notice says so; the text then reached the clipboard only if the terminal
+honours OSC 52.
+
+To use the terminal's native selection instead (to copy the input line or the status line,
+say), hold Shift while dragging: Windows Terminal and most others pass Shift+drag through to
+their own selection even while an app captures the mouse.
+
 ## thinking
 
 The model's thinking is shown in italic grey. Ctrl+T hides it: each finished block becomes one

@@ -905,6 +905,45 @@ mod tests {
         assert!(app::filter_cmds(&cmds, "/zz").is_empty());
     }
 
+    /// Mouse selection: screen cell -> wrapped row, and rows -> the plain text
+    /// that lands on the clipboard.
+    #[test]
+    fn mouse_selection_copies_plain_text_and_rejoins_wrapped_rows() {
+        let mut st = render::RenderState::new();
+        assert_eq!(st.cell(0, 0, 0), None, "an empty transcript has no cells");
+        st.rows = vec![
+            (b'u', "1› hello there".into(), false),
+            (b'm', "  some \x1b[1mbold\x1b[0m prose that".into(), false),
+            (b'm', "  wraps onto a second row".into(), true),
+            (b'm', "  next line".into(), false),
+        ];
+        st.inner_w = 40;
+        // styles gone, the gutter dropped, the soft wrap rejoined with its space
+        assert_eq!(st.selected(((0, 0), (3, usize::MAX))),
+                   "1› hello there\nsome bold prose that wraps onto a second row\nnext line");
+        // mid-row ends, dragged backwards: the anchor after the head selects the same
+        assert_eq!(st.selected(((2, 6), (1, 7))), "bold prose that wraps");
+        // double-click a word; triple-click the whole line it wrapped into
+        assert_eq!(st.expand((1, 9), 2), ((1, 7), (1, 10)));
+        assert_eq!(st.selected(st.expand((2, 3), 3)), "some bold prose that wraps onto a second row");
+
+        // 4 rows, 2 on screen: following the bottom shows rows 2-3
+        st.view_h = 2;
+        assert_eq!(st.cell(5, 0, 0), Some((2, 5)));
+        assert_eq!(st.cell(5, 1, 0), Some((3, 5)));
+        // scrolled up 2, the same screen rows are rows 0-1
+        assert_eq!(st.cell(5, 0, 2), Some((0, 5)));
+        assert_eq!(st.selected((st.cell(0, 0, 2).unwrap(), st.cell(5, 1, 2).unwrap())), "1› hello there\nsome");
+        // dragged below the transcript: to the end of its last visible row
+        assert_eq!(st.cell(5, 7, 2), Some((1, usize::MAX)));
+        // short transcript resting on the input: the blank above is the first row's start
+        st.view_h = 10;
+        assert_eq!(st.cell(5, 2, 0), Some((0, 0)));
+        assert_eq!(st.cell(5, 7, 0), Some((1, 5)));
+
+        assert_eq!(app::osc52("hello"), "\x1b]52;c;aGVsbG8=\x07");
+    }
+
     #[test]
     fn transcript_sits_on_the_input_instead_of_floating_at_the_top() {
         // short transcript: the gap goes ABOVE it, so the first message is

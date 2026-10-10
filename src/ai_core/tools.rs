@@ -92,6 +92,43 @@ pub fn clipboard_image() -> Result<Vec<String>, String> {
     Err("no image on the clipboard".into())
 }
 
+/// Clipboard writers to try for an OS (`std::env::consts::OS`), in order. Each
+/// reads the text on stdin; the first that exits 0 wins.
+pub fn clip_cmds(os: &str) -> &'static [(&'static str, &'static [&'static str])] {
+    match os {
+        // in every Windows; copy_text hands it UTF-16LE, which it takes as-is
+        "windows" => &[("clip.exe", &[])],
+        "macos" => &[("pbcopy", &[])],
+        // Wayland first, then the two common X11 tools
+        _ => &[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"]), ("xsel", &["--clipboard", "--input"])],
+    }
+}
+
+/// Put text on the system clipboard with the platform's own tool, no crate.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let os = std::env::consts::OS;
+    // clip.exe reads stdin in the console code page unless it is UTF-16, so
+    // UTF-8 would turn every non-ASCII char into mojibake
+    let bytes: Vec<u8> = if os == "windows" {
+        text.replace('\n', "\r\n").encode_utf16().flat_map(u16::to_le_bytes).collect()
+    } else {
+        text.as_bytes().to_vec()
+    };
+    for (prog, args) in clip_cmds(os) {
+        // wl-copy and xclip stay behind to serve the selection: null pipes so
+        // they never hold ours open or print into the TUI
+        let Ok(mut child) = Command::new(prog).args(*args)
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else { continue };
+        let wrote = child.stdin.take().is_some_and(|mut i| i.write_all(&bytes).is_ok());
+        if child.wait().is_ok_and(|s| s.success()) && wrote {
+            return Ok(());
+        }
+    }
+    let names: Vec<&str> = clip_cmds(os).iter().map(|(p, _)| *p).collect();
+    Err(format!("no clipboard command worked: {}", names.join(", ")))
+}
+
 /// Images a vision model can be sent, by extension. Anything else is read as
 /// text and fails honestly on invalid UTF-8 rather than being mangled.
 pub fn image_mime(path: &str) -> Option<&'static str> {
@@ -1309,6 +1346,19 @@ mod tests {
         assert!(out.contains("  · -    5  five"), "edit 2 is on line 5: {out}");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "one\nTWO\nthree\nfour\nFIVE\n");
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// The writer list per OS; nothing is run, CI has no clipboard.
+    #[test]
+    fn clip_cmds_pick_the_platform_tool() {
+        let progs = |os| clip_cmds(os).iter().map(|(p, _)| *p).collect::<Vec<_>>();
+        assert_eq!(progs("windows"), ["clip.exe"]);
+        assert_eq!(progs("macos"), ["pbcopy"]);
+        assert_eq!(progs("linux"), ["wl-copy", "xclip", "xsel"]);
+        assert_eq!(progs("freebsd"), progs("linux"), "other unixes try the same tools");
+        // xclip's default is the PRIMARY selection, which Ctrl+V does not paste
+        assert_eq!(clip_cmds("linux")[1].1, ["-selection", "clipboard"]);
+        assert_eq!(clip_cmds("linux")[2].1, ["--clipboard", "--input"]);
     }
 
     /// RFC 4648 test vectors. The padding arm is the part that is easy to get

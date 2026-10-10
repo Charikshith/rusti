@@ -5,6 +5,7 @@
 // Keyboard: Esc interrupts, Ctrl+C clears (twice quits), Ctrl+D quits when the
 // input is empty, Ctrl+O/Ctrl+T show or hide tool output/thinking, Enter submits, arrows edit input, Up/Down recall history,
 // PageUp/PageDown scroll transcript, @ opens a file picker, Tab completes a path.
+// Left-drag over the transcript selects and copies (double-click a word, triple a line).
 // Slash: /use /model /new /resume /rename /tree /reload /quit, plus prompt
 // templates, /skill:name and /server:prompt (see commands()).
 
@@ -440,6 +441,13 @@ pub struct App {
     pub tab: Option<(String, usize, Vec<Item>)>,
     /// The / menu's commands, re-read from disk each time a lone "/" opens it.
     pub cmds: Vec<Cmd>,
+    /// Mouse selection over the transcript as (anchor, head), each a
+    /// (wrapped row, column); copied on release, cleared by a click or a key.
+    pub sel: Option<((usize, usize), (usize, usize))>,
+    /// The last left-press (when, column, row, clicks in a row), to count a
+    /// double or triple click, and whether the button has dragged since.
+    pub click: Option<(std::time::Instant, u16, u16, u8)>,
+    pub dragged: bool,
 }
 
 /// Prefix on a transcript row that is present but not drawn until Ctrl+O.
@@ -451,6 +459,8 @@ pub const HIDDEN: &str = "\u{1}";
 const ARM_WINDOW: Duration = Duration::from_secs(2);
 /// How long a transient confirmation stays on the status line.
 const NOTICE_TTL: Duration = Duration::from_secs(3);
+/// How close two presses must be to count as a double (or triple) click.
+const MULTI_CLICK: Duration = Duration::from_millis(400);
 
 impl App {
     pub fn new(model: String, session: String, lines: Vec<String>, history: Vec<String>, msg_num: usize,
@@ -470,6 +480,7 @@ impl App {
             pick: None, expand: false, hide_thinking: false, follow: Default::default(),
             menu: Vec::new(), menu_key: Default::default(), files: None, index: None, tab: None,
             cmds: builtins(),
+            sel: None, click: None, dragged: false,
         }
     }
     /// True while a second Ctrl+C would exit.
@@ -618,6 +629,33 @@ pub fn stats_row(tok: u64, ctx: u64, cached: Option<u64>, est: bool, gen_ms: u12
         human_dur(wall_s), kilo(ctx)))
 }
 
+/// Put the selection on the clipboard and say so on the status line.
+fn copy_sel(app: &mut App, state: &RenderState) {
+    let Some(sel) = app.sel else { return };
+    let text = state.selected(sel);
+    if text.trim().is_empty() {
+        app.sel = None;
+        return;
+    }
+    // OSC 52 asks the terminal itself (works over SSH); the local tool is the
+    // fallback for a terminal that ignores it. Neither can see the other fail.
+    let _ = io::Write::write_all(&mut io::stdout(), osc52(&text).as_bytes());
+    let _ = io::Write::flush(&mut io::stdout());
+    let n = text.lines().count();
+    let s = if n == 1 { "" } else { "s" };
+    let msg = match ai_core::tools::copy_text(&text) {
+        Ok(()) => format!("copied {n} line{s}"),
+        Err(e) => format!("copied {n} line{s} via the terminal only; {e}"),
+    };
+    app.notice = Some((msg, std::time::Instant::now()));
+}
+
+/// OSC 52: set the clipboard through the terminal (Windows Terminal, iTerm2,
+/// kitty, WezTerm, and over SSH); a terminal without it ignores the sequence.
+pub fn osc52(text: &str) -> String {
+    format!("\x1b]52;c;{}\x07", ai_core::tools::b64(text.as_bytes()))
+}
+
 /// 1234 -> "1.2k", 950 -> "950".
 pub fn kilo(n: u64) -> String {
     if n < 1000 { n.to_string() } else { format!("{:.1}k", n as f64 / 1000.0) }
@@ -673,20 +711,64 @@ pub fn ui_loop(
             // the mouse. Without capture the terminal turns it into Up/Down key
             // presses in the alternate screen, which this app reads as input
             // history — that is the "scrolling jumps to an old message" bug.
+            // Capture also takes the terminal's own click-and-drag selection, so
+            // selecting is done here; Shift+drag still reaches the terminal's.
             if let CEvent::Mouse(m) = ev {
+                use event::{MouseButton::Left, MouseEventKind as M};
                 match m.kind {
-                    event::MouseEventKind::ScrollUp => {
+                    M::ScrollUp => {
                         app.scroll_up = (app.scroll_up + 3).min(state.max_scroll);
                     }
-                    event::MouseEventKind::ScrollDown => {
+                    M::ScrollDown => {
                         app.scroll_up = app.scroll_up.saturating_sub(3);
+                    }
+                    M::Down(Left) => {
+                        let now = std::time::Instant::now();
+                        let n = match app.click {
+                            Some((t, x, y, n)) if now - t < MULTI_CLICK && (x, y) == (m.column, m.row) => n % 3 + 1,
+                            _ => 1,
+                        };
+                        app.click = Some((now, m.column, m.row, n));
+                        app.dragged = false;
+                        // a press below the transcript (input, status) just clears
+                        app.sel = state.cell(m.column, m.row, app.scroll_up)
+                            .filter(|_| (m.row as usize) < state.view_h)
+                            .map(|c| if n > 1 { state.expand(c, n) } else { (c, c) });
+                        if n > 1 {
+                            copy_sel(&mut app, &state);
+                        }
+                    }
+                    M::Drag(Left) => {
+                        if let Some((a, _)) = app.sel {
+                            // past the top or bottom edge: scroll a row and keep selecting
+                            if m.row == 0 {
+                                app.scroll_up = (app.scroll_up + 1).min(state.max_scroll);
+                            } else if m.row as usize >= state.view_h {
+                                app.scroll_up = app.scroll_up.saturating_sub(1);
+                            }
+                            app.sel = state.cell(m.column, m.row, app.scroll_up).map(|h| (a, h));
+                            app.dragged = true;
+                        }
+                    }
+                    M::Up(Left) => {
+                        if app.dragged {
+                            copy_sel(&mut app, &state);
+                        } else if app.click.is_some_and(|c| c.3 == 1) {
+                            app.sel = None; // a plain click
+                        }
+                        app.dragged = false;
                     }
                     _ => {}
                 }
                 continue;
             }
+            // rows rewrap to the new width, so the selection no longer points at its text
+            if let CEvent::Resize(..) = ev {
+                app.sel = None;
+            }
             if let CEvent::Key(k) = ev {
                 if k.kind == KeyEventKind::Press {
+                    app.sel = None;
                     // any key other than a second ctrl+c disarms the exit prompt
                     if !matches!((k.code, k.modifiers), (KeyCode::Char('c'), KeyModifiers::CONTROL)) {
                         app.exit_armed = None;

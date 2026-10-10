@@ -96,6 +96,8 @@ slash commands (--tui)
   @PATH           pick a project file to name in the message (the model reads it)
   tab             complete the path before the cursor
   shift+tab       permission mode: manual → plan → auto → devil (docs/safety.md)
+  drag            select transcript text, copied on release (double-click a word,
+                  triple-click a line); shift+drag is the terminal's own selection
 ";
 
 fn main() {
