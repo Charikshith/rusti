@@ -45,8 +45,9 @@ coloured edge: green when done, the spinner colour while running. A run of file 
 into one row, the model's narration between tools is dimmed under a rail, and a tool's time
 leaves out the time you spent answering its permission prompt. `"light": true` in
 `~/.rusti/config.json` is only for a terminal with a light background: it swaps those fills
-for pale ones with dark text. rusti cannot see your terminal's background, so turn it off
-again if you go back to a dark one.
+for pale ones with dark text. A project's `./model.json` can set `"light"` too, since its
+top-level keys override the global config. rusti cannot see your terminal's background, so turn
+it off again if you go back to a dark one.
 
 Model prose is rendered, not printed raw: ATX headings and `**bold**` come out bold, inline
 code in cyan, `-`/`*` bullets as bullet glyphs, and fenced blocks in their own colour with the

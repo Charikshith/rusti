@@ -206,9 +206,33 @@ fn tints_for(t: &Theme, light: bool) -> Tints {
     Tints {
         fail: t.tint_fail.unwrap_or(base.fail),
         ask: t.tint_ask.unwrap_or(base.ask),
-        fail_text: t.tint_fail_text.unwrap_or(base.fail_text),
-        ask_text: t.tint_ask_text.unwrap_or(base.ask_text),
+        fail_text: t.tint_fail_text.unwrap_or(t.tint_fail.map_or(base.fail_text, text_on)),
+        ask_text: t.tint_ask_text.unwrap_or(t.tint_ask.map_or(base.ask_text, text_on)),
     }
+}
+
+/// Text for a theme file's fill that names no text: whichever of the two
+/// defaults reads better on it, or the terminal's own when the fill is not a
+/// 24-bit colour rusti can measure.
+fn text_on(fill: &str) -> &'static str {
+    let Some(bg) = rgb(fill).map(lum) else { return "" };
+    let ratio = |c: [f64; 3]| { let (a, b) = (lum(c), bg); (a.max(b) + 0.05) / (a.min(b) + 0.05) };
+    if ratio([28.0; 3]) >= ratio([228.0; 3]) { LIGHT.fail_text } else { DARK.fail_text }
+}
+
+/// The colour in a 24-bit SGR ("[48;2;r;g;bm"), if it is one.
+fn rgb(sgr: &str) -> Option<[f64; 3]> {
+    let p: Vec<u8> = sgr.strip_prefix("[")?.strip_suffix('m')?.split(';').map(|v| v.parse().ok()).collect::<Option<_>>()?;
+    match p[..] {
+        [38 | 48, 2, r, g, b] => Some([r, g, b].map(f64::from)),
+        _ => None,
+    }
+}
+
+/// WCAG 2 relative luminance.
+fn lum(c: [f64; 3]) -> f64 {
+    let l = c.map(|v| { let v = v / 255.0; if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) } });
+    0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
 }
 
 pub fn current() -> &'static Theme {
@@ -312,7 +336,10 @@ fn parse(text: &str, stem: &str, known: &dyn Fn(&str) -> Option<&'static Theme>)
             r => return Err(format!("no colour role called {r} (roles: {ROLES})")),
         }
     }
-    for (row, val) in section("tints") {
+    let tints = section("tints");
+    if tints.contains_key("fail") { t.tint_fail_text = None }
+    if tints.contains_key("ask") { t.tint_ask_text = None }
+    for (row, val) in tints {
         let layer = if row.ends_with("_text") { 38 } else { 48 };
         let c = sgr(val, layer).map_err(|e| format!("tints.{row}: {e}"))?;
         match row.as_str() {
@@ -469,6 +496,18 @@ mod tests {
                 }
             }
         }
+        // a theme file's fill with no text of its own still reads, in either
+        // mode, even over a base file that pinned text for its own fill
+        let none = |_: &str| None;
+        let base: &'static Theme = Box::leak(Box::new(parse(r##"{"tints":{"fail":"#2a1618","fail_text":"#e4e4e4"}}"##, "b", &none).unwrap()));
+        let pale = parse(r##"{"base":"b","tints":{"fail":"#f9e6e6","ask":"#3a2a10"}}"##, "p", &|_| Some(base)).unwrap();
+        for light in [false, true] {
+            let k = tints_for(&pale, light);
+            assert_eq!((k.fail_text, k.ask_text), (LIGHT.fail_text, DARK.fail_text), "light={light}");
+            assert!(ratio(k.fail_text, k.fail) >= 4.5 && ratio(k.ask_text, k.ask) >= 4.5, "light={light}");
+        }
+        let sgr = parse(r#"{"tints":{"fail":"48;5;224"}}"#, "s", &none).unwrap();
+        assert_eq!(tints_for(&sgr, false).fail_text, "", "a fill rusti cannot measure leaves the text to the terminal");
         assert_eq!((DARK.fail, DARK.fail_text), ("\x1b[48;2;42;22;24m", "\x1b[38;2;228;228;228m"), "the captain's pick: #2A1618 under #E4E4E4");
         assert_eq!((DARK.ask, DARK.ask_text), ("\x1b[48;2;42;36;20m", "\x1b[38;2;228;228;228m"));
     }
