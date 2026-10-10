@@ -384,9 +384,7 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
                 out.send(line); // a new, resumed or re-modelled session announces itself
             }
         }
-        if let Some(r) = r {
-            out.send(response(job.id, &job.command, r));
-        }
+        let mut reply = r.map(|r| response(job.id, &job.command, r));
         loop {
             let next = {
                 let mut q = queue.lock().unwrap();
@@ -398,6 +396,9 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
                 }
                 next
             };
+            if let Some(v) = reply.take() {
+                out.send(v);
+            }
             if let Some(ev) = end.take() {
                 ai_core::emit(ev);
             }
@@ -596,6 +597,36 @@ mod tests {
         let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         assert_eq!(lines.len(), 2);
         assert!(lines.iter().all(|l| l["type"] == "ask" && l["v"] == 1));
+    }
+
+    /// A command's response is its end signal: by the time a client reads
+    /// it, the agent is idle and a plain prompt is accepted.
+    #[test]
+    fn agent_is_idle_before_a_command_response_goes_out() {
+        let _q = ai_core::STEER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        ai_core::take_steers();
+        struct W(Vec<u8>, Arc<Mutex<Queue>>, Arc<Mutex<Vec<bool>>>);
+        impl Write for W {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.write(b)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                let line = String::from_utf8_lossy(&self.0).lines().last().unwrap_or("").to_string();
+                if line.contains("\"type\":\"response\"") {
+                    self.2.lock().unwrap().push(self.1.lock().unwrap().busy);
+                }
+                Ok(())
+            }
+        }
+        let (mut r, jobs) = rpc();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        r.out = Out(Arc::new(Mutex::new(Box::new(W(Vec::new(), r.queue.clone(), seen.clone())))));
+        assert!(r.command(r#"{"id":1,"type":"set_thinking","level":"high"}"#).is_none());
+        let (out, cancel, queue, info) = (r.out.clone(), r.asks.cancel.clone(), r.queue.clone(), r.info.clone());
+        drop(r);
+        let client = llm::Client::new("http://127.0.0.1:9".into(), String::new(), "m".into());
+        agent(jobs, client, Session::new("m".into()), out, cancel, queue, info);
+        assert_eq!(*seen.lock().unwrap(), vec![false]);
     }
 
     /// A question the aborted run asked before the pump saw it, after the
