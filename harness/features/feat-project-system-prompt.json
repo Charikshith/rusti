@@ -1,0 +1,13 @@
+{
+  "id": "feat-project-system-prompt",
+  "name": "Project .rusti/SYSTEM.md and .rusti/APPEND_SYSTEM.md behind project trust (F11 project half)",
+  "description": "prompt_base now reads SYSTEM.md and APPEND_SYSTEM.md from a list of folders: ~/.rusti, then ./.rusti only when config::trusted(). The last non-empty SYSTEM.md wins (project over global), every APPEND_SYSTEM.md applies in order (global, then project), and --system-prompt / --append-system-prompt still win over the files. Only the base text is replaced; shell line, docs pointer, skills, project instructions, git context and plan mode stay. Re-read every turn; the startup note names the source as .rusti/SYSTEM.md. APPEND_SYSTEM.md joins GATED_RESOURCES so it triggers the trust prompt.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: ai_core::tests::system_prompt_override_replaces_base_and_appends_in_order extended (project SYSTEM.md wins, appends global then project with labels, flags win over both, empty project file falls through, untrusted prompt_dirs() is ~/.rusti only; plan mode still rides on the turn). ./init.sh passed.",
+  "decisions": [
+    "One folder list instead of a second code path: the global loader just iterates, so precedence is list order.",
+    "Project folder passed as the relative .rusti so the startup line reads 'system prompt: .rusti/SYSTEM.md'.",
+    "An empty or unreadable project SYSTEM.md falls through to the global one, matching how an empty global file falls through to the built-in prompt."
+  ]
+}

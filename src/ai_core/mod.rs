@@ -480,7 +480,7 @@ fn flag_text(v: &str, flag: &str) -> (Option<String>, String) {
     }
 }
 
-/// A non-empty ~/.rusti file's text and its label; a missing or empty file is neither.
+/// A non-empty prompt file's text and its label; a missing or empty file is neither.
 fn home_file(p: &std::path::Path) -> (Option<String>, Option<String>) {
     if !p.is_file() {
         return (None, None);
@@ -494,12 +494,10 @@ fn home_file(p: &std::path::Path) -> (Option<String>, Option<String>) {
 
 /// SYSTEM_PROMPT, or what replaces it, plus each addendum, and the names of
 /// whatever overrode the default (empty when nothing did). Flags win over the
-/// files in `dir` (~/.rusti); an unreadable source is skipped and named.
-/// Read every turn, so edits to the files are live.
-/// ponytail: the project's .rusti/SYSTEM.md (wins) and .rusti/APPEND_SYSTEM.md
-/// (after the global one) join here once the Phase 0 trust gate lands; until
-/// then an untrusted repo cannot rewrite the prompt.
-fn prompt_base(dir: &std::path::Path, system: Option<&str>, append: &[String]) -> (String, Vec<String>) {
+/// files in `dirs` (~/.rusti, then ./.rusti once trusted): the last SYSTEM.md
+/// wins, every APPEND_SYSTEM.md applies in order. An unreadable source is
+/// skipped and named. Read every turn, so edits to the files are live.
+fn prompt_base(dirs: &[std::path::PathBuf], system: Option<&str>, append: &[String]) -> (String, Vec<String>) {
     let mut src = Vec::new();
     let mut base = None;
     if let Some(v) = system {
@@ -508,13 +506,18 @@ fn prompt_base(dir: &std::path::Path, system: Option<&str>, append: &[String]) -
         base = t;
     }
     let mut p = base.unwrap_or_else(|| {
-        let (t, label) = home_file(&dir.join("SYSTEM.md"));
-        src.extend(label);
-        t.unwrap_or_else(|| SYSTEM_PROMPT.to_string())
+        for d in dirs.iter().rev() {
+            let (t, label) = home_file(&d.join("SYSTEM.md"));
+            src.extend(label);
+            if let Some(t) = t {
+                return t;
+            }
+        }
+        SYSTEM_PROMPT.to_string()
     });
     let mut adds = Vec::new();
-    if append.is_empty() {
-        let (t, label) = home_file(&dir.join("APPEND_SYSTEM.md"));
+    for d in dirs.iter().filter(|_| append.is_empty()) {
+        let (t, label) = home_file(&d.join("APPEND_SYSTEM.md"));
         src.extend(label.map(|l| format!("+ {l}")));
         adds.extend(t);
     }
@@ -530,6 +533,21 @@ fn prompt_base(dir: &std::path::Path, system: Option<&str>, append: &[String]) -
     (p, src)
 }
 
+/// Where SYSTEM.md and APPEND_SYSTEM.md are looked for: ~/.rusti, then the
+/// project's .rusti only once the folder is trusted, so a cloned repo cannot
+/// rewrite the prompt. Relative, so the startup note says `.rusti/SYSTEM.md`.
+/// Run from the home folder, the two are one folder and it is read once.
+fn prompt_dirs() -> Vec<std::path::PathBuf> {
+    let home = crate::config::home_dir();
+    let proj = std::path::PathBuf::from(".rusti");
+    let same = std::fs::canonicalize(&proj).ok() == std::fs::canonicalize(&home).ok();
+    let mut d = vec![home];
+    if crate::config::trusted() && !same {
+        d.push(proj);
+    }
+    d
+}
+
 fn prompt_flags() -> (Option<&'static str>, &'static [String]) {
     PROMPT_FLAGS.get().map_or((None, &[]), |(s, a)| (s.as_deref(), a.as_slice()))
 }
@@ -537,7 +555,7 @@ fn prompt_flags() -> (Option<&'static str>, &'static [String]) {
 /// One startup line naming what changed the system prompt, so it is never invisible.
 pub fn prompt_note() -> Option<String> {
     let (sys, app) = prompt_flags();
-    let src = prompt_base(&crate::config::home_dir(), sys, app).1;
+    let src = prompt_base(&prompt_dirs(), sys, app).1;
     (!src.is_empty()).then(|| format!("  ℹ system prompt: {}", src.join(" ")))
 }
 
@@ -549,7 +567,7 @@ fn system_prompt() -> String {
 fn build_system_prompt(sys: Option<&str>, app: &[String]) -> String {
     // only the base text is replaceable: the shell line, docs pointer and project
     // instructions below always stay, and git context and plan mode ride on the turn
-    let mut p = prompt_base(&crate::config::home_dir(), sys, app).0;
+    let mut p = prompt_base(&prompt_dirs(), sys, app).0;
     let sh = tools::current_shell();
     p.push_str(&format!(
         "\n\n# Shell\nrun_command and run_background run `{} {} <command>` on {}; write commands in that shell's syntax.",
@@ -714,13 +732,27 @@ fn words(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// A path word that resolves outside the project root (~ always does).
+/// A path word that resolves outside the project root (~, env-var paths and remote targets always do).
 fn outside_root(w: &str) -> bool {
-    let pathy = w.starts_with('~') || w == ".." || w.contains('/') || w.contains('\\');
-    pathy
-        && !w.contains("://")
-        && !["/dev/null", "nul", "$null"].contains(&w)
-        && (w.starts_with('~') || tools::guard(w).is_err())
+    // the value of `of=x` / `--output=x`, and of a joined short flag (`-o../x`, `-C/etc`)
+    let tail = w.rsplit('=').next().unwrap_or(w);
+    let tail = match tail.strip_prefix('-') {
+        Some(f) if !f.starts_with('-') => f.get(1..).unwrap_or(""),
+        _ => tail,
+    };
+    [w, tail].into_iter().any(|v| {
+        if v.contains("://") || ["/dev/null", "nul", "$null"].contains(&v) {
+            return false;
+        }
+        // scp / rsync targets: `user@host:x`, `host:/x` (not a `c:` drive)
+        let remote = v.find(':').is_some_and(|i| {
+            i > 1 && !v[..i].contains('/') && (v[..i].contains('@') || v[i + 1..].starts_with(['/', '~']))
+        });
+        // ~, $HOME, ${HOME}, $env:USERPROFILE and %USERPROFILE% name places the guard cannot resolve
+        v.starts_with(['~', '$', '%'])
+            || remote
+            || ((v == ".." || v.contains('/') || v.contains('\\')) && tools::guard(v).is_err())
+    })
 }
 
 /// A command word by its program name: `/bin/rm` and `\rm` are `rm`.
@@ -1589,7 +1621,7 @@ pub fn self_test() {
     assert_eq!(instructions_from(d).unwrap(), ("AGENTS.md".to_string(), "run cargo test".to_string()));
     std::fs::remove_dir_all(d).unwrap();
     let (sys, app) = prompt_flags();
-    assert!(system_prompt().starts_with(&prompt_base(&crate::config::home_dir(), sys, app).0));
+    assert!(system_prompt().starts_with(&prompt_base(&prompt_dirs(), sys, app).0));
     // git context rides on the turn, not the prompt, and only inside a work tree
     assert_eq!(git_context().is_some(), git_branch().is_some());
     if git_branch().is_some() {
@@ -1802,16 +1834,18 @@ pub fn self_test() {
 
     /// SYSTEM.md / --system-prompt replace only the base text: appends follow it
     /// in order, and the shell, git and plan-mode blocks still ride along.
+    /// Precedence: flag > project .rusti (trusted only) > ~/.rusti.
     #[test]
     fn system_prompt_override_replaces_base_and_appends_in_order() {
         let dir = std::env::temp_dir().join(format!("rusti_sysprompt_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let none: &[String] = &[];
-        assert_eq!(prompt_base(&dir, None, none), (SYSTEM_PROMPT.to_string(), vec![]), "no files, no flags: the default");
+        let dirs = vec![dir.clone()];
+        assert_eq!(prompt_base(&dirs, None, none), (SYSTEM_PROMPT.to_string(), vec![]), "no files, no flags: the default");
 
         std::fs::write(dir.join("SYSTEM.md"), "  file base \n").unwrap();
         std::fs::write(dir.join("APPEND_SYSTEM.md"), "file add").unwrap();
-        let (p, src) = prompt_base(&dir, None, none);
+        let (p, src) = prompt_base(&dirs, None, none);
         assert_eq!(p, "file base\n\nfile add");
         assert!(src[0].ends_with("/SYSTEM.md") && src[1].ends_with("/APPEND_SYSTEM.md"), "{src:?}");
 
@@ -1819,7 +1853,7 @@ pub fn self_test() {
         let f = dir.join("extra.md");
         std::fs::write(&f, "from file").unwrap();
         let adds = vec!["one".to_string(), f.to_string_lossy().into_owned()];
-        let (p, src) = prompt_base(&dir, Some("flag base"), &adds);
+        let (p, src) = prompt_base(&dirs, Some("flag base"), &adds);
         assert_eq!(p, "flag base\n\none\n\nfrom file");
         assert_eq!(src, vec!["--system-prompt".to_string(), "+ --append-system-prompt".to_string(), format!("+ {}", slash(&f))]);
 
@@ -1827,12 +1861,30 @@ pub fn self_test() {
         let bad = dir.join("utf16.md");
         std::fs::write(&bad, [0xFF, 0xFE, b'h', 0, b'i', 0]).unwrap();
         let bad_s = bad.to_string_lossy().into_owned();
-        let (p, src) = prompt_base(&dir, Some(&bad_s), std::slice::from_ref(&bad_s));
+        let (p, src) = prompt_base(&dirs, Some(&bad_s), std::slice::from_ref(&bad_s));
         assert_eq!(p, "file base", "falls back to the next prompt source, with no empty addendum");
         assert!(src[0].starts_with(&format!("{} unreadable", slash(&bad))) && src[1].ends_with("/SYSTEM.md"), "{src:?}");
         assert!(src[2].starts_with(&format!("+ {} unreadable", slash(&bad))), "{src:?}");
         std::fs::remove_file(dir.join("SYSTEM.md")).unwrap();
-        assert_eq!(prompt_base(&dir, Some(&bad_s), none).0, format!("{SYSTEM_PROMPT}\n\nfile add"));
+        assert_eq!(prompt_base(&dirs, Some(&bad_s), none).0, format!("{SYSTEM_PROMPT}\n\nfile add"));
+
+        // a trusted project's .rusti: its SYSTEM.md wins over the global one,
+        // both APPEND_SYSTEM.md files apply (global first), and flags still win
+        std::fs::write(dir.join("SYSTEM.md"), "global base").unwrap();
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("SYSTEM.md"), "project base").unwrap();
+        std::fs::write(proj.join("APPEND_SYSTEM.md"), "project add").unwrap();
+        let both = vec![dir.clone(), proj.clone()];
+        let (p, src) = prompt_base(&both, None, none);
+        assert_eq!(p, "project base\n\nfile add\n\nproject add");
+        assert_eq!(src, vec![slash(&proj.join("SYSTEM.md")), format!("+ {}", slash(&dir.join("APPEND_SYSTEM.md"))), format!("+ {}", slash(&proj.join("APPEND_SYSTEM.md")))]);
+        assert_eq!(prompt_base(&both, Some("flag base"), &["flag add".to_string()]).0, "flag base\n\nflag add");
+        std::fs::write(proj.join("SYSTEM.md"), " \n").unwrap(); // an empty project file falls through
+        assert!(prompt_base(&both, None, none).0.starts_with("global base\n\n"));
+        // untrusted (the test default), the project folder is not even looked at
+        assert!(!crate::config::trusted());
+        assert_eq!(prompt_dirs(), vec![crate::config::home_dir()]);
         let _ = std::fs::remove_dir_all(&dir);
 
         // explicit flags, not set_prompt_flags: the global would leak into the
@@ -2162,11 +2214,17 @@ branch: "), "{c2}");
             "cp a.txt ~/a.txt", "echo x >> /etc/hosts", "/bin/rm -rf x", "\\rm -rf x", "find . -delete",
             "git restore .", "sed -i 's/a/b/' ~/.bashrc", "perl -i -pe s/a/b/ ../x", "curl -o ../x.sh https://x",
             "wget -O ~/x https://x", "tar -xf a.tar -C /etc", "unzip a.zip -d ..", "git clone https://x ../dest",
+            "echo x >> $HOME/.bashrc", "cp a.txt ${HOME}/x", "Set-Content $env:USERPROFILE\\x 1",
+            "copy a %USERPROFILE%\\x", "cp a.txt $HOME", "dd if=a of=/etc/x", "curl --output=../x.sh https://x",
+            "curl -o../x https://x", "wget -O/tmp/x https://x", "tar -xf a.tar -C/etc", "tar -xf a.tar --directory=/etc",
+            "scp f user@host:/tmp/x", "rsync -a . host:/x", "scp f me@host:x",
+            "cp secret.txt /tmp/a=b", "mv out.csv /data/year=2024/",
         ] {
             assert!(risky(c) && !runs_unasked(Auto, "run_command", &cmd(c)), "auto must ask for {c}");
         }
         for c in ["cargo build", "git status", "git diff HEAD~1", "ls ../", "cat ~/.gitconfig", "cargo test 2>/dev/null", "git log --oneline -5",
-            "sed -i s/a/b/ src/main.rs", "curl -o out.html https://x/y", "git clone https://x/y vendor/y"] {
+            "sed -i s/a/b/ src/main.rs", "curl -o out.html https://x/y", "git clone https://x/y vendor/y",
+            "cargo test ai_core::tests 2>/dev/null", "dd if=a of=b", "tar -xf a.tar -C vendor", "echo x > $null"] {
             assert!(!risky(c), "auto runs {c} unasked");
         }
     }

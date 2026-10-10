@@ -158,7 +158,7 @@ Shift+Tab in the TUI cycles four permission modes; the status line names every o
 |---|---|
 | manual | the default: every tool above asks |
 | plan | reads and searches only; every tool above is refused (same as `/plan`) |
-| auto | runs without asking: `write_file`, `edit_file`, `multi_edit` and `move_file` inside the project root, and `run_command` / `run_background` unless the command is risky. Still asks: `delete_file`, `web_fetch`, every MCP tool not already answered [a]lways, and risky commands — `rm`, `rmdir`, `del`, `erase`, `rd`, `Remove-Item`, `sudo`, `chmod`, `chown`, `icacls`, `takeown`, `git push`, `git reset --hard`, `git clean`, `git checkout --`, `git restore`, `git branch -D`, `find -delete`, package installs and removals (`npm`/`pnpm`/`yarn`, `pip`, `uv`, `cargo install`/`add`/`remove`, `gem`, `go install`, `apt`, `brew`, `winget`, `choco`, `scoop`), a download in the same command as a shell (`curl … \| sh`, `irm … \| iex`), and a write (`>`, `cp`, `mv`, `tee`, `mkdir`, `sed`, `perl`, `curl`, `wget`, `tar`, `unzip`, `git clone`, `Copy-Item`, `Set-Content`, …) naming a path outside the project root (`..`, `~`, an absolute path elsewhere) |
+| auto | runs without asking: `write_file`, `edit_file`, `multi_edit` and `move_file` inside the project root, and `run_command` / `run_background` unless the command is risky. Still asks: `delete_file`, `web_fetch`, every MCP tool not already answered [a]lways, and risky commands — `rm`, `rmdir`, `del`, `erase`, `rd`, `Remove-Item`, `sudo`, `chmod`, `chown`, `icacls`, `takeown`, `git push`, `git reset --hard`, `git clean`, `git checkout --`, `git restore`, `git branch -D`, `find -delete`, package installs and removals (`npm`/`pnpm`/`yarn`, `pip`, `uv`, `cargo install`/`add`/`remove`, `gem`, `go install`, `apt`, `brew`, `winget`, `choco`, `scoop`), a download in the same command as a shell (`curl … \| sh`, `irm … \| iex`), and a write (`>`, `cp`, `mv`, `tee`, `mkdir`, `sed`, `perl`, `curl`, `wget`, `tar`, `unzip`, `git clone`, `Copy-Item`, `Set-Content`, …) naming a path outside the project root (`..`, `~`, `$HOME`, `%USERPROFILE%`, an absolute path elsewhere, also as `of=/x`, `--output=../x` or `-C/x`, or a remote `host:/x` target) |
 | devil | no prompts and no project-root guard, the same as `--yolo`; entering it warns in the transcript |
 
 The risky-command check matches words, not shell semantics, so it errs toward asking. In
@@ -175,7 +175,8 @@ model can inspect dependency sources. `--yolo` (devil mode) lifts both the promp
 A cloned repo's `model.json` could otherwise start its own MCP servers, swap the shell
 or pre-approve `run_command` before you type anything. So when `./model.json` sets `mcp`,
 `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow` (or `./.rusti/` has
-`prompts`, `skills`, `themes` or `SYSTEM.md`, or there is a `./.agents/skills`), the TUI asks
+`prompts`, `skills`, `themes`, `SYSTEM.md` or `APPEND_SYSTEM.md`, or there is a
+`./.agents/skills`), the TUI asks
 once at launch:
 
 ```
@@ -222,14 +223,16 @@ If the working directory has an `AGENTS.md` (fallback `RUSTI.md`, then `CLAUDE.m
 its contents are appended to the system prompt. The file is re-read every turn, so
 edits take effect on the next message without a restart.
 
-`~/.rusti/SYSTEM.md` replaces rusti's built-in base prompt, and `~/.rusti/APPEND_SYSTEM.md`
-is added after it. `--system-prompt X` and `--append-system-prompt X` (repeatable) win over
-those files; X is read as a file when one exists at that path, else used as the text itself.
-Only the base text is replaced: the shell line, the docs pointer, the project instructions
-above, git context and the plan-mode block always stay. Both files are re-read every turn,
-and startup prints `ℹ system prompt: …` naming whatever changed it (an unreadable file is
-skipped and named there too). `/reload` keeps the
-flags. A project-level `.rusti/SYSTEM.md` is not read yet: it waits for project trust.
+`SYSTEM.md` replaces rusti's built-in base prompt, and `APPEND_SYSTEM.md` is added after it.
+Both are looked for in `~/.rusti/` and, once the folder is trusted (§ project trust), in
+`./.rusti/`: the project's `SYSTEM.md` wins over the global one, and both `APPEND_SYSTEM.md`
+files apply, global first, then project. `--system-prompt X` and `--append-system-prompt X`
+(repeatable) win over those files; X is read as a file when one exists at that path, else used
+as the text itself. Only the base text is replaced: the shell line, the docs pointer, the
+project instructions above, git context and the plan-mode block always stay. The files are
+re-read every turn, and startup prints `ℹ system prompt: …` naming whatever changed it (for
+example `ℹ system prompt: .rusti/SYSTEM.md`; an unreadable file is skipped and named there
+too). `/reload` keeps the flags.
 
 ## markdown
 

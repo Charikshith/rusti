@@ -1466,9 +1466,6 @@ fn drop_mcp_ok(app: &mut App) {
     shift_rows(app, 0, -((before - app.lines.len()) as isize));
 }
 
-/// The status line: what this session is, and how full it is. Every segment
-/// except `plan` is toggleable via /settings — plan is a mode you are IN, not
-/// decoration, so hiding it would hide the reason writes are being refused.
 /// Shift+Tab: the next permission mode, announced in the transcript.
 fn cycle_mode(app: &mut App) {
     let m = ai_core::mode().next();
@@ -1488,6 +1485,10 @@ pub fn mode_notice(m: ai_core::Mode) -> &'static str {
     }
 }
 
+/// The status line: what this session is, and how full it is. Every segment
+/// except the permission mode is toggleable via /settings — plan, auto and DEVIL
+/// are modes you are IN, not decoration, so hiding one would hide why a write is
+/// refused, or why it ran unasked.
 pub fn footer_right(
     f: &crate::config::Footer, mode: ai_core::Mode, session: &str, model: &str, branch: &str,
     sess_tok: u64, ctx: u64, limit: u64, cache_pct: Option<u64>,
