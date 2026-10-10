@@ -133,3 +133,16 @@ fn rpc_mode_runs_prompts_and_turns_questions_into_requests() {
     let last = third["messages"].as_array().unwrap().last().unwrap().clone();
     assert_eq!((last["role"].clone(), last["content"].clone()), (json!("tool"), json!("src/main.rs")), "the answer is the tool result");
 }
+
+#[test]
+fn rpc_abort_right_after_accepted_cancels_that_run() {
+    let (url, _) = fake_llm(vec![]); // nothing listens: a run that is not cancelled retries and fails
+    let (mut child, rx) = spawn("rpc_abort", &url, &["--rpc"]);
+    let mut stdin = child.stdin.take().unwrap();
+    until(&rx, "session");
+    writeln!(stdin, "{}\n{}", json!({"id": 1, "type": "prompt", "text": "hello"}), json!({"id": 2, "type": "abort"})).unwrap();
+    let end = until(&rx, "task_end").pop().unwrap();
+    assert_eq!((end["ok"].clone(), end["error"].clone()), (json!(false), json!("interrupted")));
+    drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}

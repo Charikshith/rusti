@@ -254,6 +254,7 @@ impl Rpc {
             return Some(response(id, &command, Err("a task is running: wait for task_end, or abort".into())));
         }
         q.busy = true;
+        self.cancel.store(false, Ordering::Relaxed);
         let _ = self.jobs.send(Job { id, command, work });
         None
     }
@@ -266,6 +267,7 @@ impl Rpc {
         let how = match (q.busy, mode) {
             (false, _) => {
                 q.busy = true;
+                self.cancel.store(false, Ordering::Relaxed);
                 let _ = self.jobs.send(Job { id: Value::Null, command: "prompt".into(), work: Work::Prompt(text) });
                 "run"
             }
@@ -287,8 +289,10 @@ impl Rpc {
     /// Stop the running task and drop what was queued behind it. A question
     /// it was waiting on is answered no, so the run can unwind.
     fn abort(&self) -> Value {
+        let mut q = self.queue.lock().unwrap();
         self.cancel.store(true, Ordering::Relaxed);
-        let dropped = ai_core::take_steers().len() + std::mem::take(&mut self.queue.lock().unwrap().follow).len();
+        let dropped = ai_core::take_steers().len() + std::mem::take(&mut q.follow).len();
+        drop(q);
         self.asks.drop_all(false);
         json!({"dropped": dropped})
     }
@@ -322,7 +326,6 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
          queue: Arc<Mutex<Queue>>, info: Arc<Mutex<Value>>) {
     let rt = runtime();
     let run = |client: &llm::Client, session: &mut Session, task: String| {
-        cancel.store(false, Ordering::Relaxed);
         let images = crate::tui::image_refs(&task);
         let ev = match rt.block_on(ai_core::run_agent(client, session, &task, &images, &cancel)) {
             Ok(_) => Event::TaskEnd { ok: true, error: None },
@@ -369,7 +372,6 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
                 Some(Ok(json!({"thinking": client.reasoning})))
             }
             Work::Compact(focus) => {
-                cancel.store(false, Ordering::Relaxed);
                 Some(rt.block_on(ai_core::compact(&client, &mut session, &cancel, "manual", focus.as_deref()))
                     .map(|done| json!({"compacted": done})))
             }
@@ -388,14 +390,12 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
             let next = {
                 let mut q = queue.lock().unwrap();
                 let steers = ai_core::take_steers();
-                if !steers.is_empty() {
-                    Some(steers.join("\n\n"))
-                } else if let Some(f) = q.follow.pop_front() {
-                    Some(f)
-                } else {
-                    q.busy = false;
-                    None
+                let next = if steers.is_empty() { q.follow.pop_front() } else { Some(steers.join("\n\n")) };
+                match next {
+                    Some(_) => cancel.store(false, Ordering::Relaxed),
+                    None => q.busy = false,
                 }
+                next
             };
             if let Some(ev) = end.take() {
                 ai_core::emit(ev);
