@@ -16,9 +16,8 @@ const PROJECT_KEYS: [&str; 3] = ["allow", "max_iters", "context"];
 /// trusted (`trusted()`), else load holds them aside and save writes them back.
 pub const GATED_KEYS: [&str; 6] = ["mcp", "shell", "shell_command_prefix", "hooks", "read_allow", "allow"];
 /// ./.rusti entries the same gate covers; their loaders (resources.rs, the
-/// theme table) ask `trusted()` before reading any. ponytail: SYSTEM.md is
-/// listed but not read from the project yet.
-pub const GATED_RESOURCES: [&str; 4] = ["prompts", "skills", "themes", "SYSTEM.md"];
+/// theme table, the system prompt) ask `trusted()` before reading any.
+pub const GATED_RESOURCES: [&str; 5] = ["prompts", "skills", "themes", "SYSTEM.md", "APPEND_SYSTEM.md"];
 
 static TRUSTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

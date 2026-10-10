@@ -160,7 +160,8 @@ model can inspect dependency sources. `--yolo` lifts both the prompts and the gu
 A cloned repo's `model.json` could otherwise start its own MCP servers, swap the shell
 or pre-approve `run_command` before you type anything. So when `./model.json` sets `mcp`,
 `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow` (or `./.rusti/` has
-`prompts`, `skills`, `themes` or `SYSTEM.md`, or there is a `./.agents/skills`), the TUI asks
+`prompts`, `skills`, `themes`, `SYSTEM.md` or `APPEND_SYSTEM.md`, or there is a
+`./.agents/skills`), the TUI asks
 once at launch:
 
 ```
@@ -207,14 +208,16 @@ If the working directory has an `AGENTS.md` (fallback `RUSTI.md`, then `CLAUDE.m
 its contents are appended to the system prompt. The file is re-read every turn, so
 edits take effect on the next message without a restart.
 
-`~/.rusti/SYSTEM.md` replaces rusti's built-in base prompt, and `~/.rusti/APPEND_SYSTEM.md`
-is added after it. `--system-prompt X` and `--append-system-prompt X` (repeatable) win over
-those files; X is read as a file when one exists at that path, else used as the text itself.
-Only the base text is replaced: the shell line, the docs pointer, the project instructions
-above, git context and the plan-mode block always stay. Both files are re-read every turn,
-and startup prints `ℹ system prompt: …` naming whatever changed it (an unreadable file is
-skipped and named there too). `/reload` keeps the
-flags. A project-level `.rusti/SYSTEM.md` is not read yet: it waits for project trust.
+`SYSTEM.md` replaces rusti's built-in base prompt, and `APPEND_SYSTEM.md` is added after it.
+Both are looked for in `~/.rusti/` and, once the folder is trusted (§ project trust), in
+`./.rusti/`: the project's `SYSTEM.md` wins over the global one, and both `APPEND_SYSTEM.md`
+files apply, global first, then project. `--system-prompt X` and `--append-system-prompt X`
+(repeatable) win over those files; X is read as a file when one exists at that path, else used
+as the text itself. Only the base text is replaced: the shell line, the docs pointer, the
+project instructions above, git context and the plan-mode block always stay. The files are
+re-read every turn, and startup prints `ℹ system prompt: …` naming whatever changed it (for
+example `ℹ system prompt: .rusti/SYSTEM.md`; an unreadable file is skipped and named there
+too). `/reload` keeps the flags.
 
 ## markdown
 
