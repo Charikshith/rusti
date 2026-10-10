@@ -147,14 +147,16 @@ fn stage_reload_exe(target_dir: &str) -> io::Result<String> {
 
 /// The binary /reload relaunches. In a source checkout (MANIFEST_DIR/Cargo.toml
 /// exists) that is a fresh release build, staged; an installed binary has no
-/// source here (MANIFEST_DIR is the CI build dir), so it is this exe itself —
+/// source checkout (MANIFEST_DIR is the CI build dir, or cargo's own cache for
+/// `cargo install --git`, marked by its `.cargo-ok`), so it is this exe itself —
 /// the restart still re-reads config.json, models, themes and extensions.
 /// None means the build failed and the failure is already in the transcript.
 fn reload_exe(manifest_dir: &str, event_tx: &mpsc::Sender<ai_core::Event>) -> Option<String> {
     let manifest = format!("{manifest_dir}/Cargo.toml");
-    if !std::path::Path::new(&manifest).exists() {
+    let dir = std::path::Path::new(manifest_dir);
+    if !dir.join("Cargo.toml").exists() || dir.join(".cargo-ok").exists() {
         let _ = event_tx.send(ai_core::Event::Text(
-            "  ℹ reload: no rusti source on this machine - restarting the installed rusti to reload config".into(),
+            "  ℹ reload: no rusti source checkout on this machine - restarting the installed rusti to reload config".into(),
         ));
         return match std::env::current_exe() {
             Ok(me) => Some(me.to_string_lossy().into_owned()),
@@ -1207,6 +1209,26 @@ mod tests {
         let events: Vec<_> = rx.iter().collect();
         assert_eq!(events.len(), 1); // the notice only: no cargo ToolStart, no TaskEnd
         assert!(matches!(&events[0], ai_core::Event::Text(t) if t.contains("no rusti source")));
+    }
+
+    /// `cargo install --git` builds in cargo's checkout cache and keeps it, so
+    /// Cargo.toml exists there: /reload must still restart this exe, not run a
+    /// cold release build into cargo's cache and relaunch that.
+    #[test]
+    fn reload_from_a_cargo_install_checkout_relaunches_current_exe() {
+        let dir = std::env::temp_dir().join(format!("rusti_cargo_checkout_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]
+name = \"rusti\"
+").unwrap();
+        std::fs::write(dir.join(".cargo-ok"), "").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let exe = reload_exe(&dir.to_string_lossy(), &tx);
+        assert_eq!(exe, Some(std::env::current_exe().unwrap().to_string_lossy().into_owned()));
+        drop(tx);
+        let events: Vec<_> = rx.iter().collect();
+        assert_eq!(events.len(), 1); // the notice only: no cargo ToolStart, no TaskEnd
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The panic hook restores the terminal only from the UI thread. A worker
