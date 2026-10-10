@@ -11,7 +11,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 
-use super::app::{self, App, CMDS, MENU_ROWS};
+use super::app::{self, App, MENU_ROWS};
 use super::theme;
 use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
 
@@ -345,7 +345,10 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
         }
         return Vec::new();
     }
-    let pad = CMDS.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    let pad = menu.iter().map(|it| match it {
+        app::Item::Cmd(c) => c.name.chars().count(),
+        _ => 0,
+    }).max().unwrap_or(0);
     // a path row is its name, then the whole path dim beside it
     let name_pad = menu.iter().map(|it| match it {
         app::Item::Path { path, dir, .. } => path.rsplit('/').next().unwrap_or(path).chars().count() + *dir as usize,
@@ -359,7 +362,11 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
         .map(|(i, it)| {
             let arrow = if i == app.menu_idx { "▸ " } else { "  " };
             let row = match it {
-                app::Item::Cmd(c) => format!("{arrow}{:pad$}  {}{}", c.name, c.desc, if c.soon { "  · soon" } else { "" }),
+                app::Item::Cmd(c) => {
+                    // where it comes from leads the text, so a narrow terminal cuts the description instead
+                    let tag = if c.tag.is_empty() { String::new() } else { format!("[{}] ", c.tag) };
+                    format!("{arrow}{:pad$}  {tag}{}{}", c.name, c.desc, if c.soon { "  · soon" } else { "" })
+                }
                 app::Item::Path { path, dir, .. } => {
                     let name = format!("{}{}", path.rsplit('/').next().unwrap_or(path), if *dir { "/" } else { "" });
                     format!("{arrow}{name:name_pad$}  {path}")

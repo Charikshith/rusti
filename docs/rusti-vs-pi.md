@@ -51,7 +51,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 3. **An extensibility platform.**
    - Pi has a TypeScript extension API with tools, commands, shortcuts, providers, renderers and more than 20 lifecycle events (`docs/extensions.md`).
    - Pi also has Agent Skills (`docs/skills.md`), prompt templates (`docs/prompt-templates.md`), npm or git packages with `pi install` (`docs/packages.md`), and custom themes with hot reload (`docs/themes.md`).
-   - rusti has none of these. Its only extension point is MCP.
+   - rusti has prompt templates, Agent Skills, theme files with hot reload, and out-of-process hooks on six events (`resources.rs`, `ai_core/hooks.rs`, readme § extensions), plus MCP tools and prompts. It has no in-process extension API and no packages.
 4. **Programmatic interfaces.**
    - Pi has `--mode json` event streams (`docs/json.md`), a JSONL RPC protocol with about 30 commands (`docs/rpc-commands.md`), and a JS SDK built around `createAgentSession()` (`docs/sdk.md`).
    - rusti has `--json` (one-shot events as JSONL) and `--rpc` (JSONL commands on stdin, about a dozen of them), with no SDK (`rpc.rs`, readme.md § JSON and RPC modes).
@@ -81,7 +81,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | MCP config | An `"mcp"` block in `~/.rusti/config.json`; toggled live with `/mcp` | `~/.pi/agent/mcp.json` or `.pi/mcp.json` in the usual `mcpServers` shape; managed with the `/mcp` manager and `pi mcp ...` |
 | MCP safety | Every MCP tool always asks and is refused in plan mode (`readme.md` "MCP servers") | No gate. Project `mcp.json` loads only after the project is trusted (`docs/mcp.md`) |
 | Images | Ctrl+V/Alt+V saves the clipboard image (or takes every copied image file) and types `@` references; on submit each `@` image is attached to that message, scaled to 2000 px / 4.5 MB of base64 by the platform's own tool; `"vision": false` per profile refuses them. Verified against two vision models through the :20128 proxy (`ai_core/tools.rs`, `harness/features/feat-image-input.json`) | Paste or drag straight into the editor, `@file` arguments, auto-resize, and inline display in the terminal (`docs/usage.md`, `docs/settings.md`) |
-| Themes | 15 compiled-in palettes picked with `/themes`, plus a `"light"` flag (`tui/theme.rs`) | A `system` theme that follows the terminal palette, `dark`/`light`, and custom JSON themes with hot reload (`docs/themes.md`) |
+| Themes | 15 compiled-in palettes picked with `/themes`, a `"light"` flag, and `themes/<name>.json` files in rusti's own roles with a `base` and hot reload (`tui/theme.rs`) | A `system` theme that follows the terminal palette, `dark`/`light`, and custom JSON themes with hot reload (`docs/themes.md`) |
 
 ---
 
@@ -92,13 +92,13 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Interactive TUI | **yes**: custom ANSI renderer with no framework, alternate screen, CSI 2026 sync (`tui/mod.rs`, `tui/render.rs`) | **yes**: regular mode (native scrollback) or fullscreen mode (fixed editor, transcript search, mouse), picked with `--tui-mode` (`docs/usage.md:86`) | rusti is hand-rolled on crossterm and always uses the alternate screen, with no scrollback mode |
 | Bare command opens UI | **yes**: bare `rusti` on a TTY (feat-075, `main.rs`) | **yes**: `pi` | Same |
 | Other front ends | **yes**: plain stream fallback when not a TTY (`tui/plain.rs`), `--json` and `--rpc` (`rpc.rs`) | **yes**: print, json and rpc modes | See area 10 |
-| Slash command menu | **yes**: `/` opens a filterable menu (`tui/app.rs`) | **yes**: autocomplete for built-ins, templates, skills and extensions | Pi's list is user-extensible |
+| Slash command menu | **yes**: `/` opens a filterable menu of built-ins, prompt templates, skills and MCP prompts, tagged by source (`tui/app.rs`) | **yes**: autocomplete for built-ins, templates, skills and extensions | Pi's also takes extension commands |
 | Keybindings | **yes, fixed**: Esc interrupt, Ctrl+C twice to quit, Ctrl+D, Ctrl+O output, Ctrl+T thinking, Ctrl+V/Alt+V image, Shift/Alt+Enter, history, PgUp/PgDn, mouse wheel (`tui/app.rs`) | **yes, configurable**: `~/.pi/agent/keybindings.json`, kill ring, undo, word navigation (`docs/keybindings.md`) | rusti bindings cannot be rebound |
 | Editor features | **partial**: multi-line, history, `@` file picker and Tab path completion (`tui/app.rs`). No `$EDITOR` (open-work) | **yes**: `@` fuzzy file refs, Tab path completion, Ctrl+G `$EDITOR` (`docs/usage.md`) | Pi ahead |
 | Markdown rendering | **yes**: headings, bold, code, bullets, fenced blocks, aligned tables, own highlighter (`tui/render.rs`) | **yes** (`docs/tui.md`) | Similar |
 | Transcript tinting | **yes**: failed-tool and permission rows banded, user rows bold (feat-tui-polish); reads folded; narration dimmed (feat-076, `tui/render.rs`) | partial: tool expand (Ctrl+O), thinking collapse (Ctrl+T) | Different styling approach |
 | Thinking display | **yes**: italic block; Ctrl+T folds it, keeping a two-row live preview, saved as `hide_thinking` (feat-080, `tui/render.rs`) | **yes**: Ctrl+T collapse, `hideThinkingBlock` | Pi also toggles one block by click |
-| Themes | **yes**: 15 built-in palettes, `/themes`, `light` flag (`tui/theme.rs`) | **yes**: system, dark and light themes plus custom JSON with hot reload (`docs/themes.md`) | Pi's are user-authored |
+| Themes | **yes**: 15 built-in palettes, `/themes`, `light` flag, custom JSON with a `base` and hot reload (`tui/theme.rs`) | **yes**: system, dark and light themes plus custom JSON with hot reload (`docs/themes.md`) | Pi also follows the terminal palette |
 | Image input | **yes**: Alt+V or `@img` attaches on submit, auto-resize with a coordinate note, `vision` flag per profile (F03) | **yes**: paste or drag, `@img`, inline display (`docs/usage.md`) | Pi attaches directly only for CLI `@` arguments and routes TUI pastes through `read`; rusti attaches every `@` image directly. No inline display in rusti |
 | Queue while streaming | **yes**: steer (Enter), follow-up (Ctrl+Q), dequeue (Alt+Up / Alt+Q, and Esc) (feat-queue-while-working, `tui/app.rs`) | **yes**: steer (Enter), follow-up (Alt+Enter), dequeue (Alt+Up) (`docs/usage.md:36-40`) | Pi's follow-up key is Alt+Enter, rusti's newline key; Pi delivers steers one at a time by default |
 | Footer | **yes**: plan, session, model, branch, tokens, ctx %, cache %; toggled with `/settings` (`tui/app.rs`) | **yes**: cwd, session, tokens, cache, cost, ctx, model | Pi shows cost |
@@ -154,7 +154,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Live streamed output | **yes**: `!` and `!!` output streams into the transcript line by line while the command runs (feat-078) | not stated in docs | |
 | Shell resolution | **yes**: resolved once at startup: the `"shell"` path in `~/.rusti/config.json`, else Git Bash under Program Files on Windows, else `bash` on PATH, else `cmd /C` on Windows and `sh -c` elsewhere; one shell for `run_command`, `run_background`, `!` and `!!` (feat-078, `ai_core/tools.rs`) | **yes**: `shellPath`, then Git Bash, then bash on PATH (`docs/windows.md`) | Same order as Pi |
 | Command prefix and aliases | **yes**: `"shell_command_prefix"`, put on its own line before every command (`&` under cmd) (feat-078) | **yes**: `shellCommandPrefix`; alias recipe in `docs/shell-aliases.md` | Parity |
-| Hook on `!` | **no** | **yes**: `user_bash` extension event | |
+| Hook on `!` | **yes**: the `user_shell` hook rewrites, handles or refuses it (`ai_core/hooks.rs`) | **yes**: `user_bash` extension event | |
 | MCP server launch shell | `cmd /C` on Windows, so `npx`/`uvx` shims work (`ai_core/mcp.rs`) | n/a (spawns the command directly) | |
 
 ## 5. Models and providers
@@ -180,7 +180,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Auto compaction | **yes**: past `--context` (default 100k) or a profile's `context`; keeps the newest min(20k, limit/5) tokens; one compact-and-retry on a context-overflow error (`ai_core/mod.rs`) | **yes**: reserve- and keep-token thresholds, split-turn handling, retry on overflow (`docs/compaction.md`) | Pi derives the limit from a model catalog; rusti from the profile |
 | Manual `/compact` | **yes**: `/compact [focus]`, RPC `compact` | **yes**: `/compact [instructions]` | |
 | Structured summary | **yes**: Goal, Constraints & Preferences, Progress, Key Decisions, Next Steps, Critical Context, cumulative read and modified file lists, updated in place on the next compaction (`ai_core/mod.rs`) | **yes**: Goal, Constraints, Progress and similar sections, plus file lists | |
-| Compaction hook | **no** (a marked seam in `compact()`) | **yes**: `session_before_compact` | |
+| Compaction hook | **yes**: `pre_compact` returns a summary or skips it | **yes**: `session_before_compact` | |
 | Context files | **yes**: the first of AGENTS.md, RUSTI.md, CLAUDE.md in the cwd, re-read each turn | **yes**: all levels concatenated; `-nc` disables them | Pi walks parent directories |
 | System prompt override | **yes**: `~/.rusti/SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt`; replaces only the base text (readme.md § project instructions) | **yes**: `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt` | rusti reads no project `.rusti/SYSTEM.md` yet (waits for project trust) |
 | Git state in prompt | **yes**: branch and `git status --short` every turn, on the user message (`ai_core/mod.rs`) | not in core | rusti ahead |
@@ -199,7 +199,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Read sandbox | **no**: open by design (open-work) | **no** | Same |
 | Bypass | `--yolo` / `RUSTI_YOLO=1` | n/a; already ungated | |
 | Non-interactive | piped runs deny every gated tool unless `--yolo` is given (`readme.md` "safety") | runs ungated | |
-| Project trust | **yes**: a `./model.json` that sets `mcp`, `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow`, or a `./.rusti/` with prompts, skills, themes or `SYSTEM.md`, is asked about once (Yes / No / Always, saved in `~/.rusti/trust.json`); piped and one-shot runs need `--trust` (`config.rs`) | **partial**: gates loading of project settings, extensions, skills, prompts, themes, `SYSTEM.md` and `mcp.json`, but not tool actions or context files. Decided by `/trust`, `-a/--approve` or `defaultProjectTrust` (`docs/security.md:27-57`) | Both gate startup config, not tool actions |
+| Project trust | **yes**: a `./model.json` that sets `mcp`, `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow`, or a `./.rusti/` with prompts, skills, themes or `SYSTEM.md`, or a `./.agents/skills`, is asked about once (Yes / No / Always, saved in `~/.rusti/trust.json`); piped and one-shot runs need `--trust` (`config.rs`) | **partial**: gates loading of project settings, extensions, skills, prompts, themes, `SYSTEM.md` and `mcp.json`, but not tool actions or context files. Decided by `/trust`, `-a/--approve` or `defaultProjectTrust` (`docs/security.md:27-57`) | Both gate startup config, not tool actions |
 | OS or container sandbox | none | documented recipes only (`docs/containerization.md`; example `sandbox/`) | |
 | Dangerous-command detection | none | example `confirm-destructive.ts` only | Neither in core |
 | Untrusted labelling | partial: `web_fetch` output is labelled (`ai_core/tools.rs`) | not stated in docs | |
@@ -220,13 +220,13 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 
 | Feature | rusti | Pi | Difference |
 |---|---|---|---|
-| MCP client | **yes, stdio only**: JSON-RPC 2.0, protocol 2024-11-05, no SDK, tools only (no resources or prompts), text content only, `/mcp` toggle, tools named `mcp__server__tool` (`ai_core/mcp.rs`, feat-055) | **yes**, new in 0.99.0: stdio and streamable HTTP, OAuth, resources, `/mcp` manager, `pi mcp add/remove/list/login`, `mcp.log`. By default MCP tools are reached through codemode rather than declared to the model; `direct`, `deferred` and `hidden` exposure are also available (`docs/mcp.md`) | Pi adds HTTP, OAuth, resources, CLI management and lazy exposure |
-| Extensions and plugins | none | **yes**: TypeScript API for tools, commands, shortcuts, flags, providers, renderers and events (`docs/extensions.md`) | Largest structural gap |
-| Skills | none | **yes**: Agent Skills `SKILL.md`, `/skill:name` (`docs/skills.md`) | |
-| Prompt templates | none; `/commit` is hard-coded | **yes**: markdown templates with arguments (`docs/prompt-templates.md`) | |
+| MCP client | **yes, stdio only**: JSON-RPC 2.0, protocol 2024-11-05, no SDK, tools and prompts (prompts as `/server:prompt`; no resources), text content only, `/mcp` toggle, tools named `mcp__server__tool` (`ai_core/mcp.rs`, feat-055) | **yes**, new in 0.99.0: stdio and streamable HTTP, OAuth, resources, `/mcp` manager, `pi mcp add/remove/list/login`, `mcp.log`. By default MCP tools are reached through codemode rather than declared to the model; `direct`, `deferred` and `hidden` exposure are also available (`docs/mcp.md`) | Pi adds HTTP, OAuth, resources, CLI management and lazy exposure |
+| Extensions and plugins | out of process only: hooks and MCP (readme § extensions) | **yes**: TypeScript API for tools, commands, shortcuts, flags, providers, renderers and events (`docs/extensions.md`) | No in-process API in rusti |
+| Skills | **yes**: Agent Skills `SKILL.md` from `~/.rusti/skills`, `.rusti/skills` and both `.agents/skills`, listed in the system prompt, `/skill:name` (`resources.rs`) | **yes**: Agent Skills `SKILL.md`, `/skill:name` (`docs/skills.md`) | |
+| Prompt templates | **yes**: `prompts/<name>.md` as `/<name>`, `$1`…`$9`, `$@`, `${1:-default}` (`resources.rs`) | **yes**: markdown templates with arguments (`docs/prompt-templates.md`) | Pi also has `${@:N:L}` slices |
 | Packages | none | **yes**: `pi install npm:/git:` (`docs/packages.md`) | |
-| Hooks | none | **yes**, through extension events | |
-| Custom themes | **no** (compiled in) | **yes** | |
+| Hooks | **yes**: commands on six events, JSON in and out (`ai_core/hooks.rs`) | **yes**, through extension events | |
+| Custom themes | **yes**: JSON in rusti's roles with a `base`, hot reload | **yes** | |
 | Self-rebuild | **yes**: `/reload` runs cargo and relaunches (`tui/mod.rs`) | n/a; `/reload` reloads resources | Different meaning |
 
 ## 10. Output modes and SDK/RPC

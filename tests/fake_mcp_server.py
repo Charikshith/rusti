@@ -4,7 +4,8 @@
 Exists so the client's wire format is tested against something that answers,
 rather than only against itself. Covers the three things the client does --
 initialize, tools/list, tools/call -- plus the two shapes a call can come back
-in (ok, and isError). Also logs to stderr, so the stderr drain is exercised.
+in (ok, and isError), and prompts/list + prompts/get for the /server:prompt
+commands. Also logs to stderr, so the stderr drain is exercised.
 """
 import json
 import sys
@@ -23,6 +24,17 @@ TOOLS = [
         "name": "boom",
         "description": "Always fails",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+]
+
+PROMPTS = [
+    {
+        "name": "greet",
+        "description": "Greet   someone",   # runs of spaces are folded in the menu
+        "arguments": [
+            {"name": "who", "required": True},
+            {"name": "style"},
+        ],
     },
 ]
 
@@ -47,11 +59,19 @@ for line in sys.stdin:
     if method == "initialize":
         reply(msg_id, {
             "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {"name": "fake", "version": "0"},
         })
     elif method == "tools/list":
         reply(msg_id, {"tools": TOOLS})
+    elif method == "prompts/list":
+        reply(msg_id, {"prompts": PROMPTS})
+    elif method == "prompts/get":
+        args = req.get("params", {}).get("arguments", {})
+        reply(msg_id, {"messages": [
+            {"role": "user", "content": {"type": "text", "text": f"Greet {args['who']}, {args.get('style', 'kindly')}."}},
+            {"role": "user", "content": [{"type": "text", "text": "Keep it short."}]},
+        ]})
     elif method == "tools/call":
         params = req.get("params", {})
         name = params.get("name")

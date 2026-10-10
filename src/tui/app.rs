@@ -5,7 +5,8 @@
 // Keyboard: Esc interrupts, Ctrl+C clears (twice quits), Ctrl+D quits when the
 // input is empty, Ctrl+O/Ctrl+T show or hide tool output/thinking, Enter submits, arrows edit input, Up/Down recall history,
 // PageUp/PageDown scroll transcript, @ opens a file picker, Tab completes a path.
-// Slash: /use /model /new /resume /rename /tree /reload /quit.
+// Slash: /use /model /new /resume /rename /tree /reload /quit, plus prompt
+// templates, /skill:name and /server:prompt (see commands()).
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,37 +16,76 @@ use std::time::Duration;
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::ai_core;
+use crate::resources;
 use super::render::{self, RenderState};
 use super::Job;
 
 /// One row of the slash-command menu. `soon` marks a command that is queued in
 /// harness/open-work.md but not built yet, so the menu stays honest.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Cmd {
-    pub name: &'static str,
-    pub desc: &'static str,
+    pub name: String,
+    pub desc: String,
     pub soon: bool,
+    /// Where it comes from, shown beside it: empty for a built-in, u yours,
+    /// p this project's, mcp:<server> a server's prompt.
+    pub tag: String,
 }
 
-pub const CMDS: &[Cmd] = &[
-    Cmd { name: "/model", desc: "pick from saved profiles, or /model <name> to switch", soon: false },
-    Cmd { name: "/use", desc: "/use <name> - switch to a saved profile", soon: false },
-    Cmd { name: "/resume", desc: "list sessions and switch: /resume, /resume <name>, /resume <n>", soon: false },
-    Cmd { name: "/rename", desc: "/rename <new-name> - rename the active session", soon: false },
-    Cmd { name: "/new", desc: "/new [name] - save this session and start a new one", soon: false },
-    Cmd { name: "/tree", desc: "browse the session tree and branch from an earlier entry", soon: false },
-    Cmd { name: "/reload", desc: "rebuild rusti from source and relaunch", soon: false },
-    Cmd { name: "/quit", desc: "exit rusti (same as ctrl+c twice)", soon: false },
-    Cmd { name: "/undo", desc: "put back the files the last turn changed and rewind to before it", soon: false },
-    Cmd { name: "/commit", desc: "stage the work and commit it with a drafted message", soon: false },
-    Cmd { name: "/plan", desc: "toggle plan mode: read and propose, change nothing", soon: false },
-    Cmd { name: "/settings", desc: "choose which segments the status line shows", soon: false },
-    Cmd { name: "/themes", desc: "pick the colour palette, or /themes <name>", soon: false },
-    Cmd { name: "/mcp", desc: "list MCP servers and switch them on or off", soon: false },
-    Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
-    Cmd { name: "/export", desc: "/export [file.md] - write the transcript out as markdown", soon: false },
-    Cmd { name: "/compact", desc: "/compact [focus] - summarize the older history now to free context", soon: false },
+/// The built-in commands: (name, description, soon).
+const BUILTINS: &[(&str, &str, bool)] = &[
+    ("/model", "pick from saved profiles, or /model <name> to switch", false),
+    ("/use", "/use <name> - switch to a saved profile", false),
+    ("/resume", "list sessions and switch: /resume, /resume <name>, /resume <n>", false),
+    ("/rename", "/rename <new-name> - rename the active session", false),
+    ("/new", "/new [name] - save this session and start a new one", false),
+    ("/tree", "browse the session tree and branch from an earlier entry", false),
+    ("/reload", "rebuild rusti from source and relaunch", false),
+    ("/quit", "exit rusti (same as ctrl+c twice)", false),
+    ("/undo", "put back the files the last turn changed and rewind to before it", false),
+    ("/commit", "stage the work and commit it with a drafted message", false),
+    ("/plan", "toggle plan mode: read and propose, change nothing", false),
+    ("/settings", "choose which segments the status line shows", false),
+    ("/themes", "pick the colour palette, or /themes <name>", false),
+    ("/mcp", "list MCP servers and switch them on or off", false),
+    ("/test", "/test <cmd> - loop until it exits 0", true),
+    ("/export", "/export [file.md] - write the transcript out as markdown", false),
+    ("/compact", "/compact [focus] - summarize the older history now to free context", false),
 ];
+
+pub fn builtins() -> Vec<Cmd> {
+    BUILTINS.iter().map(|(n, d, soon)| Cmd { name: n.to_string(), desc: d.to_string(), soon: *soon, tag: String::new() }).collect()
+}
+
+/// A built-in owns its name in any case, so /Commit.md never runs as /Commit.
+fn is_builtin(name: &str) -> bool {
+    BUILTINS.iter().any(|(n, _, _)| n.eq_ignore_ascii_case(name))
+}
+
+/// The / menu (Q16): built-ins, then prompt templates, then skills, then MCP
+/// prompts, each tagged by where it came from. A built-in keeps its name
+/// against a template, with a warning: a file must not take over /commit.
+pub fn commands(warn: &mut Vec<String>) -> Vec<Cmd> {
+    let ext = |name: String, hint: &str, desc: &str, tag: String| Cmd {
+        name,
+        desc: if hint.is_empty() { desc.to_string() } else { format!("{hint} - {desc}") },
+        soon: false,
+        tag,
+    };
+    let mut found: Vec<Cmd> = Vec::new();
+    found.extend(resources::templates(warn).into_iter().map(|t| ext(format!("/{}", t.name), &t.hint, &t.desc, t.tag.into())));
+    found.extend(resources::skills(warn).into_iter().map(|s| ext(format!("/skill:{}", s.name), &s.hint, &s.desc, s.tag.into())));
+    found.extend(ai_core::mcp::prompts().into_iter().map(|(srv, p)| ext(format!("/{srv}:{}", p.name), &p.hint(), &p.desc, format!("mcp:{srv}"))));
+    let mut v = builtins();
+    for c in found {
+        if is_builtin(&c.name) {
+            warn.push(format!("{} [{}] has a built-in command's name; the built-in wins", c.name, c.tag));
+        } else {
+            v.push(c);
+        }
+    }
+    v
+}
 
 /// Menu rows visible at once; up/down walks the whole filtered list.
 pub const MENU_ROWS: usize = 5;
@@ -63,7 +103,7 @@ pub const PICK_ROWS: usize = 8;
 /// the chars `start..cursor` of the input (an `@` reference or a Tab completion).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
-    Cmd(&'static Cmd),
+    Cmd(Cmd),
     Path { start: usize, insert: String, path: String, dir: bool },
 }
 
@@ -81,7 +121,7 @@ pub fn menu_items(app: &App) -> Vec<Item> {
     if app.pick.is_some() || app.ask.is_some() || app.menu_off.as_deref() == Some(app.input.as_str()) {
         return Vec::new();
     }
-    let cmds = filter_cmds(&app.input);
+    let cmds = filter_cmds(&app.cmds, &app.input);
     if !cmds.is_empty() {
         return cmds.into_iter().map(Item::Cmd).collect();
     }
@@ -284,13 +324,13 @@ fn accept_path(app: &mut App, start: usize, insert: &str) {
 
 /// Commands whose name completes `input`, or none when `input` isn't a lone
 /// "/word" (a space means the arguments have started).
-pub fn filter_cmds(input: &str) -> Vec<&'static Cmd> {
+pub fn filter_cmds(cmds: &[Cmd], input: &str) -> Vec<Cmd> {
     let Some(q) = input.strip_prefix('/') else { return Vec::new() };
     if q.contains(char::is_whitespace) {
         return Vec::new();
     }
     let q = q.to_lowercase();
-    CMDS.iter().filter(|c| c.name[1..].to_lowercase().starts_with(&q)).collect()
+    cmds.iter().filter(|c| c.name[1..].to_lowercase().starts_with(&q)).cloned().collect()
 }
 
 /// What an open list picker selects (Enter's action).
@@ -398,6 +438,8 @@ pub struct App {
     pub index: Option<Receiver<Vec<(String, bool)>>>,
     /// The list a Tab opened, valid while the input is still what it filled in.
     pub tab: Option<(String, usize, Vec<Item>)>,
+    /// The / menu's commands, re-read from disk each time a lone "/" opens it.
+    pub cmds: Vec<Cmd>,
 }
 
 /// Prefix on a transcript row that is present but not drawn until Ctrl+O.
@@ -427,6 +469,7 @@ impl App {
             menu_idx: 0, menu_top: 0, menu_for: String::new(), menu_off: None, fresh: true,
             pick: None, expand: false, hide_thinking: false, follow: Default::default(),
             menu: Vec::new(), menu_key: Default::default(), files: None, index: None, tab: None,
+            cmds: builtins(),
         }
     }
     /// True while a second Ctrl+C would exit.
@@ -456,6 +499,10 @@ impl App {
             self.menu_for = self.input.clone();
             self.menu_idx = 0;
             self.menu_top = 0;
+            // the menu just opened: pick up templates and skills added since
+            if self.input == "/" {
+                self.cmds = commands(&mut Vec::new());
+            }
         }
         if let Some(Ok(files)) = self.index.as_ref().map(|rx| rx.try_recv()) {
             self.files = Some(files);
@@ -587,6 +634,8 @@ pub fn ui_loop(
     seed_msg_num: usize,
 ) -> io::Result<Exit> {
     let cfg = crate::config::Config::load();
+    // theme files first, so a saved name can be one of them
+    let mut warn = super::theme::load(&resources::dirs("themes"));
     // a saved palette that is no longer in the table keeps the default and says
     // so below, rather than leaving the user wondering why /themes did nothing
     let bad_theme = cfg.theme.as_deref().filter(|n| !super::theme::set(n)).map(String::from);
@@ -602,12 +651,21 @@ pub fn ui_loop(
     if let Some(name) = bad_theme {
         app.lines.push(format!("  ⚠ no theme called {name}; using {}", super::theme::name()));
     }
+    // a template, skill or theme file that did not load says why, once
+    app.cmds = commands(&mut warn);
+    app.lines.extend(warn.into_iter().map(|w| format!("  ⚠ {w}")));
     let mut state = RenderState::new();
 
     loop {
         app.sync_menu();
         render::draw(&app, &mut state)?;
         app.spinner = app.spinner.wrapping_add(1);
+        // about once a second: an edit to the active theme's file applies live
+        if app.spinner.is_multiple_of(20) {
+            if let Some(e) = super::theme::reload_if_changed() {
+                app.notice = Some((e, std::time::Instant::now()));
+            }
+        }
 
         if event::poll(Duration::from_millis(50))? {
             let ev = event::read()?;
@@ -1096,8 +1154,12 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/settings" => pick_settings(app),
-        // /themes <name> switches outright; bare /themes opens the list
+        // /themes <name> switches outright; bare /themes opens the list. Both
+        // re-read the theme files, so one added since startup is there too
         "/themes" => {
+            for w in super::theme::load(&resources::dirs("themes")) {
+                app.lines.push(format!("  ⚠ {w}"));
+            }
             if arg.is_empty() {
                 pick_themes(app)
             } else {
@@ -1154,12 +1216,46 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             }
         }
         "/quit" => return true,
-        _ if CMDS.iter().any(|c| c.name == cmd && c.soon) => {
+        _ if BUILTINS.iter().any(|(n, _, soon)| *n == cmd && *soon) => {
             app.lines.push(format!("  ℹ {cmd} is queued, not built yet — see harness/open-work.md"))
         }
+        _ if run_extension(app, job_tx, raw, cmd, arg) => {}
         _ => app.lines.push(format!("  ✗ unknown command: {cmd}")),
     }
     false
+}
+
+/// `/name args` for a prompt template, `/skill:name args` for a skill, and
+/// `/server:prompt args` for an MCP prompt: each becomes the message sent,
+/// while the transcript shows what you typed. Templates and skills are read
+/// from disk now, so an edit applies without a restart. False when nothing
+/// has that name.
+fn run_extension(app: &mut App, job_tx: &Sender<Job>, raw: &str, cmd: &str, arg: &str) -> bool {
+    if is_builtin(cmd) {
+        return false;
+    }
+    let name = &cmd[1..];
+    let job = if let Some(skill) = name.strip_prefix("skill:") {
+        let Some(s) = resources::skills(&mut Vec::new()).into_iter().find(|s| s.name == skill) else { return false };
+        resources::skill_message(&s, arg).map(Job::Task)
+    } else if let Some(t) = resources::templates(&mut Vec::new()).into_iter().find(|t| t.name == name) {
+        Ok(Job::Task(resources::expand(&t.body, &resources::split_args(arg))))
+    } else if let Some((server, p)) = ai_core::mcp::prompts().into_iter().find(|(s, p)| format!("{s}:{}", p.name) == name) {
+        ai_core::mcp::prompt_args(&p, resources::split_args(arg))
+            .map(|args| Job::McpPrompt { server, name: p.name.clone(), args })
+            .map_err(|e| format!("{e} — usage: /{name} {}", p.hint()))
+    } else {
+        return false;
+    };
+    match job {
+        Err(e) => app.lines.push(format!("  ✗ {e}")),
+        Ok(_) if !app.done => app.lines.push("  ✗ finish or Esc-interrupt the current task first".into()),
+        Ok(job) => {
+            begin_task(app, raw.to_string());
+            let _ = job_tx.send(job);
+        }
+    }
+    true
 }
 
 /// Answer the pending question from the picker: the panel closes, the question's
@@ -1333,6 +1429,12 @@ fn next_queued(app: &mut App, ok: bool, job_tx: &Sender<Job>) {
 
 /// Show the message, reset the per-turn counters, hand it to the agent thread.
 fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
+    begin_task(app, raw.clone());
+    let _ = job_tx.send(Job::Task(raw));
+}
+
+/// start_task without the send: what a turn looks like on screen as it starts.
+fn begin_task(app: &mut App, raw: String) {
     app.flush();
     drop_mcp_ok(app);
     app.msg_num += 1;
@@ -1347,9 +1449,8 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
     app.turn_est = false;
     app.turn_cached = None;
     if app.history.last().map(|h| h != &raw).unwrap_or(true) {
-        app.history.push(raw.clone());
+        app.history.push(raw);
     }
-    let _ = job_tx.send(Job::Task(raw));
 }
 
 /// The "✓ mcp x: N tools" rows are a startup notice: once you have typed, you
@@ -1358,7 +1459,8 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
 /// shifts by the number removed.
 fn drop_mcp_ok(app: &mut App) {
     let before = app.lines.len();
-    app.lines.retain(|l| !(l.starts_with("  ✓ mcp ") && l.ends_with(" tools")));
+    // a server with prompts adds ", N prompts as /x:…" after "tools"
+    app.lines.retain(|l| !l.starts_with("  ✓ mcp "));
     shift_rows(app, 0, -((before - app.lines.len()) as isize));
 }
 
@@ -1578,8 +1680,8 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
 /// list explains itself rather than making you try all fifteen.
 fn pick_themes(app: &mut App) {
     let here = super::theme::name();
-    let rows: Vec<(String, String)> = super::theme::THEMES
-        .iter()
+    let rows: Vec<(String, String)> = super::theme::all()
+        .into_iter()
         .map(|t| {
             let mark = if t.name == here { "•" } else { " " };
             (format!("{mark} {:<14} {}", t.name, t.note), t.name.to_string())
@@ -1901,6 +2003,7 @@ mod tests {
         a.cursor = 3;
         a.sync_menu();
         assert!(matches!(a.menu[0], Item::Cmd(_)), "the slash menu is unchanged");
+        assert_eq!(a.menu.len(), 3, "/resume /rename /reload");
         a.menu_off = Some(a.input.clone());
         a.sync_menu();
         assert!(a.menu.is_empty(), "Esc closes it");
@@ -1991,6 +2094,28 @@ mod tests {
         assert_eq!(a.input, "no, spaces\n\nthen commit\n\ndraft");
         assert!(a.follow.is_empty() && ai_core::steers().is_empty());
         assert!(!dequeue(&mut a), "nothing queued: Alt+Up stays history recall");
+    }
+
+    /// Q16: the / menu lists built-ins, then templates, then skills, then
+    /// MCP prompts, tagged by source; a template named like a built-in loses.
+    /// A template runs as its expansion while the transcript shows what you typed.
+    #[test]
+    fn extensions_join_the_menu_and_run_as_their_text() {
+        let mut a = app();
+        a.cmds.push(Cmd { name: "/review".into(), desc: "<file> - Review a file".into(), soon: false, tag: "u".into() });
+        a.cmds.push(Cmd { name: "/skill:pdf".into(), desc: "PDFs".into(), soon: false, tag: "p".into() });
+        let names: Vec<String> = filter_cmds(&a.cmds, "/re").into_iter().map(|c| c.name).collect();
+        assert_eq!(names, ["/resume", "/rename", "/reload", "/review"], "built-ins first");
+        assert_eq!(filter_cmds(&a.cmds, "/skill:")[0].tag, "p");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(!run_extension(&mut a, &tx, "/nope x", "/nope", "x"), "nothing by that name");
+        assert!(is_builtin("/Commit") && is_builtin("/commit") && !is_builtin("/review"), "built-ins match in any case");
+        assert!(!run_extension(&mut a, &tx, "/Commit x", "/Commit", "x"), "a built-in's name never runs an extension");
+        begin_task(&mut a, "/review src/a.rs".into());
+        assert_eq!(a.lines.last().map(String::as_str), Some("1› /review src/a.rs"), "the transcript shows what was typed");
+        assert_eq!(a.history.last().map(String::as_str), Some("/review src/a.rs"), "and Up recalls it");
+        assert!(rx.try_recv().is_err(), "begin_task sends nothing itself");
     }
 
     /// Submit attaches the `@` references that name an image file, quoted
