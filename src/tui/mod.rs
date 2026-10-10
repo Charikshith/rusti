@@ -662,8 +662,15 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
 /// Word wrap measured as drawn: drawn(row) is the columns a row takes on
 /// screen once styled, so a gutter the raw row lacks still moves its tabs.
 pub fn word_wrap(s: &str, width: usize, drawn: impl Fn(&str) -> usize) -> Vec<String> {
-    if width == 0 { return vec![String::new()]; }
-    let mut out = Vec::new();
+    word_wrap_joined(s, width, drawn).into_iter().map(|r| r.0).collect()
+}
+
+/// word_wrap, with each row's join: None for the first row of a source line,
+/// Some(" ") for a break at a space, Some("") for a cut inside a word wider
+/// than the row (a CJK sentence has no spaces), so a copy can rejoin them.
+pub fn word_wrap_joined(s: &str, width: usize, drawn: impl Fn(&str) -> usize) -> Vec<(String, Option<&'static str>)> {
+    if width == 0 { return vec![(String::new(), None)]; }
+    let mut out: Vec<(String, Option<&'static str>)> = Vec::new();
     for src in s.split('\n') {
         // Leading spaces are the row's marker indent ("  ✓ ", "  │ ") and
         // colorize_row matches on them, so they must survive the split: an
@@ -673,19 +680,45 @@ pub fn word_wrap(s: &str, width: usize, drawn: impl Fn(&str) -> usize) -> Vec<St
         let indent = &src[..src.len() - body.len()];
         let first = out.len();
         let mut line = String::new();
+        let mut join = None;
+        // head: the source line's first row, which carries the indent
+        let fits = |head: bool, row: &str| drawn(&format!("{}{row}", if head { indent } else { "" })) <= width;
         for word in body.split(' ') {
+            let head = out.len() == first;
             if line.is_empty() {
                 line = word.to_string();
-            } else if drawn(&format!("{}{line} {word}", if out.len() == first { indent } else { "" })) > width {
-                out.push(line);
+            } else if fits(head, &format!("{line} {word}")) {
+                line.push(' ');
+                line.push_str(word);
+                continue;
+            } else if word.is_empty() || fits(false, word) {
+                // the word fits a row of its own: break at the space
+                out.push((std::mem::take(&mut line), join));
+                join = Some(" ");
                 line = word.to_string();
+                continue;
             } else {
                 line.push(' ');
                 line.push_str(word);
             }
+            // a word wider than any row: cut it where each row fills up
+            while !fits(out.len() == first, &line) {
+                let head = out.len() == first;
+                let cut = line.char_indices().skip(1).map(|(i, _)| i).find(|&i| !fits(head, &line[..i]));
+                let cut = match cut {
+                    Some(i) => line[..i].char_indices().last().map_or(0, |(j, _)| j),
+                    None => line.char_indices().last().map_or(0, |(j, _)| j),
+                };
+                if cut == 0 { break; }
+                let rest = line.split_off(cut);
+                let at_space = line.ends_with(' ');
+                out.push((line.trim_end_matches(' ').to_string(), join));
+                join = Some(if at_space { " " } else { "" });
+                line = rest.trim_start_matches(' ').to_string();
+            }
         }
-        out.push(line);
-        out[first].insert_str(0, indent);
+        out.push((line, join));
+        out[first].0.insert_str(0, indent);
     }
     out
 }

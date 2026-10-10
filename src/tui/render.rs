@@ -13,7 +13,7 @@ use crossterm::{
 
 use super::app::{self, App, MENU_ROWS};
 use super::theme;
-use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
+use super::{goto, word_wrap_joined, SYNC_BEGIN, SYNC_END};
 
 /// Braille spinner frames (~20fps at the 50ms poll rate).
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -168,7 +168,12 @@ impl RenderState {
 /// ponytail: styles each candidate row to measure it; a per-style gutter
 /// width if wrapping ever shows up in a profile
 fn wrap(st: u8, s: &str, w: usize) -> Vec<String> {
-    word_wrap(s, w, |r| columns(&plain(&colorize_row(st, r, ' '))))
+    wrap_joined(st, s, w).into_iter().map(|r| r.0).collect()
+}
+
+/// wrap, with each row's join for a copy (see word_wrap_joined).
+fn wrap_joined(st: u8, s: &str, w: usize) -> Vec<(String, Option<&'static str>)> {
+    word_wrap_joined(s, w, |r| columns(&plain(&colorize_row(st, r, ' '))))
 }
 
 /// One transcript row styled for the screen. Markdown rows are already
@@ -1494,13 +1499,14 @@ last bit";
             (b't', format!("  │ {words}"), words.clone()),
             (b'n', format!("  ┆ {words}"), words.clone()),
             (b'u', format!("1› q\n{words}"), format!("1› q\n{words}")),
+            // a CJK query has no spaces: it is cut where each row fills up,
+            // and the copy rejoins the cuts with nothing
+            (b'u', format!("1› {}", "修复登录错误的问题".repeat(10)), format!("1› {}", "修复登录错误的问题".repeat(10))),
         ] {
             assert_eq!(line_style(&line), st);
             let mut state = RenderState::new();
             state.inner_w = 78;
-            for src in line.split('\n') {
-                state.rows.extend(wrap(st, src, 78).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
-            }
+            state.rows.extend(wrap_joined(st, &line, 78).into_iter().map(|(r, join)| (st, r, join)));
             for (_, row, _) in &state.rows {
                 assert!(columns(&plain(&expand_tabs(&styled(st, row, 78, '⠋')))) <= 78, "{}: {row:?}", st as char);
             }
