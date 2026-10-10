@@ -153,20 +153,31 @@ pub fn is_mcp(name: &str) -> bool {
 }
 
 fn build(cfg: &McpServer) -> Command {
-    // On Windows npx/uvx/npm are .cmd shims, and CreateProcess cannot execute
-    // those directly — "program not found" even when they are on PATH. Going
-    // through cmd /C is what makes the usual MCP server commands work here.
-    let mut c = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&cfg.command).args(&cfg.args);
-        c
+    let program = if cfg!(windows) {
+        let path = cfg.env.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")).map(|(_, v)| v.into());
+        resolve(&cfg.command, &path.or_else(|| std::env::var_os("PATH")).unwrap_or_default())
     } else {
-        let mut c = Command::new(&cfg.command);
-        c.args(&cfg.args);
-        c
+        cfg.command.clone().into()
     };
-    c.envs(&cfg.env).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut c = Command::new(program);
+    c.args(&cfg.args).envs(&cfg.env).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     c
+}
+
+/// On Windows npx/uvx/npm are .cmd shims, and CreateProcess cannot find those
+/// without their extension. Look a bare name up on `path` the way cmd does;
+/// std then runs a .cmd/.bat through cmd.exe with each argument escaped.
+/// `cmd /C <command> <args>` re-parsed them instead: a `&` in a DSN ran a command.
+// ponytail: only the extensions CreateProcess can start, not all of PATHEXT
+// (a .js or .py there needs a file association; write `node x.js` instead)
+fn resolve(cmd: &str, path: &std::ffi::OsStr) -> std::path::PathBuf {
+    let p = std::path::Path::new(cmd);
+    let dirs: Vec<std::path::PathBuf> =
+        if p.components().count() > 1 { vec![Default::default()] } else { std::env::split_paths(path).collect() };
+    dirs.iter()
+        .flat_map(|d| [".com", ".exe", ".bat", ".cmd"].map(|e| d.join(format!("{cmd}{e}"))))
+        .find(|f| f.is_file())
+        .unwrap_or_else(|| p.into())
 }
 
 /// Spawn one server and complete the handshake: initialize, initialized,
@@ -559,7 +570,16 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
     }
     let srv = connect(name, &spec)?;
     let n = srv.tools.len();
-    SERVERS.lock().map_err(|_| "mcp registry poisoned".to_string())?.push(Arc::new(srv));
+    let mut list = SERVERS.lock().map_err(|_| "mcp registry poisoned".to_string())?;
+    // /mcp connects off the UI thread, so the server may have been switched
+    // off, or on again by a second connect, while this one was handshaking
+    if !Config::load().mcp.get(name).is_some_and(|s| s.enabled) {
+        return Ok(format!("mcp {name} off"));
+    }
+    if list.iter().any(|x| x.name == name) {
+        return Ok(format!("mcp {name} already on"));
+    }
+    list.push(Arc::new(srv));
     Ok(format!("mcp {name} on: {n} tools"))
 }
 
@@ -609,6 +629,30 @@ mod tests {
         let long = "x".repeat(80);
         assert!(format!("mcp__s__{}", slug(&long)).len() > MAX_NAME);
         assert!(format!("mcp__s__{}", slug("ok")).len() <= MAX_NAME);
+    }
+
+    /// A bare shim name resolves to its .cmd on PATH, and an argument with
+    /// cmd metacharacters (a DSN's `&`) reaches the server whole. Through
+    /// `cmd /C` the `&` ended the argument and ran the rest as a command.
+    #[cfg(windows)]
+    #[test]
+    fn shim_args_reach_the_server_unchanged() {
+        let dir = std::env::current_dir().unwrap().join("target/rusti_mcp_shim");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("argecho.cmd"), "@echo %1\r\n").unwrap();
+        let found = resolve("argecho", dir.as_os_str());
+        assert_eq!(found, dir.join("argecho.cmd"));
+        assert_eq!(resolve("nope_not_here", dir.as_os_str()), std::path::Path::new("nope_not_here"), "left for std to report");
+        let dsn = "postgres://h/db?sslmode=require&application_name=rusti";
+        let cfg = McpServer { command: found.to_string_lossy().into(), args: vec![dsn.into()], ..fake() };
+        let out = build(&cfg).output().unwrap();
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains(dsn) && stderr.is_empty(), "stdout {stdout:?} stderr {stderr:?}");
+        // a server's own env PATH is where its bare command is looked up, as cmd did
+        let env = [("Path".to_string(), dir.to_string_lossy().into_owned())].into();
+        let cfg = McpServer { command: "argecho".into(), args: vec!["hi".into()], env, ..fake() };
+        let out = build(&cfg).output().unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("hi"), "{out:?}");
     }
 
     fn fake() -> McpServer {

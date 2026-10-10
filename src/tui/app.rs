@@ -1068,7 +1068,13 @@ pub fn ui_loop(
                 ai_core::Event::ToolEnd { id, summary, ok, ms, output } => tool_end(&mut app, id, summary, ok, ms, &output),
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,
-                ai_core::Event::Notice(t) => app.notice = Some((t, std::time::Instant::now())),
+                ai_core::Event::Notice(t) => {
+                    app.notice = Some((t, std::time::Instant::now()));
+                    // an /mcp toggle finished off-thread: show the server's new state
+                    if app.pick.as_ref().is_some_and(|p| p.kind == PickKind::Mcp) {
+                        pick_mcp(&mut app);
+                    }
+                }
                 ai_core::Event::Retry { attempt, of, wait_ms, err } => {
                     let line = format!("  ⚠ {err} — retry {attempt}/{of} in {:.1}s", wait_ms as f64 / 1000.0);
                     // one row that counts up, rather than a new line per attempt
@@ -1861,21 +1867,26 @@ fn pick_mcp(app: &mut App) {
     app.pick = Some(p);
 }
 
-/// Enter on an /mcp row. Turning a server ON connects it here and now, which
-/// can take seconds and can fail, so the outcome goes to the status line
-/// either way rather than being silently swallowed.
+/// Enter on an /mcp row. Turning a server ON connects it, which can take up
+/// to a minute per handshake step and can fail, so it runs on its own thread:
+/// the screen keeps drawing and Esc still works. The outcome arrives as a
+/// Notice, which also refreshes this list.
 fn toggle_mcp(app: &mut App, name: &str) {
     let on = crate::ai_core::mcp::status()
         .into_iter()
         .find(|(n, ..)| n == name)
         .map(|(_, enabled, ..)| enabled)
         .unwrap_or(false);
-    let msg = match crate::ai_core::mcp::set_enabled(name, !on) {
-        Ok(m) => m,
-        Err(e) => format!("mcp {name}: {e}"),
-    };
+    let msg = format!("mcp {name}: {}", if on { "switching off…" } else { "connecting…" });
     app.notice = Some((msg, std::time::Instant::now()));
-    pick_mcp(app);
+    let name = name.to_string();
+    std::thread::spawn(move || {
+        let msg = match crate::ai_core::mcp::set_enabled(&name, !on) {
+            Ok(m) => m,
+            Err(e) => format!("mcp {name}: {e}"),
+        };
+        ai_core::emit(ai_core::Event::Notice(msg));
+    });
 }
 
 /// Flip one segment and write it back to model.json. Load-then-save keeps the
@@ -1955,6 +1966,36 @@ mod tests {
         }
         assert!(a.lines.is_empty() && a.notice.is_none());
         assert_eq!(ai_core::mode(), ai_core::Mode::Manual, "an even number of toggles is back where it started");
+    }
+
+    /// /mcp on a server that never answers its handshake ran up to three
+    /// 60 s waits on the UI thread: no frame drawn, no key read. The toggle
+    /// must hand the connect off and return at once with a progress notice.
+    #[test]
+    fn mcp_toggle_does_not_wait_for_the_handshake() {
+        // RUSTI_HOME is set only in a child run of this one test, so the other
+        // tests in this process never see the temp home or its connect thread
+        if std::env::var_os("RUSTI_HOME").is_none() {
+            let home = std::env::temp_dir().join(format!("rusti_mcp_toggle_{}", std::process::id()));
+            std::fs::create_dir_all(&home).unwrap();
+            // sort reads stdin to EOF and prints nothing until then: a silent server
+            std::fs::write(home.join("config.json"), r#"{"mcp":{"silent":{"command":"sort","enabled":false}}}"#).unwrap();
+            let test = concat!(module_path!(), "::mcp_toggle_does_not_wait_for_the_handshake");
+            let test = test.split_once("::").unwrap().1;
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([test, "--exact", "--nocapture"])
+                .env("RUSTI_HOME", &home)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        }
+        let mut a = app();
+        let t = std::time::Instant::now();
+        toggle_mcp(&mut a, "silent");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "blocked {:?}", t.elapsed());
+        assert_eq!(a.notice.as_ref().map(|(m, _)| m.as_str()), Some("mcp silent: connecting…"));
     }
 
     fn app() -> App {
