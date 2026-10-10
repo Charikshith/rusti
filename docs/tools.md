@@ -9,6 +9,10 @@ fallback), `run_command` (with a timeout), `run_background` / `job_output` / `jo
 `todo`, `delegate`, `ask_user`, `web_fetch` (tags stripped) and `batch`; plus
 `tool_search` and `mcp__<server>__<tool>` from [MCP servers](extensions.md#mcp-servers).
 
+A call whose arguments are not valid JSON is refused back to the model with the parse error,
+so it can resend the call, instead of running on defaults; an `ask_user` with no question is
+refused the same way rather than shown to you as an empty one.
+
 ## read_file limits
 
 `read_file` returns at most 2000 lines or 50 KB per call. A cut read ends with

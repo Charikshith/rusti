@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn sse(delta: Value, finish: &str) -> String {
     format!("data: {}\n\ndata: [DONE]\n\n", json!({"choices": [{"delta": delta, "finish_reason": finish}]}))
@@ -13,11 +13,19 @@ fn sse(delta: Value, finish: &str) -> String {
 
 /// Serves `replies` in order on a fresh port; each request body goes to the channel.
 fn fake_llm(replies: Vec<String>) -> (String, mpsc::Receiver<Value>) {
+    fake_llm_held(replies.into_iter().map(|r| (r, false)).collect())
+}
+
+/// fake_llm where a reply can hold its socket open after the body, the way a
+/// stalled provider (or one that never closes after [DONE]) does. A held reply
+/// has no Content-Length, so only the socket closing would end its stream.
+fn fake_llm_held(replies: Vec<(String, bool)>) -> (String, mpsc::Receiver<Value>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://127.0.0.1:{}/v1/chat/completions", listener.local_addr().unwrap().port());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        for (reply, s) in replies.iter().zip(listener.incoming()) {
+        let mut held = Vec::new();
+        for ((reply, hold), s) in replies.iter().zip(listener.incoming()) {
             let mut s = s.unwrap();
             let (mut req, mut buf) = (Vec::new(), [0u8; 65536]);
             let body = loop {
@@ -31,8 +39,18 @@ fn fake_llm(replies: Vec<String>) -> (String, mpsc::Receiver<Value>) {
                 }
             };
             let _ = tx.send(body);
-            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
+            let len = if *hold { String::new() } else { format!("Content-Length: {}\r\n", reply.len()) };
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{len}Connection: close\r\n\r\n{reply}");
             s.write_all(resp.as_bytes()).unwrap();
+            if *hold {
+                held.push(s);
+            }
+        }
+        // out of replies: stop listening, so a further request is refused;
+        // held sockets stay open for as long as the test runs
+        drop(listener);
+        while !held.is_empty() {
+            std::thread::park();
         }
     });
     (url, rx)
@@ -80,6 +98,19 @@ fn until(rx: &mpsc::Receiver<Value>, ty: &str) -> Vec<Value> {
             return seen;
         }
     }
+}
+
+/// The first line within `t` whose type is one of `types`; None if none came.
+fn first_of(rx: &mpsc::Receiver<Value>, types: &[&str], t: Duration) -> Option<Value> {
+    let end = Instant::now() + t;
+    while let Some(left) = end.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(v) if types.contains(&v["type"].as_str().unwrap_or("")) => return Some(v),
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 #[test]
@@ -144,5 +175,68 @@ fn rpc_abort_right_after_accepted_cancels_that_run() {
     let end = until(&rx, "task_end").pop().unwrap();
     assert_eq!((end["ok"].clone(), end["error"].clone()), (json!(false), json!("interrupted")));
     drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
+/// ask_user whose arguments hold no usable question (empty, null, or JSON that
+/// does not parse, here a raw newline inside the string) is refused back to the
+/// model. Asked, it was a question with no text that sat unseen under
+/// "working…" until someone happened to type. A batch whose arguments do not
+/// parse is refused with the parse error too, not as a batch with no calls.
+#[test]
+fn ask_user_without_a_usable_question_is_refused_not_asked() {
+    let cases = [("ask_user", "", "non-empty"), ("ask_user", "null", "non-empty"),
+        ("ask_user", "{\"question\": \"push where?\nmain or feature\"}", "not valid JSON"),
+        ("batch", "{\"calls\": [{\"name\": \"ask_user\", \"args\": {\"question\": \"a\nb\"}}]}", "not valid JSON")];
+    for (name, raw, why) in cases {
+        let call = sse(json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+            "function": {"name": name, "arguments": raw}}]}), "tool_calls");
+        let (url, bodies) = fake_llm(vec![call, sse(json!({"content": "ok"}), "stop")]);
+        let (mut child, rx) = spawn("rpc_ask_args", &url, &["--rpc"]);
+        let mut stdin = child.stdin.take().unwrap();
+        until(&rx, "session");
+        writeln!(stdin, "{}", json!({"id": 1, "type": "prompt", "text": "git push"})).unwrap();
+        let ev = first_of(&rx, &["ask", "task_end"], Duration::from_secs(10)).expect("the run neither asked nor ended");
+        assert_eq!(ev["type"], "task_end", "arguments {raw:?}: asked instead of refusing: {ev}");
+        drop(stdin);
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+        let second = bodies.iter().nth(1).expect("the refusal went back to the model");
+        let result = second["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(result["role"], "tool");
+        assert!(result["content"].as_str().unwrap().contains(why), "arguments {raw:?}: {result}");
+    }
+}
+
+/// A provider that stops mid-reply and keeps the socket open: abort (Esc in the
+/// TUI) must end the run at once, not whenever the next byte arrives.
+#[test]
+fn abort_ends_a_stalled_stream() {
+    let partial = format!("data: {}\n\n", json!({"choices": [{"delta": {"content": "I'll use a shell command instead."}, "finish_reason": null}]}));
+    let (url, _) = fake_llm_held(vec![(partial, true)]);
+    let (mut child, rx) = spawn("rpc_stall", &url, &["--rpc"]);
+    let mut stdin = child.stdin.take().unwrap();
+    until(&rx, "session");
+    writeln!(stdin, "{}", json!({"id": 1, "type": "prompt", "text": "add the models"})).unwrap();
+    until(&rx, "text_delta");
+    writeln!(stdin, "{}", json!({"id": 2, "type": "abort"})).unwrap();
+    let Some(end) = first_of(&rx, &["task_end"], Duration::from_secs(5)) else {
+        let _ = child.kill();
+        panic!("abort left the run parked on the silent stream");
+    };
+    assert_eq!((end["ok"].clone(), end["error"].clone()), (json!(false), json!("interrupted")));
+    drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
+/// A reply is over at [DONE], whether or not the server then closes the socket.
+#[test]
+fn a_done_line_ends_the_reply_without_waiting_for_close() {
+    let (url, _) = fake_llm_held(vec![(sse(json!({"content": "All done."}), "stop"), true)]);
+    let (mut child, rx) = spawn("json_done_open", &url, &["--json", "hi"]);
+    let Some(end) = first_of(&rx, &["task_end"], Duration::from_secs(5)) else {
+        let _ = child.kill();
+        panic!("the reply was complete but the run waited for the socket to close");
+    };
+    assert_eq!((end["ok"].clone(), end["answer"].clone()), (json!(true), json!("All done.")));
     assert_eq!(child.wait().unwrap().code(), Some(0));
 }
