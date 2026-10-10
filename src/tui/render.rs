@@ -462,17 +462,20 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
         // prose at full brightness. The sentinel is as wide as what replaces it
         b'n' => return format!("  {dim}│{RESET} {think}{}{RESET}", s.strip_prefix("  ┆ ").unwrap_or(s)),
         // a failed tool sits on the fail tint (band() in draw); its text stays
-        // readable rather than dim, since it is the row that needs reading
+        // readable rather than dim, since it is the row that needs reading, and
+        // takes the tint's own colour: the terminal's default may not suit it
         b'x' => {
+            let x = theme::tints().fail_text;
             return match s.strip_prefix("  ✗ ") {
-                Some(rest) => format!("{f}▎{RESET} {f}✗{RESET} {rest}", f = t.fail),
-                None => format!("  {s}"),
+                Some(rest) => format!("{f}▎{RESET} {f}✗{RESET} {x}{rest}{RESET}", f = t.fail),
+                None => format!("  {x}{s}{RESET}"),
             };
         }
         b'a' => {
+            let x = theme::tints().ask_text;
             return match s.strip_prefix("  ? ") {
-                Some(rest) => format!("{w}▎{RESET} {BOLD}?{RESET} {rest}", w = t.warn),
-                None => format!("  {s}"),
+                Some(rest) => format!("{w}▎{RESET} {BOLD}{x}?{RESET} {x}{rest}{RESET}", w = t.warn),
+                None => format!("  {x}{s}{RESET}"),
             };
         }
         b's' => return format!("{dim}{s}{RESET}"),
@@ -987,6 +990,12 @@ mod tests {
         assert!(!first("  ✓ Cargo.toml  0ms").contains(BOLD), "a finished tool is not bold");
         assert!(first("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
         assert!(first("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
+        // tinted rows pin their text colour on every wrapped row, never the
+        // terminal's default foreground, which may not read on the tint
+        let long = format!("  ✗ run {}", "word ".repeat(30));
+        let fail = rows(&long);
+        assert!(fail.len() > 1 && fail.iter().all(|r| r.contains(theme::tints().fail_text)), "{fail:?}");
+        assert!(rows(&format!("  ? run {}  allow?", "word ".repeat(30))).iter().all(|r| r.contains(theme::tints().ask_text)));
         assert!(first("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
         assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");

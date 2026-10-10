@@ -12,7 +12,7 @@
 // inheriting whatever they leave out from a `base` theme:
 //   {"name": "my-theme", "note": "…", "base": "nord",
 //    "colors": {"user": "#88c0d0", "ok": "38;5;144", "think": "3;38;5;103"},
-//    "tints": {"fail": "#2a1618", "ask": "#2a2414"}}
+//    "tints": {"fail": "#2a1618", "ask": "#2a2414", "fail_text": "#e4e4e4", "ask_text": "#e4e4e4"}}
 // A value is #rrggbb (24-bit colour) or raw SGR parameters. The active
 // theme's file is re-read when it changes, so editing it restyles live.
 
@@ -43,9 +43,12 @@ pub struct Theme {
     syn_str: Option<&'static str>,
     syn_num: Option<&'static str>,
     syn_bool: Option<&'static str>,
-    // A theme file's row backgrounds; None keeps the light/dark default.
+    // A theme file's row backgrounds and the text on them; None keeps the
+    // light/dark default.
     tint_fail: Option<&'static str>,
     tint_ask: Option<&'static str>,
+    tint_fail_text: Option<&'static str>,
+    tint_ask_text: Option<&'static str>,
 }
 
 impl Theme {
@@ -92,7 +95,7 @@ macro_rules! theme {
         Theme {
             name: $name, note: $note,
             syn_key: $k, syn_str: $s, syn_num: $n, syn_bool: $b,
-            tint_fail: None, tint_ask: None,
+            tint_fail: None, tint_ask: None, tint_fail_text: None, tint_ask_text: None,
             $($f: concat!("\x1b[", $c, "m")),+
         }
     };
@@ -165,19 +168,27 @@ static CURRENT: RwLock<&'static Theme> = RwLock::new(&THEMES[0]);
 /// Everything else gets at most a coloured edge. Kept apart from the palettes because what reads as subtle
 /// depends on the terminal's own background, which rusti cannot see: a pale
 /// wash on white is a dark block on black. "light": true in the config picks
-/// the pale set.
+/// the pale set. Each fill carries its own text colour: left to the terminal,
+/// the text is its default foreground, and "light" left on under a dark
+/// terminal put light grey on pale pink (1.3:1).
 #[derive(Clone, Copy)]
 pub struct Tints {
     pub fail: &'static str,
     pub ask: &'static str,
+    pub fail_text: &'static str,
+    pub ask_text: &'static str,
 }
 const DARK: Tints = Tints {
     fail: "\x1b[48;2;42;22;24m",
     ask: "\x1b[48;2;42;36;20m",
+    fail_text: "\x1b[38;2;228;228;228m",
+    ask_text: "\x1b[38;2;228;228;228m",
 };
 const LIGHT: Tints = Tints {
     fail: "\x1b[48;2;249;230;230m",
     ask: "\x1b[48;2;251;241;214m",
+    fail_text: "\x1b[38;2;28;28;28m",
+    ask_text: "\x1b[38;2;28;28;28m",
 };
 static LIGHT_BG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -187,9 +198,17 @@ pub fn set_light(on: bool) {
 
 /// The light/dark row tints, with the active theme file's own over them.
 pub fn tints() -> Tints {
-    let base = if LIGHT_BG.load(Ordering::Relaxed) { LIGHT } else { DARK };
-    let t = current();
-    Tints { fail: t.tint_fail.unwrap_or(base.fail), ask: t.tint_ask.unwrap_or(base.ask) }
+    tints_for(current(), LIGHT_BG.load(Ordering::Relaxed))
+}
+
+fn tints_for(t: &Theme, light: bool) -> Tints {
+    let base = if light { LIGHT } else { DARK };
+    Tints {
+        fail: t.tint_fail.unwrap_or(base.fail),
+        ask: t.tint_ask.unwrap_or(base.ask),
+        fail_text: t.tint_fail_text.unwrap_or(base.fail_text),
+        ask_text: t.tint_ask_text.unwrap_or(base.ask_text),
+    }
 }
 
 pub fn current() -> &'static Theme {
@@ -294,11 +313,14 @@ fn parse(text: &str, stem: &str, known: &dyn Fn(&str) -> Option<&'static Theme>)
         }
     }
     for (row, val) in section("tints") {
-        let c = sgr(val, 48).map_err(|e| format!("tints.{row}: {e}"))?;
+        let layer = if row.ends_with("_text") { 38 } else { 48 };
+        let c = sgr(val, layer).map_err(|e| format!("tints.{row}: {e}"))?;
         match row.as_str() {
             "fail" => t.tint_fail = Some(c),
             "ask" => t.tint_ask = Some(c),
-            r => return Err(format!("no tint called {r} (tints: fail ask)")),
+            "fail_text" => t.tint_fail_text = Some(c),
+            "ask_text" => t.tint_ask_text = Some(c),
+            r => return Err(format!("no tint called {r} (tints: fail ask fail_text ask_text)")),
         }
     }
     Ok(t)
@@ -418,18 +440,52 @@ mod tests {
         assert_eq!(index_of("no-such-theme"), None);
     }
 
+    /// A failed or asking row's text must read on its own fill in every theme,
+    /// light flag on or off: the fill used to leave the text to the terminal,
+    /// and a stale "light" put its light grey on pale pink at 1.3:1.
+    #[test]
+    fn tinted_rows_are_readable_in_every_theme_and_mode() {
+        // WCAG 2 contrast of two 24-bit SGR colours ("\x1b[38;2;r;g;bm")
+        let rgb = |sgr: &str| -> [f64; 3] {
+            let p: Vec<f64> = sgr.trim_start_matches("\x1b[").trim_end_matches('m').split(';')
+                .skip(2).map(|v| v.parse().unwrap()).collect();
+            assert_eq!(p.len(), 3, "not a 24-bit colour: {sgr:?}");
+            [p[0], p[1], p[2]]
+        };
+        let lum = |c: [f64; 3]| -> f64 {
+            let l = c.map(|v| { let v = v / 255.0; if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) } });
+            0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
+        };
+        let ratio = |a: &str, b: &str| {
+            let (a, b) = (lum(rgb(a)), lum(rgb(b)));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        for t in THEMES {
+            for light in [false, true] {
+                let k = tints_for(t, light);
+                for (row, text, bg) in [("fail", k.fail_text, k.fail), ("ask", k.ask_text, k.ask)] {
+                    let r = ratio(text, bg);
+                    assert!(r >= 4.5, "{} light={light}: {row} row text is {r:.2}:1 on its fill", t.name);
+                }
+            }
+        }
+        assert_eq!((DARK.fail, DARK.fail_text), ("\x1b[48;2;42;22;24m", "\x1b[38;2;228;228;228m"), "the captain's pick: #2A1618 under #E4E4E4");
+        assert_eq!((DARK.ask, DARK.ask_text), ("\x1b[48;2;42;36;20m", "\x1b[38;2;228;228;228m"));
+    }
+
     /// F15: a theme file is rusti's roles over a base, values as hex or SGR;
     /// a typo fails the file with the reason instead of half-applying it.
     #[test]
     fn theme_files_load_inherit_and_hot_reload() {
         let none = |_: &str| None;
         let nord = |n: &str| THEMES.iter().find(|t| t.name == n);
-        let t = parse(r##"{"name":"mine","note":"n","base":"nord","colors":{"user":"#88c0d0","ok":"38;5;144","key":"1;33"},"tints":{"fail":"#2a1618"}}"##, "f", &nord).unwrap();
+        let t = parse(r##"{"name":"mine","note":"n","base":"nord","colors":{"user":"#88c0d0","ok":"38;5;144","key":"1;33"},"tints":{"fail":"#2a1618","ask_text":"#1c1c1c"}}"##, "f", &nord).unwrap();
         let base = nord("nord").unwrap();
         assert_eq!((t.name, t.note), ("mine", "n"));
         assert_eq!((t.user, t.ok, t.key()), ("\x1b[38;2;136;192;208m", "\x1b[38;5;144m", "\x1b[1;33m"));
         assert_eq!((t.info, t.think, t.dim), (base.info, base.think, base.dim), "what the file leaves out comes from its base");
         assert_eq!((t.tint_fail, t.tint_ask), (Some("\x1b[48;2;42;22;24m"), None), "a tint is a background");
+        assert_eq!((t.tint_ask_text, t.tint_fail_text), (Some("\x1b[38;2;28;28;28m"), None), "a tint's _text is a foreground");
 
         let t = parse(r#"{"colors":{"user":"38;5;37"}}"#, "teal-ish", &none).unwrap();
         assert_eq!((t.name, t.dim), ("teal-ish", THEMES[0].dim), "no name: the file's; no base: the default");

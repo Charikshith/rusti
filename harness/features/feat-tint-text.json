@@ -1,0 +1,13 @@
+{
+  "id": "feat-tint-text",
+  "name": "Failed and asking rows pin their own text colour",
+  "description": "Failed (✗) and permission-ask (?) rows set a background but left the text to the terminal's default foreground. On a dark terminal with a stale \"light\": true, that drew light grey on pale pink (1.34:1). Tints now carry fail_text / ask_text beside the fills: DARK is #2A1618 / #2A2414 under #E4E4E4 (the captain's pick, option B on the colour board), and LIGHT is the pale fills under #1C1C1C. They apply to the header and every wrapped row. Theme files can set tints.fail_text / ask_text.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: tui::theme::tests::tinted_rows_are_readable_in_every_theme_and_mode (every THEMES entry, light on and off, fail and ask text-on-fill >= 4.5:1, DARK pinned to the pick); tui::render::tests status-marker test checks every wrapped fail/ask row carries the tint's text colour; theme_files_load_inherit_and_hot_reload parses ask_text as a foreground.",
+  "decisions": [
+    "The text colour lives with the fill in Tints, not in each palette: what reads depends on the fill, and the fill is chosen by the light flag, not by the theme.",
+    "The ✗ / ▎ glyph keeps the theme's fail colour; only the row text changed.",
+    "Light detection was not added: rusti still cannot see the terminal background, so the flag stays a setting and the docs say it is only for light terminals."
+  ]
+}
