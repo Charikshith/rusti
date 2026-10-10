@@ -1,6 +1,7 @@
 // ai_core: the agent engine — async LLM client, tools, and the agent loop.
 
 pub mod llm;
+pub mod hooks;
 pub mod mcp;
 pub mod tools;
 
@@ -158,9 +159,19 @@ async fn compact(client: &llm::Client, session: &mut Session, cancel: &AtomicBoo
     emit(Event::Text(format!("  ⟳ compacting context: {} messages → summary", cut - 1)));
     // ponytail: the summary streams into the transcript like any reply; a collapsed block would need TUI work
     let mut msgs: Vec<Value> = path[..cut].iter().map(|e| e.to_message()).collect();
-    msgs.push(json!({"role": "user", "content": COMPACT_PROMPT}));
-    let res = client.chat_stream(&msgs, None, &llm::cache_key(&session.path), cancel).await?;
-    let summary = format!("[Summary of the conversation so far; earlier messages were compacted]\n{}", res.content.trim());
+    let text = match hooks::pre_compact(hooks::of("pre_compact"), &session.path, &msgs) {
+        Err(e) => {
+            emit(Event::Text(format!("  ⚠ compaction skipped: {e}")));
+            return Ok(());
+        }
+        Ok(Some(own)) => own,
+        Ok(None) => {
+            msgs.push(json!({"role": "user", "content": COMPACT_PROMPT}));
+            client.chat_stream(&msgs, None, &llm::cache_key(&session.path), cancel).await?.content
+        }
+    };
+    let summary = format!("[Summary of the conversation so far; earlier messages were compacted]
+{}", text.trim());
     let mut head = Entry::new("user", summary);
     // tool_search loads above the cut would vanish with their entries
     head.loaded = path[..cut].iter().flat_map(|e| e.loaded.clone()).collect();
@@ -220,7 +231,8 @@ permissions and --yolo (readme.md § safety), slash commands, keys, themes, stat
 sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers, deferred tools and tool_search (readme.md § MCP servers), \
 AGENTS.md, SYSTEM.md, --system-prompt (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
-/reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
+/reload (readme.md § /reload), prompt templates, skills, theme files, hooks, MCP prompts (readme.md § extensions), \
+how rusti is built (readme.md § architecture)";
 
 fn docs_section(dir: &str) -> String {
     format!(
@@ -352,6 +364,11 @@ fn build_system_prompt(sys: Option<&str>, app: &[String]) -> String {
     if let Some(d) = docs_block() {
         p.push_str("\n\n");
         p.push_str(d);
+    }
+    // names, descriptions and paths only: the model reads a skill when it needs it
+    if let Some(s) = crate::resources::skills_section(&crate::resources::skills(&mut Vec::new())) {
+        p.push_str("\n\n");
+        p.push_str(&s);
     }
     if let Some((name, body)) = instructions_from(std::path::Path::new(".")) {
         p.push_str(&format!("\n\n# Project instructions (from {name} in the working directory)\n{body}"));
@@ -564,13 +581,17 @@ async fn run_call(
     let mut loads = Vec::new();
     let (ok, result) = match permit {
         Err(e) => (false, e),
-        Ok(()) if name == "tool_search" => {
-            let limit = args["limit"].as_u64().map_or(5, |n| n as usize);
-            let (text, names) = mcp::search(args["query"].as_str().unwrap_or(""), limit, loaded);
-            loads = names;
-            (true, text)
+        Ok(()) => {
+            let (ok, out) = if name == "tool_search" {
+                let limit = args["limit"].as_u64().map_or(5, |n| n as usize);
+                let (text, names) = mcp::search(args["query"].as_str().unwrap_or(""), limit, loaded);
+                loads = names;
+                (true, text)
+            } else {
+                dispatch(client, name, args, cancel).await
+            };
+            hooks::post_tool(hooks::of("post_tool"), name, args, ok, out)
         }
-        Ok(()) => dispatch(client, name, args, cancel).await,
     };
     // carried on success too: the TUI hides it behind Ctrl+O rather than
     // throwing it away. fail_tail caps what is kept at 8 lines
@@ -671,6 +692,37 @@ fn attach(u: &mut Entry, paths: &[String]) {
     });
 }
 
+/// The user_prompt hooks on a message the user typed; a rewrite is said
+/// out loud, since the transcript shows what was typed.
+fn prompt_hook(text: &str) -> Result<String, String> {
+    let out = hooks::user_prompt(hooks::of("user_prompt"), text)?;
+    if out != text {
+        emit(Event::Text("  · a user_prompt hook rewrote this message".into()));
+    }
+    Ok(out)
+}
+
+/// Sessions the session_start hooks already ran for in this process.
+static STARTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The session_start hooks, once per session per run: what they return rides
+/// on that turn's user entry, so it stays in the history like git context.
+fn session_start(session: &Session) -> Option<String> {
+    let hooks = hooks::of("session_start");
+    if hooks.is_empty() || STARTED.lock().unwrap().contains(&session.path) {
+        return None;
+    }
+    STARTED.lock().unwrap().push(session.path.clone());
+    let resumed = session.path().iter().any(|e| e.role == "user");
+    match hooks::session_start(hooks, &session.path, resumed) {
+        Ok(c) => c.map(|c| format!("# Session context (from a session_start hook)\n{}", c.trim())),
+        Err(e) => {
+            emit(Event::Text(format!("  ⚠ {e}")));
+            None
+        }
+    }
+}
+
 pub async fn run_agent(
     client: &llm::Client,
     session: &mut Session,
@@ -689,16 +741,20 @@ pub async fn run_agent(
             sys.content = sys_prompt;
         }
     }
+    let top = DEPTH.load(Ordering::Relaxed) == 0;
     if !task.is_empty() {
+        // a sub-agent's task is the parent model's words, not the user's
+        let task = if top { prompt_hook(task).map_err(|e| format!("message not sent: {e}"))? } else { task.to_string() };
         let plan_was = session.path().iter().rev().find_map(|e| e.context.as_deref()).is_some_and(|c| c.contains(PLAN_ON));
-        let mut u = Entry::new("user", task.into());
-        u.context = turn_context(plan_mode(), plan_was);
+        let started = if top { session_start(session) } else { None };
+        let mut u = Entry::new("user", task);
+        u.context = [started, turn_context(plan_mode(), plan_was)].into_iter().flatten().reduce(|a, b| format!("{a}\n\n{b}"));
         attach(&mut u, images);
         // branch from the current leaf (or root); resume/--tree set active
         session.add(u, session.active.clone());
     }
     let mut last_prompt = 0u64;
-    if DEPTH.load(Ordering::Relaxed) == 0 {
+    if top {
         tools::undo_begin_turn(); // a delegate sub-run is part of the same turn
     }
     let key = llm::cache_key(&session.path);
@@ -748,7 +804,21 @@ pub async fn run_agent(
                 let permit = match name.as_str() {
                     "batch" => Err("batch cannot nest; list the calls directly".into()),
                     "" => Err("this call has no `name`; each entry needs {name, args}".into()),
-                    _ => permitted(&name, &summary).await,
+                    // pre_tool after the gate: a hook can refuse what was allowed, never allow what was refused
+                    _ => permitted(&name, &summary).await.and_then(|()| {
+                        hooks::pre_tool(hooks::of("pre_tool"), &name, &args)
+                            .map_err(|e| format!("a pre_tool hook refused {name}: {e}. Do not retry it."))
+                    }).map(Some),
+                };
+                let (args, permit) = match permit {
+                    Ok(Some(rewritten)) => {
+                        if rewritten != args {
+                            emit(Event::Text(format!("  · a pre_tool hook rewrote this call: {}", tool_summary(&name, &rewritten))));
+                        }
+                        (rewritten, Ok(()))
+                    }
+                    Ok(None) => (args, Ok(())),
+                    Err(e) => (args, Err(e)),
                 };
                 calls.push((name, args, id, summary, permit));
             }
@@ -803,11 +873,22 @@ This message carries that file as an image part.                  If you cannot 
         // steers go here for the same reason as the image, all at once as one
         // user entry; a sub-agent leaves them for its parent, an interrupted
         // turn for the TUI's follow-up queue
-        let steered = if DEPTH.load(Ordering::Relaxed) == 0 && !cancel.load(Ordering::Relaxed) {
+        let steered = if top && !cancel.load(Ordering::Relaxed) {
             std::mem::take(&mut *STEER.lock().unwrap())
         } else {
             vec![]
         };
+        // a steer is the user typing too, so it passes the same user_prompt hooks
+        let steered: Vec<(String, Vec<String>)> = steered
+            .into_iter()
+            .filter_map(|(t, imgs)| match prompt_hook(&t) {
+                Ok(t) => Some((t, imgs)),
+                Err(e) => {
+                    emit(Event::Text(format!("  ⚠ steer not sent: {e}")));
+                    None
+                }
+            })
+            .collect();
         if !steered.is_empty() {
             let text = steered.iter().map(|s| s.0.as_str()).collect::<Vec<_>>().join("\n\n");
             let mut images: Vec<String> = Vec::new();

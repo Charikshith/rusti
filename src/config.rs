@@ -15,8 +15,9 @@ const PROJECT_KEYS: [&str; 3] = ["allow", "max_iters", "context"];
 /// model.json must not get them for free: they apply only once the folder is
 /// trusted (`trusted()`), else load holds them aside and save writes them back.
 pub const GATED_KEYS: [&str; 6] = ["mcp", "shell", "shell_command_prefix", "hooks", "read_allow", "allow"];
-/// ./.rusti entries the same gate covers. ponytail: none is loaded yet; the
-/// features that add them ask `trusted()` before reading any.
+/// ./.rusti entries the same gate covers; their loaders (resources.rs, the
+/// theme table) ask `trusted()` before reading any. ponytail: SYSTEM.md is
+/// listed but not read from the project yet.
 pub const GATED_RESOURCES: [&str; 4] = ["prompts", "skills", "themes", "SYSTEM.md"];
 
 static TRUSTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -39,6 +40,10 @@ pub fn gated(dir: &std::path::Path) -> Vec<String> {
         .map(|p| GATED_KEYS.iter().filter(|k| p.contains_key(**k)).map(|k| k.to_string()).collect())
         .unwrap_or_default();
     out.extend(GATED_RESOURCES.iter().filter(|r| dir.join(".rusti").join(r).exists()).map(|r| format!(".rusti/{r}")));
+    // the Agent Skills folder other agents share is a project skill source too
+    if dir.join(".agents").join("skills").exists() {
+        out.push(".agents/skills".into());
+    }
     out
 }
 
@@ -86,7 +91,7 @@ pub fn decide_trust(
         return true;
     }
     let Some(ask) = ask.filter(|_| !found.is_empty()) else { return false };
-    let (keys, res): (Vec<&str>, Vec<&str>) = found.iter().map(|s| s.as_str()).partition(|s| !s.starts_with(".rusti/"));
+    let (keys, res): (Vec<&str>, Vec<&str>) = found.iter().map(|s| s.as_str()).partition(|s| !s.starts_with('.'));
     let mut what = Vec::new();
     if !keys.is_empty() {
         what.push(format!("model.json sets {}", keys.join(", ")));
@@ -191,6 +196,20 @@ fn yes() -> bool {
     true
 }
 
+/// One hook: a command run in the configured shell with the event as JSON on
+/// stdin, answering with a JSON decision on stdout (see ai_core/hooks.rs).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Hook {
+    pub command: String,
+    /// Seconds before it is killed, which counts as a failure.
+    #[serde(default = "hook_timeout")]
+    pub timeout: u64,
+}
+
+fn hook_timeout() -> u64 {
+    30
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -224,6 +243,10 @@ pub struct Config {
     /// folder). Unset: Git Bash, then bash on PATH, then cmd /C or sh -c.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// Event name -> hooks run in order: user_shell, pre_tool, post_tool,
+    /// user_prompt, session_start, pre_compact.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hooks: std::collections::BTreeMap<String, Vec<Hook>>,
     /// Put in front of every shell command, on its own line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_command_prefix: Option<String>,
@@ -613,15 +636,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rusti_trust_ask_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("proj").join(".rusti").join("skills")).unwrap();
+        std::fs::create_dir_all(dir.join("proj").join(".agents").join("skills")).unwrap();
         let proj = dir.join("proj");
         std::fs::write(proj.join("model.json"), r#"{"mcp":{},"shell":"x","allow":[],"theme":"nord"}"#).unwrap();
         let tf = dir.join("home").join("trust.json");
         let found = gated(&proj);
-        assert_eq!(found, ["mcp", "shell", "allow", ".rusti/skills"], "theme is not gated");
+        assert_eq!(found, ["mcp", "shell", "allow", ".rusti/skills", ".agents/skills"], "theme is not gated");
         let say = |a: &'static str| move |_: &str| Some(a.to_string());
         let mut asked = String::new();
         decide_trust(&proj, &tf, &found, false, Some(&mut |q: &str| { asked = q.to_string(); None }));
-        assert_eq!(asked, "This folder's model.json sets mcp, shell, allow and has .rusti/skills. Trust it? [y]es / [N]o / [a]lways");
+        assert_eq!(asked, "This folder's model.json sets mcp, shell, allow and has .rusti/skills, .agents/skills. Trust it? [y]es / [N]o / [a]lways");
 
         assert!(!decide_trust(&proj, &tf, &found, false, None), "piped/one-shot: untrusted");
         assert!(decide_trust(&proj, &tf, &found, true, None), "--trust trusts without asking");
