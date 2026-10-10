@@ -347,9 +347,10 @@ pub struct App {
     pub scroll_up: usize,     // transcript lines pinned above the bottom
     pub history: Vec<String>,
     pub hist_idx: Option<usize>,
-    pub tool_line: Option<usize>, // index of the active "⠋" tool line
+    /// Running "⠋" rows as (ToolStart id, line index, waited on the user's
+    /// permission). Parallel calls settle in any order, so each keeps its own.
+    pub tool_rows: Vec<(u64, usize, bool)>,
     pub ask_line: Option<usize>,  // index of the pending question's line
-    pub hand: bool,               // the running tool waited on the user's permission
     pub fold: Option<(usize, Vec<String>)>, // the row a run of reads folds into, and its files
     pub retry_line: Option<usize>, // index of the counting "⚠ … retry n/3" line
     /// Transient confirmation shown on the status line. Session bookkeeping
@@ -415,7 +416,7 @@ impl App {
             lines, current: String::new(),
             ask: None, input: String::new(), cursor: 0, done: true, model, session,
             msg_num, spinner: 0, scroll_up: 0,
-            history, hist_idx: None, tool_line: None, ask_line: None, hand: false, fold: None, retry_line: None,
+            history, hist_idx: None, tool_rows: Vec::new(), ask_line: None, fold: None, retry_line: None,
             notice: None, exit_armed: None,
             footer,
             turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
@@ -913,15 +914,14 @@ pub fn ui_loop(
                     app.current.push_str(&t);
                 }
                 ai_core::Event::Text(t) => { app.flush(); app.lines.push(t); }
-                ai_core::Event::ToolStart(t) => {
+                ai_core::Event::ToolStart { id, summary } => {
                     narrate(&mut app);
                     app.flush();
                     app.thinking = false;
-                    app.hand = false;
-                    app.lines.push(format!("  ⠋ {t}"));
-                    app.tool_line = Some(app.lines.len() - 1);
+                    app.lines.push(format!("  ⠋ {summary}"));
+                    app.tool_rows.push((id, app.lines.len() - 1, false));
                 }
-                ai_core::Event::ToolEnd { summary, ok, ms, output } => tool_end(&mut app, summary, ok, ms, &output),
+                ai_core::Event::ToolEnd { id, summary, ok, ms, output } => tool_end(&mut app, id, summary, ok, ms, &output),
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,
                 ai_core::Event::Notice(t) => app.notice = Some((t, std::time::Instant::now())),
@@ -974,12 +974,15 @@ pub fn ui_loop(
                     // A permission prompt belongs to the tool row it gates: that row
                     // turns into the question and back, leaving nothing behind. A
                     // question the model asks (no fixed choices) keeps its own row.
-                    let tool = app.tool_line.filter(|&i| !choices.is_empty() && i < app.lines.len());
+                    // permissions are asked right after each ToolStart, so it is the newest row
+                    let tool = app.tool_rows.last().map(|r| r.1).filter(|&i| !choices.is_empty() && i < app.lines.len());
                     match tool.and_then(|i| app.lines[i].strip_prefix("  ⠋ ").map(|t| (i, t.to_string()))) {
                         Some((i, t)) => {
                             app.lines[i] = format!("  ? {t}  allow?");
                             app.ask_line = Some(i);
-                            app.hand = true;
+                            if let Some(r) = app.tool_rows.last_mut() {
+                                r.2 = true;
+                            }
                         }
                         None => {
                             app.lines.push(format!("  ℹ {question}"));
@@ -1182,9 +1185,11 @@ fn narrate(app: &mut App) {
 /// Settle a tool's row: ✓ or ✗ with the reason, time only when it is worth
 /// reading, ✋ when the user approved it. Output stays behind Ctrl+O. A run of
 /// successful reads folds into one row, since each on its own says little.
-pub fn tool_end(app: &mut App, summary: String, ok: bool, ms: u128, output: &str) {
+pub fn tool_end(app: &mut App, id: u64, summary: String, ok: bool, ms: u128, output: &str) {
     let time = if ms >= 100 { format!("  {}", ai_core::took(ms)) } else { String::new() };
-    let hand = if std::mem::take(&mut app.hand) { "  ✋" } else { "" };
+    let pos = app.tool_rows.iter().position(|r| r.0 == id);
+    let (row, hand) = pos.map(|p| app.tool_rows.remove(p)).map_or((None, false), |r| (Some(r.1), r.2));
+    let hand = if hand { "  ✋" } else { "" };
     let tail: Vec<String> = ai_core::fail_tail(output).into_iter().map(|r| format!("{HIDDEN}{r}")).collect();
     let line = if ok {
         format!("  ✓ {summary}{time}{hand}")
@@ -1193,7 +1198,7 @@ pub fn tool_end(app: &mut App, summary: String, ok: bool, ms: u128, output: &str
         let more = if tail.len() > 1 { "  (ctrl+o)" } else { "" };
         format!("  ✗ {summary}  {why}{time}{hand}{more}")
     };
-    let row = app.tool_line.take().filter(|&i| i < app.lines.len() && app.lines[i].starts_with("  ⠋ "));
+    let row = row.filter(|&i| i < app.lines.len() && app.lines[i].starts_with("  ⠋ "));
     let read = summary.strip_prefix("read ").filter(|_| ok).map(|p| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string());
     let fold = app.fold.take();
     match (row, read) {
@@ -1203,15 +1208,40 @@ pub fn tool_end(app: &mut App, summary: String, ok: bool, ms: u128, output: &str
             files.push(file);
             app.lines[j] = format!("  ✓ read {} files  {}", files.len(), files.join(" · "));
             app.lines.remove(i);
+            shift_rows(app, i, -1);
             app.fold = Some((j, files));
+            insert_rows(app, i, tail);
         }
         (Some(i), read) => {
             app.lines[i] = line;
             app.fold = read.map(|f| (i, vec![f]));
+            insert_rows(app, i + 1, tail);
         }
-        (None, _) => app.lines.push(line),
+        (None, _) => {
+            app.lines.push(line);
+            app.lines.extend(tail);
+        }
     }
-    app.lines.extend(tail);
+}
+
+/// The output rows go right under their own tool row, not at the end, where
+/// a parallel call's row could still be running below it.
+fn insert_rows(app: &mut App, at: usize, rows: Vec<String>) {
+    let n = rows.len() as isize;
+    app.lines.splice(at..at, rows);
+    shift_rows(app, at, n);
+}
+
+/// Every live row index at or past `at` moves by `by`, after rows there were
+/// inserted (+) or removed (-).
+fn shift_rows(app: &mut App, at: usize, by: isize) {
+    let live = app.tool_rows.iter_mut().map(|r| &mut r.1);
+    let others = [&mut app.ask_line, &mut app.retry_line].into_iter().flatten();
+    for i in live.chain(others).chain(app.fold.as_mut().map(|f| &mut f.0)) {
+        if *i >= at {
+            *i = i.saturating_add_signed(by);
+        }
+    }
 }
 
 /// The cursor one line up (-1) or down (+1) in a multi-line input, keeping the
@@ -1308,13 +1338,7 @@ fn start_task(app: &mut App, job_tx: &Sender<Job>, raw: String) {
 fn drop_mcp_ok(app: &mut App) {
     let before = app.lines.len();
     app.lines.retain(|l| !(l.starts_with("  ✓ mcp ") && l.ends_with(" tools")));
-    let n = before - app.lines.len();
-    for i in [&mut app.tool_line, &mut app.ask_line, &mut app.retry_line].into_iter().flatten() {
-        *i -= n;
-    }
-    if let Some((i, _)) = &mut app.fold {
-        *i -= n;
-    }
+    shift_rows(app, 0, -((before - app.lines.len()) as isize));
 }
 
 /// The status line: what this session is, and how full it is. Every segment
@@ -1516,6 +1540,7 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
                 url: p.url.clone(),
                 key: p.key.clone(),
                 model: p.model.clone(),
+                cache: p.cache,
             });
         }
         None => app.lines.push(format!("  ✗ no saved model named '{name}' (see --list)")),
@@ -1704,7 +1729,7 @@ mod tests {
     }
     fn start(app: &mut App, t: &str) {
         app.lines.push(format!("  ⠋ {t}"));
-        app.tool_line = Some(app.lines.len() - 1);
+        app.tool_rows.push((0, app.lines.len() - 1, false));
     }
     fn shown(app: &App) -> Vec<&str> {
         app.lines.iter().filter(|l| !l.starts_with(HIDDEN)).map(String::as_str).collect()
@@ -1719,7 +1744,7 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         start_task(&mut a, &tx, "hi".into());
         assert_eq!(a.lines, vec!["  ✗ mcp gh: spawn failed", "  ⠋ run pwd", "1› hi"]);
-        assert_eq!(a.tool_line, Some(1), "a live index follows its row");
+        assert_eq!(a.tool_rows, [(0, 1, false)], "a live index follows its row");
     }
 
     /// Design D's tool rows: a run of reads is one row, a failure is one row
@@ -1730,18 +1755,18 @@ mod tests {
     fn tool_rows_fold_reads_and_carry_their_own_outcome() {
         let mut a = app();
         start(&mut a, "read harness/feature_list.json");
-        tool_end(&mut a, "read harness/feature_list.json".into(), true, 13, "{...}");
+        tool_end(&mut a, 0, "read harness/feature_list.json".into(), true, 13, "{...}");
         start(&mut a, "read harness/progress.md");
-        tool_end(&mut a, "read harness/progress.md".into(), true, 11, "# Progress");
+        tool_end(&mut a, 0, "read harness/progress.md".into(), true, 11, "# Progress");
         start(&mut a, "read AGENTS.md");
-        tool_end(&mut a, "read AGENTS.md".into(), true, 9, "x");
+        tool_end(&mut a, 0, "read AGENTS.md".into(), true, 9, "x");
         assert_eq!(shown(&a), vec!["  ✓ read 3 files  feature_list.json · progress.md · AGENTS.md"]);
         assert_eq!(a.lines.iter().filter(|l| l.starts_with(HIDDEN)).count(), 3, "each read's output stays behind Ctrl+O");
 
         // a visible row between two reads ends the fold
         a.lines.push("  ┆ now the log".into());
         start(&mut a, "read x.md");
-        tool_end(&mut a, "read x.md".into(), true, 5, "x");
+        tool_end(&mut a, 0, "read x.md".into(), true, 5, "x");
         assert_eq!(shown(&a).last(), Some(&"  ✓ read x.md"), "under 100ms shows no time");
 
         // permission: the row becomes the question, then settles in place
@@ -1751,10 +1776,10 @@ mod tests {
         a.lines[0] = "  ? run pwd  allow?".into();
         a.ask_line = Some(0);
         a.ask = Some(("allow run_command run pwd?".into(), tx));
-        a.hand = true;
+        a.tool_rows[0].2 = true;
         close_ask(&mut a, "yes");
         assert_eq!(a.lines, vec!["  ⠋ run pwd"], "answering restores the running row, no ℹ line left behind");
-        tool_end(&mut a, "run pwd".into(), false, 16,
+        tool_end(&mut a, 0, "run pwd".into(), false, 16,
             "[exit 1]\n'pwd' is not recognized as an internal or external command,\noperable program or batch file.");
         assert_eq!(shown(&a), vec!["  ✗ run pwd  'pwd' is not recognized as an internal or external command,  ✋  (ctrl+o)"]);
         assert!(a.lines.len() > 1, "the full output is kept for Ctrl+O");
@@ -1762,8 +1787,29 @@ mod tests {
         // time only when it is worth reading
         let mut a = app();
         start(&mut a, "run cargo test");
-        tool_end(&mut a, "run cargo test".into(), true, 4200, "ok");
+        tool_end(&mut a, 0, "run cargo test".into(), true, 4200, "ok");
         assert_eq!(shown(&a), vec!["  ✓ run cargo test  4.2s"]);
+    }
+
+    /// Parallel calls: every row starts before any ends, and each ToolEnd
+    /// settles its own row by id, whatever order they finish in; a failure's
+    /// hidden output goes under its own row, and the rows below keep their
+    /// place (F07).
+    #[test]
+    fn parallel_rows_settle_by_id_in_any_order() {
+        let mut a = app();
+        for (id, t) in [(7, "run slow"), (8, "run fast"), (9, "read a.rs")] {
+            a.lines.push(format!("  ⠋ {t}"));
+            a.tool_rows.push((id, a.lines.len() - 1, false));
+        }
+        tool_end(&mut a, 8, "run fast".into(), false, 5, "[exit 1]\nboom\nmore");
+        tool_end(&mut a, 9, "read a.rs".into(), true, 5, "x");
+        assert_eq!(shown(&a), ["  ⠋ run slow", "  ✗ run fast  boom  (ctrl+o)", "  ✓ read a.rs"]);
+        assert!(a.lines[2].starts_with(HIDDEN), "the failure's output sits under its own row");
+        assert_eq!(a.tool_rows, [(7, 0, false)]);
+        tool_end(&mut a, 7, "run slow".into(), true, 3000, "done");
+        assert_eq!(shown(&a), ["  ✓ run slow  3.0s", "  ✗ run fast  boom  (ctrl+o)", "  ✓ read a.rs"]);
+        assert!(a.tool_rows.is_empty());
     }
 
     /// `@` opens only at a token boundary, on the cursor's own line, and a

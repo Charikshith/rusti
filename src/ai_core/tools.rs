@@ -286,10 +286,12 @@ fn shrink(src: &str, side: u32, q: u8) -> Result<Vec<u8>, String> {
 /// the conversation. A static like UNDO/JOBS rather than a wider dispatch
 /// return type: an OpenAI tool message cannot carry an image, so the bytes have
 /// to travel out of band to the user entry that goes after the tool results.
-static PENDING_IMAGE: Mutex<Option<(String, String)>> = Mutex::new(None);
+/// A list: parallel reads of two images must not overwrite each other.
+// ponytail: completion order, not call order; each entry names its path
+static PENDING_IMAGES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
-pub fn take_pending_image() -> Option<(String, String)> {
-    PENDING_IMAGE.lock().unwrap().take()
+pub fn take_pending_images() -> Vec<(String, String)> {
+    std::mem::take(&mut *PENDING_IMAGES.lock().unwrap())
 }
 
 /// base64 (RFC 4648, padded). Sixteen lines beats a dependency for this.
@@ -312,7 +314,7 @@ pub fn b64(bytes: &[u8]) -> String {
 fn read_image(path: &str) -> (bool, String) {
     match load_image(path) {
         Ok(img) => {
-            *PENDING_IMAGE.lock().unwrap() = Some((path.to_string(), img.url));
+            PENDING_IMAGES.lock().unwrap().push((path.to_string(), img.url));
             let note = img.note.map(|n| format!("\n{n}")).unwrap_or_default();
             (true, format!("attached {path} ({}) — it follows as an image{note}", size_text(img.size)))
         }

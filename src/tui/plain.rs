@@ -14,8 +14,8 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
             Ok(ai_core::Event::TextDelta(t)) => { write!(out, "{t}")?; out.flush()?; }
             Ok(ai_core::Event::ReasoningDelta(t)) => { write!(err, "{t}")?; err.flush()?; }
             Ok(ai_core::Event::Text(t)) => { writeln!(out, "{t}")?; }
-            Ok(ai_core::Event::ToolStart(t)) => { writeln!(out, "  ⠋ {t}")?; }
-            Ok(ai_core::Event::ToolEnd { summary, ok, ms, output }) => {
+            Ok(ai_core::Event::ToolStart { summary, .. }) => { writeln!(out, "  ⠋ {summary}")?; }
+            Ok(ai_core::Event::ToolEnd { summary, ok, ms, output, .. }) => {
                 writeln!(out, "  {} {summary}  {}", if ok { "✓" } else { "✗" }, ai_core::took(ms))?;
                 for l in ai_core::fail_tail(&output) { writeln!(out, "{l}")?; }
             }
