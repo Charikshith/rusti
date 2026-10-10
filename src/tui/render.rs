@@ -290,11 +290,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
                 continue;
             }
             let (cs, runs) = md_line(line);
-            let mut prev = None;
-            for (x, y) in wrap_ranges(&cs, inner_w) {
-                let join = prev.map(|p: usize| if cs.get(p) == Some(&' ') { " " } else { "" });
+            for (x, y, join) in wrap_ranges(&cs, inner_w) {
                 all.push((b'm', md_row(&cs, &runs, x, y), join));
-                prev = Some(y);
             }
             i += 1;
         }
@@ -895,28 +892,32 @@ fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
     (out, runs)
 }
 
-/// Greedy word wrap over chars, returning each row's range. Ranges (not strings)
-/// keep the style runs addressable after wrapping.
-fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize)> {
+/// Greedy word wrap over chars, returning each row's range and its join: what
+/// the break before it dropped (a space, or nothing for a hard break inside a
+/// word), None on the first row. Ranges (not strings) keep the style runs
+/// addressable after wrapping.
+fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize, Option<&'static str>)> {
     let width = width.max(1);
     let mut rows = Vec::new();
     let mut start = 0;
+    let mut join = None;
     while start < cs.len() {
         if cs.len() - start <= width {
-            rows.push((start, cs.len()));
+            rows.push((start, cs.len(), join));
             break;
         }
         let hard = start + width;
         let brk = (start..hard).rev().find(|&j| cs[j] == ' ').unwrap_or(start);
         let end = if brk == start { hard } else { brk };
-        rows.push((start, end));
+        rows.push((start, end, join));
+        join = Some(if cs[end] == ' ' { " " } else { "" });
         start = end;
         while start < cs.len() && cs[start] == ' ' {
             start += 1;
         }
     }
     if rows.is_empty() {
-        rows.push((0, 0)); // a blank source line is still a blank row
+        rows.push((0, 0, None)); // a blank source line is still a blank row
     }
     rows
 }
@@ -1195,14 +1196,20 @@ mod tests {
         // width is charged against the text the user sees, not the markers
         let (cs, _) = md_line("**aaaa** bbbb cccc dddd");
         let rows = wrap_ranges(&cs, 10);
-        assert!(rows.iter().all(|(x, y)| y - x <= 10), "{rows:?}");
-        assert_eq!(rows.iter().map(|(x, y)| cs[*x..*y].iter().collect::<String>()).collect::<Vec<_>>(),
+        assert!(rows.iter().all(|(x, y, _)| y - x <= 10), "{rows:?}");
+        assert_eq!(rows.iter().map(|(x, y, _)| cs[*x..*y].iter().collect::<String>()).collect::<Vec<_>>(),
                    vec!["aaaa bbbb", "cccc dddd"]);
         // a word longer than the width is hard-cut rather than dropped
         let long: Vec<char> = "supercalifragilistic".chars().collect();
         assert_eq!(wrap_ranges(&long, 5).len(), 4);
+        // a copy rejoins a space break with its space, a hard cut with nothing
+        let joins = |cs: &[char], w| wrap_ranges(cs, w).into_iter().map(|r| r.2).collect::<Vec<_>>();
+        assert_eq!(joins(&cs, 10), vec![None, Some(" ")]);
+        assert_eq!(joins(&long, 5), vec![None, Some(""), Some(""), Some("")]);
+        let exact: Vec<char> = "aaaa bbbb".chars().collect();
+        assert_eq!(joins(&exact, 4), vec![None, Some(" ")], "a cut that lands on a space dropped it");
         // blank source line still produces one row
-        assert_eq!(wrap_ranges(&[], 10), vec![(0, 0)]);
+        assert_eq!(wrap_ranges(&[], 10), vec![(0, 0, None)]);
     }
 
     /// The regression behind "I can't see any difference": reasoning wraps over
