@@ -676,7 +676,7 @@ pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
         for word in body.split(' ') {
             if line.is_empty() {
                 line = word.to_string();
-            } else if columns(&line) + 1 + columns(word) > w {
+            } else if columns(&format!("{line} {word}")) > w {
                 out.push(line);
                 line = word.to_string();
             } else {

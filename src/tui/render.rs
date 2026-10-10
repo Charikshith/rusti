@@ -167,7 +167,7 @@ impl RenderState {
 /// One transcript row styled for the screen. Markdown rows are already
 /// wrapped and styled; truncating would cut an escape sequence in half.
 fn styled(st: u8, row: &str, inner_w: usize, spin: char) -> String {
-    if st == b'm' { row.to_string() } else { colorize_row(st, &truncate_str(row, inner_w), spin) }
+    if st == b'm' { row.to_string() } else { colorize_row(st, &fit(row, 0, inner_w), spin) }
 }
 
 /// The columns [x, y) of row i inside a selection running lo..=hi (both ends
@@ -186,7 +186,7 @@ fn char_at(row: &str, x: usize) -> usize {
     let mut col = 0;
     let mut n = 0;
     for c in row.chars() {
-        col += if c == '\t' { 8 - col % 8 } else { width(c) };
+        col += step(col, c);
         if col > x {
             return n;
         }
@@ -211,22 +211,37 @@ fn width(c: char) -> usize {
     if wide(c) { 2 } else { 1 }
 }
 
-/// Columns a plain row takes on screen, its tabs already expanded.
+/// Columns c takes when it starts at column col: a tab runs to the next stop of 8.
+fn step(col: usize, c: char) -> usize {
+    if c == '\t' { 8 - col % 8 } else { width(c) }
+}
+
+/// Columns a plain row takes on screen, from column 0.
 pub fn columns(s: &str) -> usize {
-    s.chars().map(width).sum()
+    s.chars().fold(0, |col, c| col + step(col, c))
 }
 
 /// Tabs as the spaces a terminal moves over, to stops of 8 from the start of
-/// each line. A raw tab moves the cursor without erasing, so it left the last
-/// frame's glyphs in the cells it skipped, and nothing could measure it.
+/// each line; escapes take no columns. A raw tab moves the cursor without
+/// erasing, so it left the last frame's glyphs in the cells it skipped.
+/// Rows keep their tabs, so a copy gets them back: only the frame expands.
 fn expand_tabs(s: &str) -> Cow<'_, str> {
     if !s.contains('\t') {
         return Cow::Borrowed(s);
     }
     let mut out = String::new();
     let mut col = 0;
+    let mut esc = false;
     for c in s.chars() {
         match c {
+            '\x1b' => {
+                out.push(c);
+                esc = true;
+            }
+            c if esc => {
+                out.push(c);
+                esc = !c.is_ascii_alphabetic();
+            }
             '\t' => {
                 let n = 8 - col % 8;
                 out.push_str(&" ".repeat(n));
@@ -298,7 +313,6 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // join marks a row that continues the one above, so a copy can rejoin them.
     let mut all: Vec<(u8, String, Option<&'static str>)> = Vec::new();
     let push_wrapped = |l: &str, all: &mut Vec<(u8, String, Option<&'static str>)>| {
-        let l = &*expand_tabs(l);
         let st = line_style(l);
         if st != b'm' {
             for src in l.split('\n') {
@@ -321,7 +335,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
                 continue; // the fence itself is not drawn; the body is coloured
             }
             if fence {
-                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w))), None));
+                all.push((b'm', format!("  {}{RESET}", highlight(&fit(line, 2, inner_w + 2))), None));
                 i += 1;
                 continue;
             }
@@ -369,10 +383,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
             b'a' => band(t.ask, &styled, w),
             _ => styled,
         };
-        frame.push(match sel.filter(|(lo, hi)| (lo.0..=hi.0).contains(&i)) {
+        let row = match sel.filter(|(lo, hi)| (lo.0..=hi.0).contains(&i)) {
             Some((lo, hi)) => reverse(&styled, sel_cols(i, lo, hi)),
             None => styled,
-        });
+        };
+        frame.push(expand_tabs(&row).into_owned());
     }
     state.rows = all;
     state.view_h = transcript_h;
@@ -480,9 +495,8 @@ fn hint_text(app: &App, spin: char) -> String {
         "press ctrl+c again to exit".to_string()
     } else if let Some(n) = app.notice() {
         format!("ℹ {n}")
-    } else if app.ask.is_some() && !app.pick.as_ref().is_some_and(|p| p.kind == app::PickKind::Ask) {
-        // the turn is waiting on you, not the model, even under a list opened
-        // since; an answer picker shows its own keys
+    } else if app.ask.is_some() && app.pick.is_none() {
+        // the turn is waiting on you, not the model; a picker shows its own keys
         "answer above · enter sends · esc cancels".to_string()
     } else if !app.done {
         format!("{spin} working…")
@@ -616,10 +630,15 @@ fn draw_line(out: &mut impl Write, line: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// The longest start of s that fits in max columns.
+/// The longest start of s that fits in max columns, its tabs expanded.
 pub fn truncate_str(s: &str, max: usize) -> String {
-    let mut used = 0;
-    expand_tabs(s).chars().take_while(|&c| { used += width(c); used <= max }).collect()
+    expand_tabs(&fit(s, 0, max)).into_owned()
+}
+
+/// The longest start of s, drawn from column col, that ends by column max.
+/// Tabs are kept, measured to their stops.
+fn fit(s: &str, mut col: usize, max: usize) -> String {
+    s.chars().take_while(|&c| { col += step(col, c); col <= max }).collect()
 }
 
 /// One transcript row, colored by kind: status symbol colored, text plain.
@@ -756,7 +775,7 @@ fn band(bg: &str, row: &str, w: usize) -> String {
         match c {
             '\x1b' => esc = true,
             c if esc => esc = !c.is_ascii_alphabetic(),
-            c => vis += width(c),
+            c => vis += step(vis, c),
         }
     }
     let body = row.replace(RESET, &format!("{RESET}{bg}"));
@@ -968,11 +987,12 @@ fn wrap_ranges(cs: &[char], max: usize) -> Vec<(usize, usize, Option<&'static st
     let mut start = 0;
     let mut join = None;
     while start < cs.len() {
-        // the most chars that fit in max columns, and at least one
+        // the most chars that fit in max columns, and at least one; md_row
+        // draws them from column 2, where the tab stops are counted
         let mut hard = start;
         let mut used = 0;
-        while hard < cs.len() && used + width(cs[hard]) <= max {
-            used += width(cs[hard]);
+        while hard < cs.len() && used + step(used + 2, cs[hard]) <= max {
+            used += step(used + 2, cs[hard]);
             hard += 1;
         }
         let hard = hard.max(start + 1);
@@ -1418,12 +1438,30 @@ last bit";
         assert_eq!(hint_text(&app, '⠋'), "⠋ working…");
         app.ask = Some(("push where?".into(), tokio::sync::oneshot::channel().0));
         assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
-        // F15: a list opened before or since does not hide that it is your turn
-        let pick = |kind| app::Pick { kind, title: "t".into(), rows: vec![], idx: 0, top: 0, filter: String::new() };
-        app.pick = Some(pick(app::PickKind::Theme));
+
+        // F15: a typed question closes a list left open, so the prompt is yours
+        app.ask = None;
+        app.pick = Some(app::Pick { kind: app::PickKind::Theme, title: "t".into(), rows: vec![], idx: 0, top: 0, filter: String::new() });
+        app::ask(&mut app, "push where?".into(), vec![], tokio::sync::oneshot::channel().0);
+        assert!(app.pick.is_none());
         assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
-        app.pick = Some(pick(app::PickKind::Ask));
-        assert_eq!(hint_text(&app, '⠋'), "⠋ working…", "an answer picker shows its own keys");
+    }
+
+    /// A copy gives back the tabs the text had; only the drawn frame expands
+    /// them. A Makefile pasted with spaces for tabs no longer builds.
+    #[test]
+    fn a_copy_keeps_tabs_the_frame_expands_them() {
+        let mut state = RenderState::new();
+        state.inner_w = 40;
+        state.rows = vec![
+            (b'm', format!("  {}{RESET}", highlight(&fit("\techo hi", 2, 42))), None),
+            (b's', fit("  \tx", 0, 40), None),
+        ];
+        assert_eq!(state.selected(((0, 0), (1, usize::MAX))), "\techo hi\n\tx");
+        // the tab at column 2 runs to 8, and the cell after it is the 'e'
+        assert_eq!(char_at(&state.text(0), 8), 3);
+        assert!(!expand_tabs(&styled(b's', &state.rows[1].1, 40, '⠋')).contains('\t'));
+        assert_eq!(fit("\tab", 2, 9), "\ta", "a tab drawn from column 2 takes 6");
     }
 
     /// F5: rows are measured in terminal columns. A CJK char takes two and a

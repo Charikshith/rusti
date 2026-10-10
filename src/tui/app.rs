@@ -1114,44 +1114,7 @@ pub fn ui_loop(
                     // kept across turns, unlike ctx: it describes the last call, which is still the last call
                     app.cache_pct = cached.map(|c| c * 100 / prompt.max(1));
                 }
-                ai_core::Event::Ask { question, choices, reply } => {
-                    app.flush();
-                    // A permission prompt belongs to the tool row it gates: that row
-                    // turns into the question and back, leaving nothing behind. A
-                    // question the model asks (no fixed choices) keeps its own row.
-                    // permissions are asked right after each ToolStart, so it is the newest row
-                    let tool = app.tool_rows.last().map(|r| r.1).filter(|&i| !choices.is_empty() && i < app.lines.len());
-                    match tool.and_then(|i| app.lines[i].strip_prefix("  ⠋ ").map(|t| (i, t.to_string()))) {
-                        Some((i, t)) => {
-                            app.lines[i] = format!("  ? {t}  allow?");
-                            app.ask_line = Some(i);
-                            if let Some(r) = app.tool_rows.last_mut() {
-                                r.2 = true;
-                            }
-                        }
-                        None => {
-                            app.lines.push(format!("  ℹ {question}"));
-                            app.ask_line = Some(app.lines.len() - 1);
-                        }
-                    }
-                    app.ask = Some((question.clone(), reply));
-                    // a fixed set of answers is a choice, not a sentence to type:
-                    // it opens the picker that /model and /resume already use.
-                    // A typed answer needs the prompt: a list left open (/themes,
-                    // /resume…) would take the keys into its filter instead
-                    if choices.is_empty() {
-                        app.pick = None;
-                    } else {
-                        app.pick = Some(Pick {
-                            kind: PickKind::Ask,
-                            title: question,
-                            rows: choices,
-                            idx: 0,
-                            top: 0,
-                            filter: String::new(),
-                        });
-                    }
-                }
+                ai_core::Event::Ask { question, choices, reply } => ask(&mut app, question, choices, reply),
                 ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
                 ai_core::Event::CompactStart { reason, messages, .. } => {
                     app.flush();
@@ -1347,6 +1310,46 @@ fn answer_pick(app: &mut App, ans: &str) {
     app.fresh = false;
     if let Some(reply) = close_ask(app, ans) {
         let _ = reply.send(ans.to_string());
+    }
+}
+
+/// A question for the user: a permission prompt or one the model asks.
+pub fn ask(app: &mut App, question: String, choices: Vec<(String, String)>, reply: tokio::sync::oneshot::Sender<String>) {
+    app.flush();
+    // A permission prompt belongs to the tool row it gates: that row
+    // turns into the question and back, leaving nothing behind. A
+    // question the model asks (no fixed choices) keeps its own row.
+    // permissions are asked right after each ToolStart, so it is the newest row
+    let tool = app.tool_rows.last().map(|r| r.1).filter(|&i| !choices.is_empty() && i < app.lines.len());
+    match tool.and_then(|i| app.lines[i].strip_prefix("  ⠋ ").map(|t| (i, t.to_string()))) {
+        Some((i, t)) => {
+            app.lines[i] = format!("  ? {t}  allow?");
+            app.ask_line = Some(i);
+            if let Some(r) = app.tool_rows.last_mut() {
+                r.2 = true;
+            }
+        }
+        None => {
+            app.lines.push(format!("  ℹ {question}"));
+            app.ask_line = Some(app.lines.len() - 1);
+        }
+    }
+    app.ask = Some((question.clone(), reply));
+    // a fixed set of answers is a choice, not a sentence to type:
+    // it opens the picker that /model and /resume already use.
+    // A typed answer needs the prompt: a list left open (/themes,
+    // /resume…) would take the keys into its filter instead
+    if choices.is_empty() {
+        app.pick = None;
+    } else {
+        app.pick = Some(Pick {
+            kind: PickKind::Ask,
+            title: question,
+            rows: choices,
+            idx: 0,
+            top: 0,
+            filter: String::new(),
+        });
     }
 }
 
