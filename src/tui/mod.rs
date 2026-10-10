@@ -209,6 +209,7 @@ fn rename_session(session: &mut Session, name: &str) -> Result<String, String> {
             .map_err(|e| format!("rename failed: {e}"))?;
     }
     let was = crate::session::name_of(&old);
+    ai_core::session_renamed(&old, &new_path);
     session.path = new_path;
     Ok(format!("renamed {was} → {name}"))
 }

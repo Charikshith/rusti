@@ -204,11 +204,11 @@ pub fn pre_compact(hooks: &[Hook], session: &str, messages: &[Value]) -> Result<
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     /// A hook command, portable between the shells rusti may run in.
-    fn reply(dir: &std::path::Path, name: &str, json: &str) -> Hook {
+    pub(in crate::ai_core) fn reply(dir: &std::path::Path, name: &str, json: &str) -> Hook {
         let f = dir.join(name);
         std::fs::write(&f, json).unwrap();
         let f = f.to_string_lossy().replace('\\', "/");

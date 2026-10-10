@@ -163,15 +163,19 @@ pub fn templates_in(dirs: &[(PathBuf, &'static str)], warn: &mut Vec<String>) ->
 }
 
 /// Arguments as a shell would split them: whitespace separates, '…' and "…"
-/// group, and a backslash outside single quotes takes the next char as is.
+/// group, and a backslash outside single quotes escapes a quote, whitespace or
+/// another backslash. Any other backslash stays, so Windows paths such as
+/// `src\tui\app.rs` and `C:\x\y.rs` arrive intact.
 pub fn split_args(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let (mut cur, mut quote, mut any) = (String::new(), None::<char>, false);
-    let mut it = s.chars();
+    let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
         match (quote, c) {
             (Some(q), c) if c == q => quote = None,
-            (Some('"') | None, '\\') => cur.extend(it.next()),
+            (Some('"') | None, '\\') if it.peek().is_some_and(|&n| matches!(n, '"' | '\'' | '\\') || n.is_whitespace()) => {
+                cur.extend(it.next())
+            }
             (Some(_), c) => cur.push(c),
             (None, '"' | '\'') => {
                 quote = Some(c);
@@ -403,6 +407,9 @@ mod tests {
         assert_eq!(split_args(r#"src/main.rs "two words" 'it''s' """#), s(&["src/main.rs", "two words", "its", ""]));
         assert_eq!(split_args(r#"a\ b "q\"x" 'no\esc'"#), s(&["a b", "q\"x", "no\\esc"]));
         assert!(split_args("   ").is_empty());
+        // Windows paths: a backslash before anything else is kept as written
+        assert_eq!(split_args(r"src\tui\app.rs C:\x\y.rs"), s(&[r"src\tui\app.rs", r"C:\x\y.rs"]));
+        assert_eq!(split_args(r#""C:\Program Files\x" a\\b end\"#), s(&[r"C:\Program Files\x", r"a\b", r"end\"]));
     }
 
     /// The captain's worked example: /review with a file and a focus.

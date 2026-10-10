@@ -723,6 +723,31 @@ fn session_start(session: &Session) -> Option<String> {
     }
 }
 
+/// /rename moves a session to a new path; its session_start hooks have still run.
+pub fn session_renamed(old: &str, new: &str) {
+    for p in STARTED.lock().unwrap().iter_mut().filter(|p| *p == old) {
+        *p = new.to_string();
+    }
+}
+
+/// The permission gate, then the pre_tool hooks: a hook can refuse what was
+/// allowed, never allow what was refused, and a rewrite goes back through
+/// the gate so it never runs on a yes given for other arguments.
+async fn gate<F, Fut>(name: &str, args: &Value, summary: &str, pre: &[crate::config::Hook], permit: F) -> Result<Value, String>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    permit(summary.to_string()).await?;
+    let out = hooks::pre_tool(pre, name, args).map_err(|e| format!("a pre_tool hook refused {name}: {e}. Do not retry it."))?;
+    if out != *args {
+        let s = tool_summary(name, &out);
+        emit(Event::Text(format!("  · a pre_tool hook rewrote this call: {s}")));
+        permit(s).await?;
+    }
+    Ok(out)
+}
+
 pub async fn run_agent(
     client: &llm::Client,
     session: &mut Session,
@@ -801,23 +826,17 @@ pub async fn run_agent(
                 let id = TOOL_ID.fetch_add(1, Ordering::Relaxed);
                 let summary = tool_summary(&name, &args);
                 emit(Event::ToolStart { id, summary: summary.clone() });
-                let permit = match name.as_str() {
+                let run = match name.as_str() {
                     "batch" => Err("batch cannot nest; list the calls directly".into()),
                     "" => Err("this call has no `name`; each entry needs {name, args}".into()),
-                    // pre_tool after the gate: a hook can refuse what was allowed, never allow what was refused
-                    _ => permitted(&name, &summary).await.and_then(|()| {
-                        hooks::pre_tool(hooks::of("pre_tool"), &name, &args)
-                            .map_err(|e| format!("a pre_tool hook refused {name}: {e}. Do not retry it."))
-                    }).map(Some),
+                    _ => gate(&name, &args, &summary, hooks::of("pre_tool"), |s| {
+                        let name = name.clone();
+                        async move { permitted(&name, &s).await }
+                    })
+                    .await,
                 };
-                let (args, permit) = match permit {
-                    Ok(Some(rewritten)) => {
-                        if rewritten != args {
-                            emit(Event::Text(format!("  · a pre_tool hook rewrote this call: {}", tool_summary(&name, &rewritten))));
-                        }
-                        (rewritten, Ok(()))
-                    }
-                    Ok(None) => (args, Ok(())),
+                let (args, permit) = match run {
+                    Ok(rewritten) => (rewritten, Ok(())),
                     Err(e) => (args, Err(e)),
                 };
                 calls.push((name, args, id, summary, permit));
@@ -1886,4 +1905,42 @@ branch: "), "{c2}");
         assert!(out.contains("\n\n[4/4] failed ") && out.contains("has no `name`"), "a nameless entry is reported, not dropped: {out}");
         assert_eq!(ok, Some(false), "one failed call fails the batch");
         assert!(!batch_result(vec![]).0, "a batch with no calls is an error, not a silent success");
+    }
+
+    /// A pre_tool rewrite is asked about again with the arguments that will
+    /// actually run: a yes for `ls` is not a yes for what the hook put there.
+    #[test]
+    fn a_pre_tool_rewrite_goes_back_through_the_gate() {
+        let dir = std::env::temp_dir().join(format!("rusti_regate_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rewrite = hooks::tests::reply(&dir, "rw.json", r#"{"args":{"command":"rm -rf build"}}"#);
+        let (ls, rm) = (json!({"command": "ls"}), json!({"command": "rm -rf build"}));
+        let asked = std::sync::Mutex::new(Vec::<String>::new());
+        let only_ls = |s: String| {
+            asked.lock().unwrap().push(s.clone());
+            async move { if s.contains("rm") { Err("user denied run_command".to_string()) } else { Ok(()) } }
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let first = tool_summary("run_command", &ls);
+        let denied = rt.block_on(gate("run_command", &ls, &first, std::slice::from_ref(&rewrite), only_ls));
+        assert_eq!(denied, Err("user denied run_command".into()), "the rewritten call is refused");
+        assert_eq!(*asked.lock().unwrap(), vec![first.clone(), tool_summary("run_command", &rm)]);
+
+        let yes = |_: String| async { Ok(()) };
+        assert_eq!(rt.block_on(gate("run_command", &ls, &first, std::slice::from_ref(&rewrite), yes)), Ok(rm));
+        asked.lock().unwrap().clear();
+        assert_eq!(rt.block_on(gate("run_command", &ls, &first, &[], only_ls)), Ok(ls), "no rewrite, one question");
+        assert_eq!(asked.lock().unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// /rename keeps the record that session_start already ran, so its
+    /// context is not attached a second time under the new name.
+    #[test]
+    fn session_start_stays_done_across_a_rename() {
+        STARTED.lock().unwrap().push("_test_rename_old.json".into());
+        session_renamed("_test_rename_old.json", "_test_rename_new.json");
+        let started = STARTED.lock().unwrap();
+        assert!(started.iter().any(|p| p == "_test_rename_new.json"));
+        assert!(!started.iter().any(|p| p == "_test_rename_old.json"));
     }
