@@ -167,7 +167,12 @@ impl RenderState {
 /// One transcript row styled for the screen. Markdown rows are already
 /// wrapped and styled; truncating would cut an escape sequence in half.
 fn styled(st: u8, row: &str, inner_w: usize, spin: char) -> String {
-    if st == b'm' { row.to_string() } else { colorize_row(st, &fit(row, 0, inner_w), spin) }
+    if st == b'm' {
+        return row.to_string();
+    }
+    let row = colorize_row(st, row, spin);
+    let cut = fit(&row, 0, inner_w + 2);
+    if cut.len() < row.len() { format!("{cut}{RESET}") } else { cut }
 }
 
 /// The columns [x, y) of row i inside a selection running lo..=hi (both ends
@@ -636,9 +641,21 @@ pub fn truncate_str(s: &str, max: usize) -> String {
 }
 
 /// The longest start of s, drawn from column col, that ends by column max.
-/// Tabs are kept, measured to their stops.
+/// Tabs are kept, measured to their stops; escapes take no columns.
 fn fit(s: &str, mut col: usize, max: usize) -> String {
-    s.chars().take_while(|&c| { col += step(col, c); col <= max }).collect()
+    let mut esc = false;
+    s.chars()
+        .take_while(|&c| {
+            if c == '\x1b' {
+                esc = true;
+            } else if esc {
+                esc = !c.is_ascii_alphabetic();
+            } else {
+                col += step(col, c);
+            }
+            col <= max
+        })
+        .collect()
 }
 
 /// One transcript row, colored by kind: status symbol colored, text plain.
@@ -1462,6 +1479,19 @@ last bit";
         assert_eq!(char_at(&state.text(0), 8), 3);
         assert!(!expand_tabs(&styled(b's', &state.rows[1].1, 40, '⠋')).contains('\t'));
         assert_eq!(fit("\tab", 2, 9), "\ta", "a tab drawn from column 2 takes 6");
+
+        // a wrapped row is drawn after a gutter its raw text lacks, which moves
+        // its tabs: it is cut where it is drawn, never past the terminal
+        let thought = format!("  │ {} abcdef\t{}", "x".repeat(70), "y".repeat(68));
+        let mut state = RenderState::new();
+        state.inner_w = 78;
+        state.rows = word_wrap(&thought, 78).into_iter().enumerate().map(|(k, r)| (b't', r, (k > 0).then_some(" "))).collect();
+        for st in [b't', b'k', b'n', b'x', b'a', b'u', b's'] {
+            for (_, row, _) in &state.rows {
+                assert!(columns(&plain(&expand_tabs(&styled(st, row, 78, '⠋')))) <= 80, "{}: {row:?}", st as char);
+            }
+        }
+        assert!(state.selected(((0, 0), (1, usize::MAX))).contains("abcdef\t"), "the copy keeps the tab");
     }
 
     /// F5: rows are measured in terminal columns. A CJK char takes two and a
