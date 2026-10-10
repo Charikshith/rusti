@@ -13,7 +13,7 @@ use crossterm::{
 
 use super::app::{self, App, MENU_ROWS};
 use super::theme;
-use super::{goto, word_wrap, SYNC_BEGIN, SYNC_END};
+use super::{goto, word_wrap_joined, SYNC_BEGIN, SYNC_END};
 
 /// Braille spinner frames (~20fps at the 50ms poll rate).
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -59,10 +59,10 @@ fn thinking_fold(l: &str) -> String {
 /// the thought, so you can still watch the model work. The count of rows is
 /// fixed once two exist, so streaming never makes the block jump.
 fn thinking_preview(l: &str, w: usize) -> Vec<String> {
-    let mut rows = word_wrap(&thinking_fold(l), w);
+    let mut rows = wrap(b't', &thinking_fold(l), w);
     // paragraph breaks and the bare sentinel are blank rows, not a preview
     let body: Vec<String> =
-        word_wrap(l, w).into_iter().filter(|r| !matches!(r.trim(), "" | "│")).collect();
+        wrap(b't', l, w).into_iter().filter(|r| !matches!(r.trim(), "" | "│")).collect();
     rows.extend_from_slice(&body[body.len().saturating_sub(2)..]);
     rows
 }
@@ -164,10 +164,27 @@ impl RenderState {
     }
 }
 
+/// Rows of style st that each fit w columns where colorize_row draws them.
+/// ponytail: styles each candidate row to measure it; a per-style gutter
+/// width if wrapping ever shows up in a profile
+fn wrap(st: u8, s: &str, w: usize) -> Vec<String> {
+    wrap_joined(st, s, w).into_iter().map(|r| r.0).collect()
+}
+
+/// wrap, with each row's join for a copy (see word_wrap_joined).
+fn wrap_joined(st: u8, s: &str, w: usize) -> Vec<(String, Option<&'static str>)> {
+    word_wrap_joined(s, w, |r| columns(&plain(&colorize_row(st, r, ' '))))
+}
+
 /// One transcript row styled for the screen. Markdown rows are already
 /// wrapped and styled; truncating would cut an escape sequence in half.
 fn styled(st: u8, row: &str, inner_w: usize, spin: char) -> String {
-    if st == b'm' { row.to_string() } else { colorize_row(st, &truncate_str(row, inner_w), spin) }
+    if st == b'm' {
+        return row.to_string();
+    }
+    let row = colorize_row(st, row, spin);
+    let cut = fit(&row, 0, inner_w + 2);
+    if cut.len() < row.len() { format!("{cut}{RESET}") } else { cut }
 }
 
 /// The columns [x, y) of row i inside a selection running lo..=hi (both ends
@@ -186,7 +203,7 @@ fn char_at(row: &str, x: usize) -> usize {
     let mut col = 0;
     let mut n = 0;
     for c in row.chars() {
-        col += if c == '\t' { 8 - col % 8 } else if wide(c) { 2 } else { 1 };
+        col += step(col, c);
         if col > x {
             return n;
         }
@@ -204,6 +221,60 @@ fn wide(c: char) -> bool {
         | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
         | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x1F300..=0x1F64F
         | 0x1F680..=0x1F6FF | 0x1F900..=0x1F9FF | 0x20000..=0x3FFFD)
+}
+
+/// Columns a char takes on screen.
+fn width(c: char) -> usize {
+    if wide(c) { 2 } else { 1 }
+}
+
+/// Columns c takes when it starts at column col: a tab runs to the next stop of 8.
+fn step(col: usize, c: char) -> usize {
+    if c == '\t' { 8 - col % 8 } else { width(c) }
+}
+
+/// Columns a plain row takes on screen, from column 0.
+pub fn columns(s: &str) -> usize {
+    s.chars().fold(0, |col, c| col + step(col, c))
+}
+
+/// Tabs as the spaces a terminal moves over, to stops of 8 from the start of
+/// each line; escapes take no columns. A raw tab moves the cursor without
+/// erasing, so it left the last frame's glyphs in the cells it skipped.
+/// Rows keep their tabs, so a copy gets them back: only the frame expands.
+fn expand_tabs(s: &str) -> Cow<'_, str> {
+    if !s.contains('\t') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::new();
+    let mut col = 0;
+    let mut esc = false;
+    for c in s.chars() {
+        match c {
+            '\x1b' => {
+                out.push(c);
+                esc = true;
+            }
+            c if esc => {
+                out.push(c);
+                esc = !c.is_ascii_alphabetic();
+            }
+            '\t' => {
+                let n = 8 - col % 8;
+                out.push_str(&" ".repeat(n));
+                col += n;
+            }
+            '\n' => {
+                out.push(c);
+                col = 0;
+            }
+            c => {
+                out.push(c);
+                col += width(c);
+            }
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// What the terminal shows for a styled row: the text without CSI escapes.
@@ -262,7 +333,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         let st = line_style(l);
         if st != b'm' {
             for src in l.split('\n') {
-                all.extend(word_wrap(src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
+                all.extend(wrap(st, src, inner_w).into_iter().enumerate().map(|(k, r)| (st, r, (k > 0).then_some(" "))));
             }
             return;
         }
@@ -281,7 +352,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
                 continue; // the fence itself is not drawn; the body is coloured
             }
             if fence {
-                all.push((b'm', format!("  {}{RESET}", highlight(&truncate_str(line, inner_w))), None));
+                all.push((b'm', format!("  {}{RESET}", highlight(&fit(line, 2, inner_w + 2))), None));
                 i += 1;
                 continue;
             }
@@ -329,10 +400,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
             b'a' => band(t.ask, &styled, w),
             _ => styled,
         };
-        frame.push(match sel.filter(|(lo, hi)| (lo.0..=hi.0).contains(&i)) {
+        let row = match sel.filter(|(lo, hi)| (lo.0..=hi.0).contains(&i)) {
             Some((lo, hi)) => reverse(&styled, sel_cols(i, lo, hi)),
             None => styled,
-        });
+        };
+        frame.push(expand_tabs(&row).into_owned());
     }
     state.rows = all;
     state.view_h = transcript_h;
@@ -419,7 +491,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let (caret_line, caret_col) = caret_at(draft, caret);
     let input_top = h.saturating_sub(1 + input_len);
     let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
-    let input_x = (2 + caret_col).min(w.saturating_sub(1)) as u16; // after "> "
+    // the columns drawn before the caret, not the chars before it: the row
+    // scrolls, and a wide char takes two
+    let line = draft.split('\n').nth(caret_line).unwrap_or("");
+    let before = columns(&input_window(line, caret_col, w.saturating_sub(3)).0);
+    let input_x = (2 + before).min(w.saturating_sub(1)) as u16; // after "> "
     goto(&mut out, input_x, input_y);
 
     out.write_all(SYNC_END.as_bytes())?;
@@ -571,9 +647,27 @@ fn draw_line(out: &mut impl Write, line: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn truncate_str(s: &str, max: usize) -> String {
-    if max == 0 { return String::new(); }
-    s.chars().take(max).collect()
+/// The longest start of s that fits in max columns, its tabs expanded.
+pub fn truncate_str(s: &str, max: usize) -> String {
+    expand_tabs(&fit(s, 0, max)).into_owned()
+}
+
+/// The longest start of s, drawn from column col, that ends by column max.
+/// Tabs are kept, measured to their stops; escapes take no columns.
+fn fit(s: &str, mut col: usize, max: usize) -> String {
+    let mut esc = false;
+    s.chars()
+        .take_while(|&c| {
+            if c == '\x1b' {
+                esc = true;
+            } else if esc {
+                esc = !c.is_ascii_alphabetic();
+            } else {
+                col += step(col, c);
+            }
+            col <= max
+        })
+        .collect()
 }
 
 /// One transcript row, colored by kind: status symbol colored, text plain.
@@ -710,7 +804,7 @@ fn band(bg: &str, row: &str, w: usize) -> String {
         match c {
             '\x1b' => esc = true,
             c if esc => esc = !c.is_ascii_alphabetic(),
-            _ => vis += 1,
+            c => vis += step(vis, c),
         }
     }
     let body = row.replace(RESET, &format!("{RESET}{bg}"));
@@ -778,7 +872,7 @@ fn render_table(rows: &[Vec<&str>], w: usize) -> Vec<String> {
         return Vec::new();
     }
     let mut width: Vec<usize> = (0..cols)
-        .map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| s.chars().count()).max().unwrap_or(0))
+        .map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| columns(s)).max().unwrap_or(0))
         .collect();
     // gap of 1 between columns, 2 for the transcript indent
     let budget = w.saturating_sub(2);
@@ -795,7 +889,7 @@ fn render_table(rows: &[Vec<&str>], w: usize) -> Vec<String> {
             let cell = cells.get(c).map(String::as_str).unwrap_or("");
             let cell = truncate_str(cell, *wid);
             s.push_str(&cell);
-            let pad = wid.saturating_sub(cell.chars().count()) + usize::from(c + 1 < cols);
+            let pad = wid.saturating_sub(columns(&cell)) + usize::from(c + 1 < cols);
             s.extend(std::iter::repeat(' ').take(pad));
         }
         s.trim_end().to_string()
@@ -913,21 +1007,28 @@ fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
     (out, runs)
 }
 
-/// Greedy word wrap over chars, returning each row's range and its join: what
+/// Greedy word wrap over chars, measured in columns, returning each row's range and its join: what
 /// the break before it dropped (a space, or nothing for a hard break inside a
 /// word), None on the first row. Ranges (not strings) keep the style runs
 /// addressable after wrapping.
-fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize, Option<&'static str>)> {
-    let width = width.max(1);
+fn wrap_ranges(cs: &[char], max: usize) -> Vec<(usize, usize, Option<&'static str>)> {
     let mut rows = Vec::new();
     let mut start = 0;
     let mut join = None;
     while start < cs.len() {
-        if cs.len() - start <= width {
+        // the most chars that fit in max columns, and at least one; md_row
+        // draws them from column 2, where the tab stops are counted
+        let mut hard = start;
+        let mut used = 0;
+        while hard < cs.len() && used + step(used + 2, cs[hard]) <= max {
+            used += step(used + 2, cs[hard]);
+            hard += 1;
+        }
+        let hard = hard.max(start + 1);
+        if hard == cs.len() {
             rows.push((start, cs.len(), join));
             break;
         }
-        let hard = start + width;
         let brk = (start..hard).rev().find(|&j| cs[j] == ' ').unwrap_or(start);
         let end = if brk == start { hard } else { brk };
         rows.push((start, end, join));
@@ -1002,18 +1103,36 @@ fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
     out
 }
 
+/// The part of a line that fits max columns around the caret, as (before,
+/// after) it: the caret sits about 3/4 across, unless the end of the line
+/// leaves room to show more of what comes before it.
 fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
     if max == 0 { return (String::new(), String::new()); }
     let chars: Vec<char> = s.chars().collect();
     let c = c.min(chars.len());
-    if chars.len() <= max {
+    if columns(s) <= max {
         return (chars[..c].iter().collect(), chars[c..].iter().collect());
     }
-    let start = c.saturating_sub(max * 3 / 4).min(chars.len() - max);
-    let mut pre: String = chars[start..start + max].iter().collect();
-    let suf: String = chars[start + max..].iter().collect();
-    if start > 0 { pre = format!("…{}", &pre[1..]); }
-    (pre, suf)
+    let (mut start, mut used) = (c, 0);
+    while start > 0 && used + width(chars[start - 1]) <= max * 3 / 4 {
+        start -= 1;
+        used += width(chars[start]);
+    }
+    let tail: usize = chars[c..].iter().map(|&ch| width(ch)).sum();
+    while start > 0 && used + tail + width(chars[start - 1]) <= max {
+        start -= 1;
+        used += width(chars[start]);
+    }
+    let mut end = c;
+    while end < chars.len() && used + width(chars[end]) <= max {
+        used += width(chars[end]);
+        end += 1;
+    }
+    let mut pre: String = chars[start..c].iter().collect();
+    if start > 0 && !pre.is_empty() {
+        pre = format!("…{}", pre.chars().skip(1).collect::<String>());
+    }
+    (pre, chars[c..end].iter().collect())
 }
 
 #[cfg(test)]
@@ -1154,7 +1273,7 @@ mod tests {
         // every row of a logical line, the way draw() feeds them
         let rows = |line: &str| -> Vec<String> {
             let st = line_style(line);
-            word_wrap(line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80), '⠋')).collect()
+            wrap(st, line, 80).iter().map(|r| colorize_row(st, &truncate_str(r, 80), '⠋')).collect()
         };
         let first = |line: &str| rows(line).remove(0);
         // a running tool must be impossible to mistake for a finished one:
@@ -1165,7 +1284,7 @@ mod tests {
         assert!(first("  ✓ Cargo.toml  0ms").contains(theme::current().dim), "a finished tool un-bolds to dim");
         assert!(!first("  ✓ Cargo.toml  0ms").contains(BOLD), "a finished tool is not bold");
         assert!(first("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
-        assert!(first("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
+        assert!(first("  ✗ edit failed").contains("\x1b[38;5;203m✗"), "tool fail must be red");
         // tinted rows pin their text colour on every wrapped row, never the
         // terminal's default foreground, which may not read on the tint
         let long = format!("  ✗ run {}", "word ".repeat(30));
@@ -1174,11 +1293,11 @@ mod tests {
         assert!(rows(&format!("  ? run {}  allow?", "word ".repeat(30))).iter().all(|r| r.contains(theme::tints().ask_text)));
         assert!(first("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
-        assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
+        assert!(first("  ℹ renamed").contains("\x1b[94mℹ"), "info must be bright blue: 34 is 2.4:1 on black");
         assert!(first("  · 32 tok").starts_with(theme::current().dim), "stats must be dim");
         // a hunk row is a stats row until the sign is read, so the order of the
         // line_style arms is the whole feature: "  · - x" must not land on b's'
-        assert!(first("  · -    2  let x = 1;").starts_with("\x1b[31m"), "a removed line must be red");
+        assert!(first("  · -    2  let x = 1;").starts_with("\x1b[38;5;203m"), "a removed line must be red");
         assert!(first("  · +    2  let x = 2;").starts_with("\x1b[32m"), "an added line must be green");
         assert!(first("  · +    2  let x = 2;").contains(theme::current().dim), "the code itself stays dim");
         assert!(first("  · … 3 more changed lines").starts_with(theme::current().dim), "the overflow row is not a hunk row");
@@ -1247,7 +1366,7 @@ mod tests {
         let long = "  │ ".to_string() + &"thinking ".repeat(60);
         let st = line_style(&long);
         let rows: Vec<String> =
-            word_wrap(&long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40), '⠋')).collect();
+            wrap(st, &long, 40).iter().map(|r| colorize_row(st, &truncate_str(r, 40), '⠋')).collect();
         assert!(rows.len() > 3, "expected a wrapped block, got {}", rows.len());
         assert!(rows.iter().all(|r| r.contains(theme::current().think)), "every row must be italic grey: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains('│')), "the sentinel bar is never drawn");
@@ -1256,7 +1375,7 @@ mod tests {
         // paragraph breaks inside a block survive and stay styled
         let two = "  │ first thought\n\nsecond thought";
         let st = line_style(two);
-        assert!(word_wrap(two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(theme::current().think)));
+        assert!(wrap(st, two, 40).iter().all(|r| colorize_row(st, r, '⠋').contains(theme::current().think)));
     }
 
     /// Ctrl+O reveals a successful tool's output. The rows are always in
@@ -1348,5 +1467,89 @@ last bit";
         assert_eq!(hint_text(&app, '⠋'), "⠋ working…");
         app.ask = Some(("push where?".into(), tokio::sync::oneshot::channel().0));
         assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+
+        // F15: a typed question closes a list left open, so the prompt is yours
+        app.ask = None;
+        app.pick = Some(app::Pick { kind: app::PickKind::Theme, title: "t".into(), rows: vec![], idx: 0, top: 0, filter: String::new() });
+        app::ask(&mut app, "push where?".into(), vec![], tokio::sync::oneshot::channel().0);
+        assert!(app.pick.is_none());
+        assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+    }
+
+    /// A copy gives back the tabs the text had; only the drawn frame expands
+    /// them. A Makefile pasted with spaces for tabs no longer builds.
+    #[test]
+    fn a_copy_keeps_tabs_the_frame_expands_them() {
+        let mut state = RenderState::new();
+        state.inner_w = 40;
+        state.rows = vec![
+            (b'm', format!("  {}{RESET}", highlight(&fit("\techo hi", 2, 42))), None),
+            (b's', fit("  \tx", 0, 40), None),
+        ];
+        assert_eq!(state.selected(((0, 0), (1, usize::MAX))), "\techo hi\n\tx");
+        // the tab at column 2 runs to 8, and the cell after it is the 'e'
+        assert_eq!(char_at(&state.text(0), 8), 3);
+        assert!(!expand_tabs(&styled(b's', &state.rows[1].1, 40, '⠋')).contains('\t'));
+        assert_eq!(fit("\tab", 2, 9), "\ta", "a tab drawn from column 2 takes 6");
+
+        // a row drawn after a gutter its raw text lacks has its tabs moved: it
+        // wraps where it is drawn, so nothing is cut and the copy is whole
+        let words = format!("abcdef\t{}", "yy ".repeat(40).trim_end());
+        for (st, line, copy) in [
+            (b't', format!("  │ {words}"), words.clone()),
+            (b'n', format!("  ┆ {words}"), words.clone()),
+            (b'u', format!("1› q\n{words}"), format!("1› q\n{words}")),
+            // a CJK query has no spaces: it is cut where each row fills up,
+            // and the copy rejoins the cuts with nothing
+            (b'u', format!("1› {}", "修复登录错误的问题".repeat(10)), format!("1› {}", "修复登录错误的问题".repeat(10))),
+        ] {
+            assert_eq!(line_style(&line), st);
+            let mut state = RenderState::new();
+            state.inner_w = 78;
+            state.rows.extend(wrap_joined(st, &line, 78).into_iter().map(|(r, join)| (st, r, join)));
+            for (_, row, _) in &state.rows {
+                assert!(columns(&plain(&expand_tabs(&styled(st, row, 78, '⠋')))) <= 78, "{}: {row:?}", st as char);
+            }
+            assert_eq!(state.selected(((0, 0), (state.rows.len() - 1, usize::MAX))), copy, "{}", st as char);
+        }
+    }
+
+    /// F5: rows are measured in terminal columns. A CJK char takes two and a
+    /// tab runs to the next stop of 8, so a row cut or wrapped by counting
+    /// chars or bytes ran past the edge and the terminal wrapped it over the
+    /// next row.
+    #[test]
+    fn rows_are_measured_in_columns_not_chars() {
+        assert_eq!(columns("ab修复c"), 7);
+        assert_eq!(expand_tabs("\tx\n12\ty"), format!("{}x\n12{}y", " ".repeat(8), " ".repeat(6)));
+        assert_eq!(truncate_str("修复登录错误", 5), "修复", "a wide char that would straddle the edge goes");
+        assert_eq!(truncate_str("a\tb", 9), format!("a{}b", " ".repeat(7)), "tabs are expanded, never written raw");
+        assert_eq!(truncate_str("abc", 0), "");
+
+        // model prose: a CJK reply wraps at the width, not at twice it
+        let cjk: Vec<char> = "修复登录错误的问题".repeat(5).chars().collect();
+        let rows = wrap_ranges(&cjk, 40);
+        assert!(rows.iter().all(|(x, y, _)| columns(&cjk[*x..*y].iter().collect::<String>()) <= 40), "{rows:?}");
+        assert_eq!(rows.iter().map(|(x, y, _)| y - x).sum::<usize>(), cjk.len(), "nothing dropped");
+        assert_eq!(wrap_ranges(&['修'], 1), vec![(0, 1, None)], "a char wider than the row still moves on");
+
+        // a failed row's band fills to one short of the edge, not past it
+        let row = colorize_row(b'x', "  ✗ run git commit -m \"修复登录错误的问题\"  exit 1", '⠋');
+        assert_eq!(columns(&plain(&band(theme::tints().fail, &row, 60))), 59);
+
+        // table columns line up when a cell is wide
+        let out: Vec<String> = render_table(&[vec!["名前", "x"], vec!["ab", "y"]], 40).iter().map(|r| bare(r)).collect();
+        assert_eq!(columns(&out[0][..out[0].find('x').unwrap()]), columns(&out[2][..out[2].find('y').unwrap()]), "{out:?}");
+
+        // the composer: the visible part fits and the caret column is real
+        let draft = "修".repeat(40);
+        for c in [0, 1, 20, 39, 40] {
+            let (pre, suf) = input_window(&draft, c, 30);
+            assert!(columns(&pre) + columns(&suf) <= 30, "c={c}: {pre:?} {suf:?}");
+            assert!(!suf.is_empty() || c == 40, "c={c}: what follows the caret is shown");
+        }
+        let (pre, suf) = input_window("aé—ü".repeat(30).as_str(), 61, 20);
+        assert!(pre.starts_with('…') && columns(&pre) + columns(&suf) <= 20, "a multi-byte start is cut by char");
+        assert_eq!(input_window("ab修c", 3, 10), ("ab修".into(), "c".into()), "a short line is left whole");
     }
 }

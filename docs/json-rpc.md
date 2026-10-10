@@ -27,7 +27,7 @@ Both modes write these:
 |------|--------|
 | `session` | `name`, `path`, `model`, `messages` (user messages on the path), `cwd`, `thinking` |
 | `text_delta` / `thinking_delta` | `text`: a streamed chunk of the reply / of the model's reasoning |
-| `text` | `text`: a whole transcript line (attachments, todo lists, warnings) |
+| `text` | `text`: a whole transcript line (attachments, todo lists, warnings); a todo list is one `text`, its items joined by newlines |
 | `tool_start` | `id`, `summary`, e.g. `"read src/main.rs"` |
 | `tool_end` | `id`, `summary`, `ok`, `ms`, `output` (the tool's result) |
 | `usage` | `tokens`, `prompt`, `estimated`, `gen_ms`, `cached` (null when not reported); none for compaction's summary request |

@@ -96,16 +96,16 @@ fn browse_tui(session: &mut Session) -> Option<String> {
                 let (ref _id, sel, ref label) = rows[ri];
                 if ri == idx {
                     let marker = if sel { "▶ " } else { "  " };
-                    let text: String = label.chars().take(inner_w.saturating_sub(2)).collect();
-                    let content = format!("{marker}{text}");
-                    let padded = format!("{content:<width$}", width = inner_w);
-                    row.push_str(&padded);
+                    let text = crate::tui::truncate_str(label, inner_w.saturating_sub(2));
+                    row.push_str(marker);
+                    row.push_str(&text);
+                    row.push_str(&" ".repeat(inner_w.saturating_sub(2 + crate::tui::columns(&text))));
                 } else {
                     let prefix = "  ";
-                    let text: String = label.chars().take(inner_w.saturating_sub(2)).collect();
+                    let text = crate::tui::truncate_str(label, inner_w.saturating_sub(2));
                     row.push_str(prefix);
                     row.push_str(&text);
-                    let used = prefix.len() + text.len();
+                    let used = prefix.len() + crate::tui::columns(&text);
                     if used < inner_w {
                         row.extend(std::iter::repeat(' ').take(inner_w - used));
                     }
@@ -126,7 +126,7 @@ fn browse_tui(session: &mut Session) -> Option<String> {
         // hint
         let hint = "↑/↓ select · Enter branch · Esc cancel";
         let mut hrow = format!("│ {hint}");
-        let used = hrow.len();
+        let used = crate::tui::columns(&hrow);
         if used < w - 1 { hrow.extend(std::iter::repeat(' ').take(w - 1 - used)); }
         hrow.push('│');
         frame.push(hrow);

@@ -15,11 +15,6 @@ Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the orde
 
 ## Priority — Add When Needed
 
-### unicode-width Word Wrap
-When: CJK or emoji output garbles the TUI
-What: Use unicode-width crate for character display width
-Where: tui/mod.rs word_wrap()
-
 ## TUI Experience Gaps (from pi comparison, 2026-04-10 session)
 
 ### Editor Autocomplete

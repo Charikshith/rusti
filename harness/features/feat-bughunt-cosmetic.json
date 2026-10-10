@@ -1,0 +1,15 @@
+{
+  "id": "feat-bughunt-cosmetic",
+  "name": "Bug-hunt cosmetic fixes: column widths, legible colours, no repeated rows, the answer hint",
+  "description": "The four cosmetic findings of the rusti-bughunt-s1 report. F5: rows were measured in chars or bytes, so CJK, other wide characters and tabs overflowed the terminal; render.rs now has one columns() helper on the existing wide() table, tabs are expanded to stops of 8 where transcript lines are wrapped and in truncate_str, and wrap_ranges, word_wrap, truncate_str, band, render_table, the status line (footer_right), the composer window and caret, and rusti --tree all measure in columns. F13: every built-in theme role now reads at 4.5:1 or better on a dark terminal (Campbell black) and the fail glyph on its fail fill (default info 34 -> 94, the 31 reds -> 38;5;203, and a few 256-colour roles in solarized, nord, tokyo-night, catppuccin, high-contrast, quiet and amber); with \"light\": true each theme's colours are darkened, once per theme, until they read at 4.5:1 on white and the pale fills. F14: the todo list is one transcript line that each update replaces in place, and /themes says a theme-file warning once instead of on every opening. F15: a free-text ask_user closes any open list picker, and the hint says 'answer above' whenever a free-text question is pending.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "New tests: tui::render::tests::rows_are_measured_in_columns_not_chars (CJK wrap at 40 stays within 40 columns, tabs expanded, CJK band fills to 59 of 60, CJK table columns align, composer window fits and is cut by char), the extended a_pending_question_asks_for_an_answer_not_working (Theme picker open -> answer hint), tui::app::tests::todo_updates_and_repeated_warnings_do_not_stack, the CJK case in word_wrap_keeps_the_marker_indent_that_colorize_row_matches_on, and the extended tui::theme::tests::tinted_rows_are_readable_in_every_theme_and_mode (every role of every theme >= 4.5:1 on dark, the fail glyph on its fill, every lightened role on white and both pale fills). cargo test: 120 unit + 6 rpc + 1 trust pass; cargo clippy --all-targets adds no warnings.",
+  "decisions": [
+    "No unicode-width dependency: columns() reuses the hand-rolled wide() table the mouse-selection change added; its ponytail note (rarer wide or zero-width chars a column off) now covers drawing too.",
+    "The dark palettes are fixed in the table by hand so the table stays what is drawn; light mode is derived (darken toward black, 24-bit, attributes kept), since a hand-written light variant of 15 palettes is the bigger option the report named.",
+    "The 16 ANSI colours are measured as Windows Terminal's Campbell palette, the one the report measured; other terminals may draw them differently.",
+    "The todo list is emitted as one multi-line text event (RPC and plain output see one 'text' with newlines instead of one per item), which is what lets the TUI replace it.",
+    "The composer window was rewritten column-aware and now shows the text after the caret; this overlaps PR 1's F1 fix in input_window."
+  ]
+}
