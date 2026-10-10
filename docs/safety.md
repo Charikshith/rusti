@@ -19,11 +19,8 @@ pass `--yolo` for scripted runs.
 
 ## permission modes
 
-Shift+Tab in the TUI cycles four modes, manual → plan → auto → devil. The status line leads with
-the mode and a one-line meaning (`plan: read-only, writes and commands refused`), rewritten in
-place on every change, so cycling adds nothing to the transcript. Each mode has its colour:
-manual plain, plan in the info colour, auto in the warning colour, `DEVIL` in bold failure red.
-On a narrow terminal the meaning is cut first; the name always shows.
+Shift+Tab in the TUI cycles four modes, manual → plan → auto → devil. The status line shows the
+current one in place, so cycling adds nothing to the transcript ([tui.md § status line](tui.md#status-line)).
 
 | mode | what happens |
 |---|---|
