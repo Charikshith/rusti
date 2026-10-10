@@ -518,7 +518,7 @@ rusti --json "run the tests and fix what fails" | jq -c 'select(.type=="tool_end
 | `text` | `text`: a whole transcript line (attachments, todo lists, warnings) |
 | `tool_start` | `id`, `summary`, e.g. `"read src/main.rs"` |
 | `tool_end` | `id`, `summary`, `ok`, `ms`, `output` (the tool's result) |
-| `usage` | `tokens`, `prompt`, `estimated`, `gen_ms`, `cached` (null when not reported) |
+| `usage` | `tokens`, `prompt`, `estimated`, `gen_ms`, `cached` (null when not reported); none for compaction's summary request |
 | `retry` | `attempt`, `of`, `wait_ms`, `error` |
 | `ask` | `id`, `question`, `choices`: `[{label, value}]`, empty for a free-text question |
 | `steer_delivered` | `text`: queued steer text that just joined the conversation |
