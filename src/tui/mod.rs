@@ -658,9 +658,9 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
     }
 }
 
-/// First line of an entry, capped — for /tree output.
 /// Word wrap measured as drawn: drawn(row) is the columns a row takes on
 /// screen once styled, so a gutter the raw row lacks still moves its tabs.
+#[cfg(test)]
 pub fn word_wrap(s: &str, width: usize, drawn: impl Fn(&str) -> usize) -> Vec<String> {
     word_wrap_joined(s, width, drawn).into_iter().map(|r| r.0).collect()
 }
