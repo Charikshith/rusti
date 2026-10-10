@@ -83,7 +83,8 @@ pub enum Job {
 
 /// Absolute path to rusti's own Cargo.toml, baked in at build time — so
 /// /reload rebuilds rusti's source even when the agent's cwd is some other
-/// project it's coding on.
+/// project it's coding on. On a release binary it names the CI build dir,
+/// which doesn't exist here; reload_exe falls back to relaunching this exe.
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 fn now_ms() -> u128 {
@@ -142,6 +143,64 @@ fn stage_reload_exe(target_dir: &str) -> io::Result<String> {
     let exe = format!("{target_dir}/rusti-{}{ext}", now_ms());
     std::fs::copy(format!("{target_dir}/release/rusti{ext}"), &exe)?;
     Ok(exe)
+}
+
+/// The binary /reload relaunches. In a source checkout (MANIFEST_DIR/Cargo.toml
+/// exists) that is a fresh release build, staged; an installed binary has no
+/// source here (MANIFEST_DIR is the CI build dir), so it is this exe itself —
+/// the restart still re-reads config.json, models, themes and extensions.
+/// None means the build failed and the failure is already in the transcript.
+fn reload_exe(manifest_dir: &str, event_tx: &mpsc::Sender<ai_core::Event>) -> Option<String> {
+    let manifest = format!("{manifest_dir}/Cargo.toml");
+    if !std::path::Path::new(&manifest).exists() {
+        let _ = event_tx.send(ai_core::Event::Text(
+            "  ℹ reload: no rusti source on this machine - restarting the installed rusti to reload config".into(),
+        ));
+        return match std::env::current_exe() {
+            Ok(me) => Some(me.to_string_lossy().into_owned()),
+            Err(e) => {
+                let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ reload failed: can't find this rusti's own path: {e}")));
+                let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
+                None
+            }
+        };
+    }
+    let _ = event_tx.send(ai_core::Event::ToolStart { id: 0, summary: "cargo build --release".into() });
+    // rusti's own target dir, warm from ordinary cargo builds: a
+    // private one meant a second copy of every dependency and a
+    // cold first build. free_the_output_path handles the reason
+    // it was private — the running exe holding its own path.
+    let target_dir = format!("{manifest_dir}/target");
+    free_the_output_path(&target_dir);
+    let t0 = std::time::Instant::now();
+    let out = std::process::Command::new("cargo")
+        .args(["build", "--release", "--manifest-path", &manifest, "--target-dir", &target_dir])
+        .output();
+    let ms = t0.elapsed().as_millis();
+    let fail = |detail: String| {
+        let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary: "cargo build --release".into(), ok: false, ms, output: String::new() });
+        let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ reload failed:\n{detail}")));
+        let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
+        None
+    };
+    match out {
+        Ok(o) if o.status.success() => match stage_reload_exe(&target_dir) {
+            Ok(exe) => {
+                let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary: "cargo build --release".into(), ok: true, ms, output: String::new() });
+                Some(exe)
+            }
+            Err(e) => fail(format!("built OK but couldn't stage the binary: {e}")),
+        },
+        Ok(o) => {
+            let mut msg = String::from_utf8_lossy(&o.stderr).into_owned();
+            if msg.trim().is_empty() {
+                msg = String::from_utf8_lossy(&o.stdout).into_owned();
+            }
+            let tail: Vec<&str> = msg.lines().rev().take(25).collect();
+            fail(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+        }
+        Err(e) => fail(format!("failed to run cargo: {e}")),
+    }
 }
 
 /// Rebuilds the relaunch argv: drops stale --url/--key/--model/--session/
@@ -451,49 +510,16 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     }
                 }
                 Ok(Job::Reload) => {
-                    let _ = event_tx.send(ai_core::Event::ToolStart { id: 0, summary: "cargo build --release".into() });
-                    let manifest = format!("{MANIFEST_DIR}/Cargo.toml");
-                    // rusti's own target dir, warm from ordinary cargo builds: a
-                    // private one meant a second copy of every dependency and a
-                    // cold first build. free_the_output_path handles the reason
-                    // it was private — the running exe holding its own path.
-                    let target_dir = format!("{MANIFEST_DIR}/target");
-                    free_the_output_path(&target_dir);
-                    let t0 = std::time::Instant::now();
-                    let out = std::process::Command::new("cargo")
-                        .args(["build", "--release", "--manifest-path", &manifest, "--target-dir", &target_dir])
-                        .output();
-                    let ms = t0.elapsed().as_millis();
-                    let fail = |event_tx: &mpsc::Sender<ai_core::Event>, detail: String| {
-                        let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary: "cargo build --release".into(), ok: false, ms, output: String::new() });
-                        let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ reload failed:\n{detail}")));
-                        let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
-                    };
-                    match out {
-                        Ok(o) if o.status.success() => match stage_reload_exe(&target_dir) {
-                            Ok(exe) => {
-                                let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary: "cargo build --release".into(), ok: true, ms, output: String::new() });
-                                // a turn that failed before its first save leaves entries only in
-                                // memory; persist now so --resume finds them (and doesn't exit 1)
-                                let resume = !session.is_empty() && session.save().is_ok();
-                                // only a legacy session resumed from the root session.json has no name: no flag
-                                let named = (session.path != crate::session::PATH)
-                                    .then(|| crate::session::name_of(&session.path));
-                                let args = build_relaunch_args(&cli_args, &client.url, &client.key,
-                                    &client.model, named.as_deref(), resume);
-                                let _ = event_tx.send(ai_core::Event::Reload { exe, args });
-                            }
-                            Err(e) => fail(&event_tx, format!("built OK but couldn't stage the binary: {e}")),
-                        },
-                        Ok(o) => {
-                            let mut msg = String::from_utf8_lossy(&o.stderr).into_owned();
-                            if msg.trim().is_empty() {
-                                msg = String::from_utf8_lossy(&o.stdout).into_owned();
-                            }
-                            let tail: Vec<&str> = msg.lines().rev().take(25).collect();
-                            fail(&event_tx, tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
-                        }
-                        Err(e) => fail(&event_tx, format!("failed to run cargo: {e}")),
+                    if let Some(exe) = reload_exe(MANIFEST_DIR, &event_tx) {
+                        // a turn that failed before its first save leaves entries only in
+                        // memory; persist now so --resume finds them (and doesn't exit 1)
+                        let resume = !session.is_empty() && session.save().is_ok();
+                        // only a legacy session resumed from the root session.json has no name: no flag
+                        let named = (session.path != crate::session::PATH)
+                            .then(|| crate::session::name_of(&session.path));
+                        let args = build_relaunch_args(&cli_args, &client.url, &client.key,
+                            &client.model, named.as_deref(), resume);
+                        let _ = event_tx.send(ai_core::Event::Reload { exe, args });
                     }
                 }
                 Ok(Job::Rename(name)) => {
@@ -1081,6 +1107,19 @@ mod tests {
         let no_resume = build_relaunch_args(&["--tui".to_string()], "u", "k", "m", None, false);
         assert!(!no_resume.contains(&"--resume".to_string()));
         assert!(!no_resume.contains(&"--session".to_string()));
+    }
+
+    /// An installed binary's MANIFEST_DIR is the CI build dir: /reload must
+    /// relaunch this exe with a notice, never run cargo against it.
+    #[test]
+    fn reload_without_source_relaunches_current_exe() {
+        let (tx, rx) = mpsc::channel();
+        let exe = reload_exe("D:/a/rusti/rusti-no-such-dir", &tx);
+        assert_eq!(exe, Some(std::env::current_exe().unwrap().to_string_lossy().into_owned()));
+        drop(tx);
+        let events: Vec<_> = rx.iter().collect();
+        assert_eq!(events.len(), 1); // the notice only: no cargo ToolStart, no TaskEnd
+        assert!(matches!(&events[0], ai_core::Event::Text(t) if t.contains("no rusti source")));
     }
 
     /// The panic hook restores the terminal only from the UI thread. A worker

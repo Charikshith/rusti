@@ -79,7 +79,7 @@ slash commands (--tui)
   /new [NAME]     start a new session here, keeping the model, permission mode and MCP servers
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
-  /export         transcript to markdown      /reload           rebuild and relaunch
+  /export         transcript to markdown      /reload           rebuild (or restart) and relaunch
   /compact [FOCUS] summarize the older history now, optionally focused on FOCUS
   /settings       show/hide status-line parts  /mcp              MCP servers on/off
   /themes         pick the colour palette     /quit
