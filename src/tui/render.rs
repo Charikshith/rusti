@@ -186,7 +186,7 @@ fn char_at(row: &str, x: usize) -> usize {
     let mut col = 0;
     let mut n = 0;
     for c in row.chars() {
-        col += if c == '\t' { 8 - col % 8 } else if wide(c) { 2 } else { 1 };
+        col += if c == '\t' { 8 - col % 8 } else { width(c) };
         if col > x {
             return n;
         }
@@ -204,6 +204,45 @@ fn wide(c: char) -> bool {
         | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
         | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x1F300..=0x1F64F
         | 0x1F680..=0x1F6FF | 0x1F900..=0x1F9FF | 0x20000..=0x3FFFD)
+}
+
+/// Columns a char takes on screen.
+fn width(c: char) -> usize {
+    if wide(c) { 2 } else { 1 }
+}
+
+/// Columns a plain row takes on screen, its tabs already expanded.
+pub fn columns(s: &str) -> usize {
+    s.chars().map(width).sum()
+}
+
+/// Tabs as the spaces a terminal moves over, to stops of 8 from the start of
+/// each line. A raw tab moves the cursor without erasing, so it left the last
+/// frame's glyphs in the cells it skipped, and nothing could measure it.
+fn expand_tabs(s: &str) -> Cow<'_, str> {
+    if !s.contains('\t') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::new();
+    let mut col = 0;
+    for c in s.chars() {
+        match c {
+            '\t' => {
+                let n = 8 - col % 8;
+                out.push_str(&" ".repeat(n));
+                col += n;
+            }
+            '\n' => {
+                out.push(c);
+                col = 0;
+            }
+            c => {
+                out.push(c);
+                col += width(c);
+            }
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// What the terminal shows for a styled row: the text without CSI escapes.
@@ -259,6 +298,7 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // join marks a row that continues the one above, so a copy can rejoin them.
     let mut all: Vec<(u8, String, Option<&'static str>)> = Vec::new();
     let push_wrapped = |l: &str, all: &mut Vec<(u8, String, Option<&'static str>)>| {
+        let l = &*expand_tabs(l);
         let st = line_style(l);
         if st != b'm' {
             for src in l.split('\n') {
@@ -419,7 +459,11 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     let (caret_line, caret_col) = caret_at(draft, caret);
     let input_top = h.saturating_sub(1 + input_len);
     let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
-    let input_x = (2 + caret_col).min(w.saturating_sub(1)) as u16; // after "> "
+    // the columns drawn before the caret, not the chars before it: the row
+    // scrolls, and a wide char takes two
+    let line = draft.split('\n').nth(caret_line).unwrap_or("");
+    let before = columns(&input_window(line, caret_col, w.saturating_sub(3)).0);
+    let input_x = (2 + before).min(w.saturating_sub(1)) as u16; // after "> "
     goto(&mut out, input_x, input_y);
 
     out.write_all(SYNC_END.as_bytes())?;
@@ -436,8 +480,9 @@ fn hint_text(app: &App, spin: char) -> String {
         "press ctrl+c again to exit".to_string()
     } else if let Some(n) = app.notice() {
         format!("ℹ {n}")
-    } else if app.ask.is_some() && app.pick.is_none() {
-        // the turn is waiting on you, not the model; a picker shows its own keys
+    } else if app.ask.is_some() && !app.pick.as_ref().is_some_and(|p| p.kind == app::PickKind::Ask) {
+        // the turn is waiting on you, not the model, even under a list opened
+        // since; an answer picker shows its own keys
         "answer above · enter sends · esc cancels".to_string()
     } else if !app.done {
         format!("{spin} working…")
@@ -571,9 +616,10 @@ fn draw_line(out: &mut impl Write, line: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn truncate_str(s: &str, max: usize) -> String {
-    if max == 0 { return String::new(); }
-    s.chars().take(max).collect()
+/// The longest start of s that fits in max columns.
+pub fn truncate_str(s: &str, max: usize) -> String {
+    let mut used = 0;
+    expand_tabs(s).chars().take_while(|&c| { used += width(c); used <= max }).collect()
 }
 
 /// One transcript row, colored by kind: status symbol colored, text plain.
@@ -710,7 +756,7 @@ fn band(bg: &str, row: &str, w: usize) -> String {
         match c {
             '\x1b' => esc = true,
             c if esc => esc = !c.is_ascii_alphabetic(),
-            _ => vis += 1,
+            c => vis += width(c),
         }
     }
     let body = row.replace(RESET, &format!("{RESET}{bg}"));
@@ -778,7 +824,7 @@ fn render_table(rows: &[Vec<&str>], w: usize) -> Vec<String> {
         return Vec::new();
     }
     let mut width: Vec<usize> = (0..cols)
-        .map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| s.chars().count()).max().unwrap_or(0))
+        .map(|c| rows.iter().filter_map(|r| r.get(c)).map(|s| columns(s)).max().unwrap_or(0))
         .collect();
     // gap of 1 between columns, 2 for the transcript indent
     let budget = w.saturating_sub(2);
@@ -795,7 +841,7 @@ fn render_table(rows: &[Vec<&str>], w: usize) -> Vec<String> {
             let cell = cells.get(c).map(String::as_str).unwrap_or("");
             let cell = truncate_str(cell, *wid);
             s.push_str(&cell);
-            let pad = wid.saturating_sub(cell.chars().count()) + usize::from(c + 1 < cols);
+            let pad = wid.saturating_sub(columns(&cell)) + usize::from(c + 1 < cols);
             s.extend(std::iter::repeat(' ').take(pad));
         }
         s.trim_end().to_string()
@@ -913,21 +959,27 @@ fn md_line(src: &str) -> (Vec<char>, Vec<(usize, usize, &'static str)>) {
     (out, runs)
 }
 
-/// Greedy word wrap over chars, returning each row's range and its join: what
+/// Greedy word wrap over chars, measured in columns, returning each row's range and its join: what
 /// the break before it dropped (a space, or nothing for a hard break inside a
 /// word), None on the first row. Ranges (not strings) keep the style runs
 /// addressable after wrapping.
-fn wrap_ranges(cs: &[char], width: usize) -> Vec<(usize, usize, Option<&'static str>)> {
-    let width = width.max(1);
+fn wrap_ranges(cs: &[char], max: usize) -> Vec<(usize, usize, Option<&'static str>)> {
     let mut rows = Vec::new();
     let mut start = 0;
     let mut join = None;
     while start < cs.len() {
-        if cs.len() - start <= width {
+        // the most chars that fit in max columns, and at least one
+        let mut hard = start;
+        let mut used = 0;
+        while hard < cs.len() && used + width(cs[hard]) <= max {
+            used += width(cs[hard]);
+            hard += 1;
+        }
+        let hard = hard.max(start + 1);
+        if hard == cs.len() {
             rows.push((start, cs.len(), join));
             break;
         }
-        let hard = start + width;
         let brk = (start..hard).rev().find(|&j| cs[j] == ' ').unwrap_or(start);
         let end = if brk == start { hard } else { brk };
         rows.push((start, end, join));
@@ -1002,18 +1054,36 @@ fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
     out
 }
 
+/// The part of a line that fits max columns around the caret, as (before,
+/// after) it: the caret sits about 3/4 across, unless the end of the line
+/// leaves room to show more of what comes before it.
 fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
     if max == 0 { return (String::new(), String::new()); }
     let chars: Vec<char> = s.chars().collect();
     let c = c.min(chars.len());
-    if chars.len() <= max {
+    if columns(s) <= max {
         return (chars[..c].iter().collect(), chars[c..].iter().collect());
     }
-    let start = c.saturating_sub(max * 3 / 4).min(chars.len() - max);
-    let mut pre: String = chars[start..start + max].iter().collect();
-    let suf: String = chars[start + max..].iter().collect();
-    if start > 0 { pre = format!("…{}", &pre[1..]); }
-    (pre, suf)
+    let (mut start, mut used) = (c, 0);
+    while start > 0 && used + width(chars[start - 1]) <= max * 3 / 4 {
+        start -= 1;
+        used += width(chars[start]);
+    }
+    let tail: usize = chars[c..].iter().map(|&ch| width(ch)).sum();
+    while start > 0 && used + tail + width(chars[start - 1]) <= max {
+        start -= 1;
+        used += width(chars[start]);
+    }
+    let mut end = c;
+    while end < chars.len() && used + width(chars[end]) <= max {
+        used += width(chars[end]);
+        end += 1;
+    }
+    let mut pre: String = chars[start..c].iter().collect();
+    if start > 0 && !pre.is_empty() {
+        pre = format!("…{}", pre.chars().skip(1).collect::<String>());
+    }
+    (pre, chars[c..end].iter().collect())
 }
 
 #[cfg(test)]
@@ -1165,7 +1235,7 @@ mod tests {
         assert!(first("  ✓ Cargo.toml  0ms").contains(theme::current().dim), "a finished tool un-bolds to dim");
         assert!(!first("  ✓ Cargo.toml  0ms").contains(BOLD), "a finished tool is not bold");
         assert!(first("  ✓ Cargo.toml  0ms").contains("\x1b[32m✓"), "tool ok must be green");
-        assert!(first("  ✗ edit failed").contains("\x1b[31m✗"), "tool fail must be red");
+        assert!(first("  ✗ edit failed").contains("\x1b[38;5;203m✗"), "tool fail must be red");
         // tinted rows pin their text colour on every wrapped row, never the
         // terminal's default foreground, which may not read on the tint
         let long = format!("  ✗ run {}", "word ".repeat(30));
@@ -1174,11 +1244,11 @@ mod tests {
         assert!(rows(&format!("  ? run {}  allow?", "word ".repeat(30))).iter().all(|r| r.contains(theme::tints().ask_text)));
         assert!(first("  ⠋ cargo build").contains("\x1b[33m⠋"), "running must be yellow");
         assert!(first("  ⚠ interrupted").contains("\x1b[33m⚠"), "warn must be yellow");
-        assert!(first("  ℹ renamed").contains("\x1b[34mℹ"), "info must be blue");
+        assert!(first("  ℹ renamed").contains("\x1b[94mℹ"), "info must be bright blue: 34 is 2.4:1 on black");
         assert!(first("  · 32 tok").starts_with(theme::current().dim), "stats must be dim");
         // a hunk row is a stats row until the sign is read, so the order of the
         // line_style arms is the whole feature: "  · - x" must not land on b's'
-        assert!(first("  · -    2  let x = 1;").starts_with("\x1b[31m"), "a removed line must be red");
+        assert!(first("  · -    2  let x = 1;").starts_with("\x1b[38;5;203m"), "a removed line must be red");
         assert!(first("  · +    2  let x = 2;").starts_with("\x1b[32m"), "an added line must be green");
         assert!(first("  · +    2  let x = 2;").contains(theme::current().dim), "the code itself stays dim");
         assert!(first("  · … 3 more changed lines").starts_with(theme::current().dim), "the overflow row is not a hunk row");
@@ -1348,5 +1418,50 @@ last bit";
         assert_eq!(hint_text(&app, '⠋'), "⠋ working…");
         app.ask = Some(("push where?".into(), tokio::sync::oneshot::channel().0));
         assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+        // F15: a list opened before or since does not hide that it is your turn
+        let pick = |kind| app::Pick { kind, title: "t".into(), rows: vec![], idx: 0, top: 0, filter: String::new() };
+        app.pick = Some(pick(app::PickKind::Theme));
+        assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+        app.pick = Some(pick(app::PickKind::Ask));
+        assert_eq!(hint_text(&app, '⠋'), "⠋ working…", "an answer picker shows its own keys");
+    }
+
+    /// F5: rows are measured in terminal columns. A CJK char takes two and a
+    /// tab runs to the next stop of 8, so a row cut or wrapped by counting
+    /// chars or bytes ran past the edge and the terminal wrapped it over the
+    /// next row.
+    #[test]
+    fn rows_are_measured_in_columns_not_chars() {
+        assert_eq!(columns("ab修复c"), 7);
+        assert_eq!(expand_tabs("\tx\n12\ty"), format!("{}x\n12{}y", " ".repeat(8), " ".repeat(6)));
+        assert_eq!(truncate_str("修复登录错误", 5), "修复", "a wide char that would straddle the edge goes");
+        assert_eq!(truncate_str("a\tb", 9), format!("a{}b", " ".repeat(7)), "tabs are expanded, never written raw");
+        assert_eq!(truncate_str("abc", 0), "");
+
+        // model prose: a CJK reply wraps at the width, not at twice it
+        let cjk: Vec<char> = "修复登录错误的问题".repeat(5).chars().collect();
+        let rows = wrap_ranges(&cjk, 40);
+        assert!(rows.iter().all(|(x, y, _)| columns(&cjk[*x..*y].iter().collect::<String>()) <= 40), "{rows:?}");
+        assert_eq!(rows.iter().map(|(x, y, _)| y - x).sum::<usize>(), cjk.len(), "nothing dropped");
+        assert_eq!(wrap_ranges(&['修'], 1), vec![(0, 1, None)], "a char wider than the row still moves on");
+
+        // a failed row's band fills to one short of the edge, not past it
+        let row = colorize_row(b'x', "  ✗ run git commit -m \"修复登录错误的问题\"  exit 1", '⠋');
+        assert_eq!(columns(&plain(&band(theme::tints().fail, &row, 60))), 59);
+
+        // table columns line up when a cell is wide
+        let out: Vec<String> = render_table(&[vec!["名前", "x"], vec!["ab", "y"]], 40).iter().map(|r| bare(r)).collect();
+        assert_eq!(columns(&out[0][..out[0].find('x').unwrap()]), columns(&out[2][..out[2].find('y').unwrap()]), "{out:?}");
+
+        // the composer: the visible part fits and the caret column is real
+        let draft = "修".repeat(40);
+        for c in [0, 1, 20, 39, 40] {
+            let (pre, suf) = input_window(&draft, c, 30);
+            assert!(columns(&pre) + columns(&suf) <= 30, "c={c}: {pre:?} {suf:?}");
+            assert!(!suf.is_empty() || c == 40, "c={c}: what follows the caret is shown");
+        }
+        let (pre, suf) = input_window("aé—ü".repeat(30).as_str(), 61, 20);
+        assert!(pre.starts_with('…') && columns(&pre) + columns(&suf) <= 20, "a multi-byte start is cut by char");
+        assert_eq!(input_window("ab修c", 3, 10), ("ab修".into(), "c".into()), "a short line is left whole");
     }
 }

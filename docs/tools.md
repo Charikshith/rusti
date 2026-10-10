@@ -41,4 +41,5 @@ call per turn, and returns one combined result.
 - `run_background` starts a server or watcher and returns a job id; `job_output` reads what
   it has printed so far, `job_stop` kills the whole process tree. Jobs outlive the agent if
   not stopped.
-- `todo` lets the model keep a visible checklist for multi-step work.
+- `todo` lets the model keep a visible checklist for multi-step work; each update replaces the
+  list in the transcript rather than printing another copy.

@@ -10,6 +10,7 @@ mod plain;
 
 pub use app::utc_offset_min; // session auto names read local time too
 pub use app::image_refs; // a one-shot task attaches its @ images the same way
+pub use render::{columns, truncate_str}; // --tree measures its rows in columns too
 
 use std::io::{self, Write, stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -675,7 +676,7 @@ pub fn word_wrap(s: &str, width: usize) -> Vec<String> {
         for word in body.split(' ') {
             if line.is_empty() {
                 line = word.to_string();
-            } else if line.len() + 1 + word.len() > w {
+            } else if columns(&line) + 1 + columns(word) > w {
                 out.push(line);
                 line = word.to_string();
             } else {
@@ -706,6 +707,8 @@ mod tests {
         assert_eq!(rows[0], "  ✓ aaaa");
         assert!(rows.iter().all(|r| r.len() <= 10), "{rows:?}");
         assert_eq!(rows.concat().replace(' ', ""), "✓aaaabbbbcccc");
+        // F5: a wide char counts two columns, not its three UTF-8 bytes
+        assert_eq!(word_wrap("  · 修复 登录 错误", 11), vec!["  · 修复", "登录 错误"]);
         // blank and all-space lines survive unchanged
         assert_eq!(word_wrap("", 80), vec![""]);
         assert_eq!(word_wrap("  ", 80), vec!["  "]);

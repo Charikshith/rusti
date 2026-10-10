@@ -1469,9 +1469,8 @@ async fn dispatch(client: &llm::Client, name: &str, args: &Value, cancel: &Atomi
                 )).collect())
                 .unwrap_or_default();
             let r = tools::todo(items);
-            for line in r.1.lines() {
-                emit(Event::Text(format!("  {line}")));
-            }
+            // one line, so a front end can replace the last version in place
+            emit(Event::Text(r.1.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")));
             r
         }
         "delegate" => delegate(client, args["task"].as_str().unwrap_or(""), cancel).await,
