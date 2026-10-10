@@ -25,7 +25,7 @@ usage: rusti [flags]              interactive terminal UI
 flags
   --tui                  force the UI (bare `rusti` in a terminal already opens it)
   --json                 one-shot run for programs: events as JSONL on stdout, logs on stderr;
-                         permission prompts are refused unless --yolo (readme.md § JSON and RPC modes)
+                         permission prompts are refused unless --yolo (docs/json-rpc.md)
   --rpc                  drive rusti from another program over JSONL on stdin/stdout (same section)
   --session NAME         use .rusti/sessions/NAME.json (unnamed: a new s-YYYYMMDD-HHMM)
   --resume               continue a session (the latest unless --session names one)
@@ -63,7 +63,7 @@ Git Bash (Windows), then bash on PATH, then cmd /C or sh -c. \"shell_command_pre
 put in front of every command, on its own line.
 \"hooks\" maps an event (user_shell, pre_tool, post_tool, user_prompt, session_start,
 pre_compact) to commands, each {\"command\": \"…\", \"timeout\": 30}: the event goes in as JSON
-on stdin, a JSON decision comes back on stdout (readme.md § extensions).
+on stdin, a JSON decision comes back on stdout (docs/extensions.md § hooks).
 extensions: ~/.rusti/prompts/NAME.md is the command /NAME, ~/.rusti/skills/NAME/SKILL.md (and
 ~/.agents/skills) a skill, ~/.rusti/themes/NAME.json a palette; ./.rusti has the same once trusted.
 trust: a folder whose model.json sets mcp, shell, shell_command_prefix, hooks, read_allow or
@@ -95,7 +95,7 @@ slash commands (--tui)
   ctrl+t          hide/show the model's thinking (saved as \"hide_thinking\" in config.json)
   @PATH           pick a project file to name in the message (the model reads it)
   tab             complete the path before the cursor
-  shift+tab       permission mode: manual → plan → auto → devil (readme.md § safety)
+  shift+tab       permission mode: manual → plan → auto → devil (docs/safety.md)
 ";
 
 fn main() {
