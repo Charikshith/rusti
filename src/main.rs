@@ -8,6 +8,7 @@
 
 mod ai_core;
 mod config;
+mod resources;
 mod session;
 mod tree;
 mod tui;
@@ -50,11 +51,16 @@ keeps a server's tools out of requests until the model loads them with tool_sear
 \"shell\" is the path of the shell every command runs in (~ is your home folder); unset, it is
 Git Bash (Windows), then bash on PATH, then cmd /C or sh -c. \"shell_command_prefix\" is
 put in front of every command, on its own line.
+\"hooks\" maps an event (user_shell, pre_tool, post_tool, user_prompt, session_start,
+pre_compact) to commands, each {\"command\": \"…\", \"timeout\": 30}: the event goes in as JSON
+on stdin, a JSON decision comes back on stdout (readme.md § extensions).
+extensions: ~/.rusti/prompts/NAME.md is the command /NAME, ~/.rusti/skills/NAME/SKILL.md (and
+~/.agents/skills) a skill, ~/.rusti/themes/NAME.json a palette; ./.rusti has the same once trusted.
 trust: a folder whose model.json sets mcp, shell, shell_command_prefix, hooks, read_allow or
-allow (or whose .rusti has prompts, skills, themes or SYSTEM.md) is asked about once:
-[y]es for this run, [a]lways (saved by path in ~/.rusti/trust.json), or no. Untrusted, those
-are ignored with one warning; max_iters, context, theme and footer still apply. Piped and
-one-shot runs are untrusted unless --trust.
+allow (or whose .rusti has prompts, skills, themes or SYSTEM.md, or that has .agents/skills)
+is asked about once: [y]es for this run, [a]lways (saved by path in ~/.rusti/trust.json), or
+no. Untrusted, those are ignored with one warning; max_iters, context, theme and footer still
+apply. Piped and one-shot runs are untrusted unless --trust.
 \"read_max_bytes\" caps one read_file (default 51200; 2000 lines either way; 0 = no cap).
 
 slash commands (--tui)
@@ -65,6 +71,9 @@ slash commands (--tui)
   /export         transcript to markdown      /reload           rebuild and relaunch
   /settings       show/hide status-line parts  /mcp              MCP servers on/off
   /themes         pick the colour palette     /quit
+  /NAME ARGS      a prompt template: $1..$9, $@, ${1:-default} filled in from ARGS
+  /skill:NAME ARGS  send that skill's instructions, then ARGS
+  /SERVER:PROMPT ARGS  an MCP server's prompt, ARGS in its declared order
   !CMD            run a shell command, output streamed; it goes to the model too
   !!CMD           the same, but the output is shown to you only
   shift+enter     newline in the draft (alt+enter where the terminal eats shift)
@@ -161,6 +170,7 @@ fn main() {
     }
     ai_core::allow_from_config(&saved.allow);
     ai_core::tools::set_shell(saved.shell.as_deref(), saved.shell_command_prefix.as_deref());
+    ai_core::hooks::set(saved.hooks.clone());
     if let Some(n) = saved.max_iters {
         ai_core::set_max_iters(n);
     }
@@ -240,7 +250,7 @@ fn main() {
 
     // plain mode connects too, so a one-shot run gets the same tools as the TUI;
     // status goes to stderr to keep stdout the answer alone for piping
-    for line in ai_core::mcp::connect_all().into_iter().chain(ai_core::prompt_note()) {
+    for line in ai_core::mcp::connect_all().into_iter().chain(ai_core::prompt_note()).chain(ai_core::hooks::check()) {
         eprintln!("{}", line.trim_start());
     }
 

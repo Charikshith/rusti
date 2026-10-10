@@ -6,7 +6,8 @@
 //
 // Their tools are merged into rusti's own tool list under the name
 // "mcp__<server>__<tool>", which is what makes them reachable by the model
-// without touching dispatch()'s match arm for every new server.
+// without touching dispatch()'s match arm for every new server. Their
+// prompts, which MCP defines as user-invoked, become /<server>:<prompt>.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -46,6 +47,8 @@ pub struct Server {
     pub tools: Vec<(String, String, Value)>,
     /// Config's `defer`: tools stay out of requests until tool_search loads them.
     pub defer: bool,
+    /// What prompts/list returned, when the server advertises prompts.
+    pub prompts: Vec<Prompt>,
     stdin: Mutex<ChildStdin>,
     rx: Mutex<Receiver<String>>,
     child: Mutex<Child>,
@@ -122,6 +125,22 @@ impl Drop for Server {
     }
 }
 
+/// An MCP prompt: a message template the server fills in from named arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Prompt {
+    pub name: String,
+    pub desc: String,
+    /// (name, required), in the order the server declared them.
+    pub args: Vec<(String, bool)>,
+}
+
+impl Prompt {
+    /// `<required> [optional]`, for the / menu and a usage error.
+    pub fn hint(&self) -> String {
+        self.args.iter().map(|(a, req)| if *req { format!("<{a}>") } else { format!("[{a}]") }).collect::<Vec<_>>().join(" ")
+    }
+}
+
 pub(crate) static SERVERS: Mutex<Vec<Arc<Server>>> = Mutex::new(Vec::new());
 
 /// Tool names must match [A-Za-z0-9_-]; anything else becomes '_'.
@@ -189,6 +208,7 @@ fn connect(name: &str, cfg: &McpServer) -> Result<Server, String> {
         name: name.to_string(),
         tools: Vec::new(),
         defer: cfg.defer,
+        prompts: Vec::new(),
         stdin: Mutex::new(stdin),
         rx: Mutex::new(rx),
         child: Mutex::new(child),
@@ -196,7 +216,7 @@ fn connect(name: &str, cfg: &McpServer) -> Result<Server, String> {
         next_id: AtomicU64::new(1),
     };
 
-    s.request(
+    let init = s.request(
         "initialize",
         json!({
             "protocolVersion": PROTOCOL,
@@ -235,7 +255,36 @@ fn connect(name: &str, cfg: &McpServer) -> Result<Server, String> {
         )));
     }
     s.tools = tools;
+    // only a server that says it has prompts is asked; one that fails to list
+    // them still serves its tools
+    if init.pointer("/capabilities/prompts").is_some() {
+        if let Ok(listed) = s.request("prompts/list", json!({}), HANDSHAKE_TIMEOUT) {
+            s.prompts = parse_prompts(&listed);
+        }
+    }
     Ok(s)
+}
+
+fn parse_prompts(listed: &Value) -> Vec<Prompt> {
+    let all = listed.get("prompts").and_then(Value::as_array).cloned().unwrap_or_default();
+    all.iter()
+        .filter_map(|p| {
+            let name = p.get("name")?.as_str()?.to_string();
+            // a name with a space could never be typed as one command
+            if name.contains(char::is_whitespace) {
+                return None;
+            }
+            let args = p.get("arguments").and_then(Value::as_array).cloned().unwrap_or_default();
+            Some(Prompt {
+                name,
+                desc: p.get("description").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "),
+                args: args
+                    .iter()
+                    .filter_map(|a| Some((a.get("name")?.as_str()?.to_string(), a.get("required").and_then(Value::as_bool).unwrap_or(false))))
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 /// Connect every enabled server in the config. Returns one status line each,
@@ -248,7 +297,11 @@ pub fn connect_all() -> Vec<String> {
         match connect(name, s) {
             Ok(srv) => {
                 let deferred = if srv.defer { "deferred " } else { "" };
-                out.push(format!("  ✓ mcp {name}: {} {deferred}tools", srv.tools.len()));
+                let prompts = match srv.prompts.len() {
+                    0 => String::new(),
+                    n => format!(", {} as /{name}:…", crate::session::count(n, "prompt", "prompts")),
+                };
+                out.push(format!("  ✓ mcp {name}: {} {deferred}tools{prompts}", srv.tools.len()));
                 if let Ok(mut list) = SERVERS.lock() {
                     list.push(Arc::new(srv));
                 }
@@ -401,29 +454,74 @@ pub fn call(full: &str, args: &Value) -> (bool, String) {
     match srv.request("tools/call", params, CALL_TIMEOUT) {
         Err(e) => (false, e),
         Ok(res) => {
-            let text = res
-                .get("content")
-                .and_then(Value::as_array)
-                .map(|parts| {
-                    parts
-                        .iter()
-                        .map(|p| match p.get("type").and_then(Value::as_str) {
-                            Some("text") => p.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
-                            // images and resources are not rendered; say what
-                            // arrived so the model is not told "nothing"
-                            Some(other) => format!("[{other} content]"),
-                            None => String::new(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_else(|| res.to_string());
+            let text = res.get("content").and_then(Value::as_array).map(|p| text_of(p)).unwrap_or_else(|| res.to_string());
             // isError is the protocol's way of reporting a TOOL failure; a
             // transport failure came back as Err above
             let ok = !res.get("isError").and_then(Value::as_bool).unwrap_or(false);
             (ok, if text.trim().is_empty() { "(no output)".into() } else { text })
         }
     }
+}
+
+/// The text of MCP content parts. Images and resources are not rendered;
+/// they say what arrived, so the model is not told "nothing".
+fn text_of(parts: &[Value]) -> String {
+    parts
+        .iter()
+        .map(|p| match p.get("type").and_then(Value::as_str) {
+            Some("text") => p.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+            Some(other) => format!("[{other} content]"),
+            None => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every connected server's prompts, as (server, prompt).
+pub fn prompts() -> Vec<(String, Prompt)> {
+    let Ok(list) = SERVERS.lock() else { return Vec::new() };
+    list.iter().flat_map(|s| s.prompts.iter().map(|p| (s.name.clone(), p.clone()))).collect()
+}
+
+/// Typed words onto the prompt's declared arguments, in order. The last one
+/// takes whatever is left, so `/gh:review fix the login bug` fills a single
+/// "focus" with the whole sentence. A missing required one is a usage error.
+pub fn prompt_args(p: &Prompt, words: Vec<String>) -> Result<serde_json::Map<String, Value>, String> {
+    let mut m = serde_json::Map::new();
+    let mut words = words.into_iter();
+    for (i, (name, required)) in p.args.iter().enumerate() {
+        let v = if i + 1 == p.args.len() { words.by_ref().collect::<Vec<_>>().join(" ") } else { words.next().unwrap_or_default() };
+        if v.is_empty() {
+            if *required {
+                return Err(format!("{name} is required"));
+            }
+            continue;
+        }
+        m.insert(name.clone(), Value::String(v));
+    }
+    Ok(m)
+}
+
+/// prompts/get: the messages it returns, as one user message's text.
+pub fn get_prompt(server: &str, name: &str, args: &serde_json::Map<String, Value>) -> Result<String, String> {
+    let srv = {
+        let list = SERVERS.lock().map_err(|_| "mcp registry poisoned".to_string())?;
+        list.iter().find(|s| s.name == server).cloned().ok_or(format!("mcp server {server} is not connected"))?
+    };
+    let res = srv.request("prompts/get", json!({"name": name, "arguments": args}), CALL_TIMEOUT)?;
+    let msgs = res.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+    // one content object per message in the spec; an array is accepted too
+    let text = msgs
+        .iter()
+        .filter_map(|m| m.get("content"))
+        .map(|c| text_of(c.as_array().map_or(std::slice::from_ref(c), Vec::as_slice)))
+        .filter(|t| !t.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.trim().is_empty() {
+        return Err(format!("{server}:{name} returned no text"));
+    }
+    Ok(text)
 }
 
 /// One row per configured server: (name, enabled, connected, tool count).
@@ -479,6 +577,7 @@ pub(crate) fn dead_server(name: &str, defer: bool, tools: Vec<(String, String, V
         name: name.into(),
         tools,
         defer,
+        prompts: Vec::new(),
         stdin: Mutex::new(stdin),
         rx: Mutex::new(mpsc::channel().1),
         child: Mutex::new(child),
@@ -555,6 +654,18 @@ mod tests {
         // an unknown name is refused by us, not sent
         let (ok, out) = call("mcp__fake__nope", &json!({}));
         assert!(!ok && out.contains("unknown mcp tool"), "got {out}");
+
+        // E2: the advertised prompts, their arguments, and prompts/get's text
+        let listed = prompts().into_iter().filter(|(s, _)| s == "fake").map(|(_, p)| p).collect::<Vec<_>>();
+        assert_eq!(listed.len(), 1);
+        let greet = &listed[0];
+        assert_eq!((greet.name.as_str(), greet.desc.as_str(), greet.hint().as_str()), ("greet", "Greet someone", "<who> [style]"));
+        let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+        assert_eq!(prompt_args(greet, words("")), Err("who is required".into()));
+        let args = prompt_args(greet, words("Ada very warmly")).unwrap();
+        assert_eq!(Value::Object(args.clone()), json!({"who": "Ada", "style": "very warmly"}), "the last argument takes the rest");
+        assert_eq!(get_prompt("fake", "greet", &args).unwrap(), "Greet Ada, very warmly.\n\nKeep it short.");
+        assert!(get_prompt("nope", "greet", &args).unwrap_err().contains("not connected"));
 
         SERVERS.lock().unwrap().retain(|s| s.name != "fake");
     }

@@ -58,7 +58,8 @@ command is refused), `/tree` browses and branches the session, `/undo` puts back
 the last turn changed, `/commit` stages and commits the work, `/export` writes the
 transcript out as markdown, `/settings` chooses which status-line segments are shown,
 `/mcp` switches MCP servers on and off, `!cargo test` runs a shell command whose output the model
-sees on the next turn, and `!!git log` runs one whose output only you see. `/new [name]` saves the session and starts an empty one in place, keeping the model, plan mode, MCP servers and background jobs. `/resume` with no argument lists saved sessions and switches to the
+sees on the next turn, and `!!git log` runs one whose output only you see. Your own prompt
+templates, skills and MCP prompts join the `/` menu too (see "extensions"). `/new [name]` saves the session and starts an empty one in place, keeping the model, plan mode, MCP servers and background jobs. `/resume` with no argument lists saved sessions and switches to the
 one you pick; with a name or number it switches straight to it. The status line carries
 plan mode, the session, model, git branch, tokens used, how full the context is and, when
 the provider reports it, how much of the last prompt came from its cache (`cache 82%`).
@@ -124,7 +125,9 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui.rs | ~190 | custom ANSI TUI renderer: scrolling transcript, streaming text, ask_user input |
 | ai_core/mod.rs | ~160 | run_agent loop, event system (SINK), tool dispatch, self-test |
 | ai_core/llm.rs | ~80 | reqwest SSE streaming client, tool-call argument accumulation |
-| ai_core/mcp.rs | ~410 | MCP client: stdio JSON-RPC 2.0, spawns servers, merges their tools in as `mcp__<server>__<tool>`, `/mcp` toggles them |
+| ai_core/mcp.rs | ~410 | MCP client: stdio JSON-RPC 2.0, spawns servers, merges their tools in as `mcp__<server>__<tool>` and their prompts in as `/<server>:<prompt>`, `/mcp` toggles them |
+| ai_core/hooks.rs | ~200 | hooks: user commands on six events, JSON in on stdin, a JSON decision out on stdout |
+| resources.rs | ~300 | prompt templates and skills: discovery, frontmatter, argument expansion |
 | ai_core/tools.rs | ~470 | 17 tools: read(offset/limit)/write/edit/multi_edit/delete/move, grep/glob/list_dir (ripgrep if installed, std fallback), run_command (timeout), run_background/job_output/job_stop, todo, ask_user, web_fetch (tags stripped); project-root guard |
 
 **Total application code: ~1,015 lines**
@@ -154,14 +157,15 @@ model can inspect dependency sources. `--yolo` lifts both the prompts and the gu
 A cloned repo's `model.json` could otherwise start its own MCP servers, swap the shell
 or pre-approve `run_command` before you type anything. So when `./model.json` sets `mcp`,
 `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow` (or `./.rusti/` has
-`prompts`, `skills`, `themes` or `SYSTEM.md`), the TUI asks once at launch:
+`prompts`, `skills`, `themes` or `SYSTEM.md`, or there is a `./.agents/skills`), the TUI asks
+once at launch:
 
 ```
 This folder's model.json sets mcp, shell, allow. Trust it? [y]es / [N]o / [a]lways
 ```
 
 `y` trusts it for this run, `a` also saves it by canonical path in `~/.rusti/trust.json`.
-Untrusted, those keys are ignored with one warning line (and saved back untouched);
+Untrusted, those keys and folders are ignored with one warning line (keys are saved back untouched);
 `max_iters`, `context`, `theme` and `footer` still apply. Piped and one-shot runs never
 ask and stay untrusted unless `--trust` is given. `--yolo` does not imply `--trust`.
 
@@ -271,6 +275,105 @@ Rust. On Windows the command is run through `cmd /C`, because `npx` and `uvx` ar
 MCP tools are **always permission-gated** and always refused in plan mode. rusti
 cannot read a third-party tool's effects off its name, so it treats every one of
 them as if it mutates. `[a]lways` works on them like any other tool.
+
+A server that advertises **prompts** gets one `/` command per prompt, `/<server>:<prompt>`,
+listed in the menu with its arguments (`<required> [optional]`) and the `mcp:<server>` tag.
+Typed words fill the declared arguments in order and the last one takes the rest, so
+`/gh:review fix the login bug` gives a single `focus` argument the whole sentence. On Enter
+rusti calls `prompts/get` and sends the text it returns as your message.
+
+## extensions
+
+Everything here is a file or a command you write; none of it is a plugin API. rusti reads
+`~/.rusti/` and, once the folder is trusted (see "project trust"), `./.rusti/` the same way.
+Where both define a name, yours wins, so a cloned repo cannot shadow your commands.
+
+```
+~/.rusti/  and  ./.rusti/
+  prompts/<name>.md        a prompt template, typed as /<name>
+  skills/<name>/SKILL.md   a skill (also ~/.agents/skills and ./.agents/skills)
+  themes/<name>.json       a colour palette for /themes
+config.json "hooks"        commands run on events (./model.json's need trust)
+```
+
+The `/` menu lists the built-ins, then templates, then skills, then MCP prompts, each
+tagged with where it came from: `[u]` yours, `[p]` this project's, `[mcp:server]`. A template
+named like a built-in is skipped with a warning; `/commit` stays rusti's. A file that does
+not load says why in the transcript at startup.
+
+**Prompt templates.** A markdown file is a command. Optional frontmatter sets the menu's
+description and argument hint; without a description the first line is used:
+
+```markdown
+---
+description: Review a file for bugs
+argument-hint: <file> [focus]
+---
+Review $1 for ${2:-correctness bugs}. Read it fully first, then list each problem with
+its line number and a suggested fix. Change nothing.
+```
+
+Saved as `~/.rusti/prompts/review.md`, `/review src/main.rs "error handling"` sends that text
+with `$1` = `src/main.rs` and `$2` = `error handling`. Arguments split like a shell's
+(quotes group; `\` escapes a quote, a space or another `\`, and any other
+backslash is kept, so `src\tui\app.rs` arrives intact); `$1`…`$9` are positional, `$@` and
+`$ARGUMENTS` are all of them, and `${1:-default}` falls back when the argument is missing or
+empty. Arguments a template never uses are added after a blank line rather than dropped.
+The transcript shows `/review src/main.rs …` as you typed it; the model gets the expansion.
+
+**Skills** are [Agent Skills](https://agentskills.io): a folder with a `SKILL.md` whose
+frontmatter has a `name` and a `description`, found up to three folders deep. The system
+prompt lists each skill's name, description and absolute path, and tells the model to read
+the file when a task matches, so a skill costs one line of context until it is used.
+`disable-model-invocation: true` keeps a skill off that list. `/skill:<name> args` sends the
+skill's instructions as your message, followed by the arguments. A skill with no
+description is skipped with a warning; the model could never tell when to use it.
+
+**Theme files** use rusti's own colour roles and inherit everything else from a `base`:
+
+```json
+{"name": "my-theme", "note": "nord, warmer", "base": "nord",
+ "colors": {"user": "#88c0d0", "ok": "38;5;144", "think": "3;38;5;103"},
+ "tints": {"fail": "#2a1618", "ask": "#2a2414"}}
+```
+
+Roles: `user info ok fail warn add del code fenced think dim sel` plus the syntax colours
+`key string number boolean`; tints are the `fail` and `ask` row backgrounds. A value is
+`#rrggbb` or raw SGR parameters. A theme joins the built-ins in `/themes` with its note; the
+active one is re-read about once a second when its file changes, so you can edit it and
+watch. A typo in a role or value refuses the file and says which, instead of half applying it.
+
+**Hooks** are commands run on six events, in config order, each with a timeout (default 30
+seconds). The event arrives as one JSON object on stdin with `event` and `cwd`; the command
+answers with one JSON object on stdout, and nothing or `{}` means carry on. Each hook sees
+what the ones before it rewrote.
+
+| event | stdin also has | the reply may set |
+|---|---|---|
+| `user_shell` | `command`, `to_model` | `command` (run this instead), `output` + `exit` (handled), `block` |
+| `pre_tool` | `tool`, `args` | `args` (run with these), `block` |
+| `post_tool` | `tool`, `args`, `ok`, `output` | `output` (redact), `ok` |
+| `user_prompt` | `prompt` | `prompt` (send this instead), `block` |
+| `session_start` | `session`, `resumed` | `context` (added to the session's first message this run) |
+| `pre_compact` | `session`, `messages` | `summary` (used instead of asking the model), `block` (skip it) |
+
+```json
+"hooks": {
+  "user_shell": [{"command": "python ~/.rusti/hooks/remote.py", "timeout": 10}],
+  "pre_tool":   [{"command": "~/.rusti/hooks/no-force-push.sh"}]
+}
+```
+
+`block` is the reason shown, or `true`. `pre_tool` runs after rusti's own permission prompt,
+so a hook can refuse a call you allowed but can never allow one you refused; a call a
+hook rewrote goes back through the prompt with its new arguments. `user_shell` is
+the `!` hook: rewrite `!cargo test` into `ssh box 'cd /srv && cargo test'`, run it yourself
+and return the output, or refuse it. A hook that exits non-zero, times out or answers with
+something that is not a JSON object blocks what it guards; for `post_tool` the output is
+withheld from the model (a redaction that failed must not leak), and for `session_start` it
+is only reported. A rewrite is never silent: the transcript says a hook changed the call or
+the message. Hooks run in the shell every command runs in, and a sub-agent's tool calls
+pass through them too.
 
 ## TUI
 

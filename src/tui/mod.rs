@@ -76,6 +76,7 @@ pub enum Job {
     Undo,               // put back the files the last turn changed, then rewind to before it
     Bash { cmd: String, to_model: bool }, // "!cmd" / "!!cmd": run it here, stream the output; "!" lets the model see it
     Export(Option<String>), // write the active path out as markdown
+    McpPrompt { server: String, name: String, args: serde_json::Map<String, serde_json::Value> }, // /server:prompt: prompts/get, then run it as the message
     Reload,
 }
 
@@ -208,6 +209,7 @@ fn rename_session(session: &mut Session, name: &str) -> Result<String, String> {
             .map_err(|e| format!("rename failed: {e}"))?;
     }
     let was = crate::session::name_of(&old);
+    ai_core::session_renamed(&old, &new_path);
     session.path = new_path;
     Ok(format!("renamed {was} → {name}"))
 }
@@ -339,20 +341,49 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
 /// "!cmd" / "!!cmd": run it in run_command's shell, each output line landing
 /// in the transcript as it arrives. `!` then records the output in the session,
 /// so the model reads it next turn; `!!` output never leaves the screen.
-fn run_bash(session: &mut Session, cmd: &str, to_model: bool, event_tx: &mpsc::Sender<ai_core::Event>) {
+///
+/// The user_shell hooks (F09) see it first: they may run something else in
+/// its place (ssh to a box), run it themselves and hand back the result, or
+/// refuse it.
+fn run_bash(session: &mut Session, cmd: &str, to_model: bool, hooks: &[crate::config::Hook], event_tx: &mpsc::Sender<ai_core::Event>) {
     let summary = format!("$ {cmd}");
     let _ = event_tx.send(ai_core::Event::ToolStart { id: 0, summary: summary.clone() });
     let t0 = std::time::Instant::now();
-    let tx = event_tx.clone();
-    let (ok, out) = ai_core::tools::run_command_live(cmd, 0, Arc::new(move |l: &str| {
+    let line = |tx: &mpsc::Sender<ai_core::Event>, l: &str| {
         let _ = tx.send(ai_core::Event::Text(format!("  · {l}")));
-    }));
+    };
+    let (ran, ok, out) = match ai_core::hooks::user_shell(hooks, cmd, to_model) {
+        Err(e) => {
+            let output = format!("blocked: {e}");
+            let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary, ok: false, ms: t0.elapsed().as_millis(), output });
+            return;
+        }
+        Ok(ai_core::hooks::Shell::Done { exit, output }) => {
+            output.lines().for_each(|l| line(event_tx, l));
+            (cmd.to_string(), exit == 0, format!("[exit {exit}]\n{output}"))
+        }
+        Ok(ai_core::hooks::Shell::Run(run)) => {
+            if run != cmd {
+                line(event_tx, &format!("a user_shell hook runs: {run}"));
+            }
+            let tx = event_tx.clone();
+            let (ok, out) = ai_core::tools::run_command_live(&run, 0, Arc::new(move |l: &str| line(&tx, l)));
+            (run, ok, out)
+        }
+    };
     // the output is already on screen; the row keeps only the "[exit N]" / "timed out" line
     let why = if ok { "" } else { out.lines().next().unwrap_or("").trim_matches(['[', ']']) };
     let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary, ok, ms: t0.elapsed().as_millis(), output: why.into() });
     if to_model && !session.is_empty() {
-        session.add(crate::session::Entry::new("user", format!("I ran `{cmd}` myself:\n{out}")), session.active.clone());
+        session.add(crate::session::Entry::new("user", format!("I ran `{ran}` myself:\n{out}")), session.active.clone());
         let _ = session.save();
+    }
+}
+
+fn task_end(r: Result<String, String>) -> ai_core::Event {
+    match r {
+        Ok(_) => ai_core::Event::TaskEnd { ok: true, error: None },
+        Err(e) => ai_core::Event::TaskEnd { ok: false, error: Some(e) },
     }
 }
 
@@ -365,6 +396,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
     // advertise nothing on the turn you just typed
     seed_lines.extend(ai_core::mcp::connect_all());
     seed_lines.extend(ai_core::prompt_note());
+    seed_lines.extend(ai_core::hooks::check());
     let seed_name = crate::session::name_of(&session.path);
 
     let (event_tx, event_rx) = mpsc::channel();
@@ -385,11 +417,17 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                 Ok(Job::Task(task)) => {
                     cancel_agent.store(false, Ordering::Relaxed); // fresh turn = not cancelled
                     let images = app::image_refs(&task);
-                    let ev = match rt.block_on(ai_core::run_agent(&client, &mut session, &task, &images, &cancel_agent)) {
-                        Ok(_) => ai_core::Event::TaskEnd { ok: true, error: None },
-                        Err(e) => ai_core::Event::TaskEnd { ok: false, error: Some(e) },
+                    let r = rt.block_on(ai_core::run_agent(&client, &mut session, &task, &images, &cancel_agent));
+                    let _ = event_tx.send(task_end(r));
+                }
+                Ok(Job::McpPrompt { server, name, args }) => {
+                    cancel_agent.store(false, Ordering::Relaxed);
+                    // fetched here, not on the UI thread: a slow server must not freeze the screen
+                    let r = match ai_core::mcp::get_prompt(&server, &name, &args) {
+                        Ok(text) => rt.block_on(ai_core::run_agent(&client, &mut session, &text, &[], &cancel_agent)),
+                        Err(e) => Err(e),
                     };
-                    let _ = event_tx.send(ev);
+                    let _ = event_tx.send(task_end(r));
                 }
                 Ok(Job::Model { url, key, model, cache }) => {
                     client = llm::Client::new(url, key, model.clone());
@@ -501,7 +539,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     let _ = event_tx.send(ev);
                 }
                 Ok(Job::Bash { cmd, to_model }) => {
-                    run_bash(&mut session, &cmd, to_model, &event_tx);
+                    run_bash(&mut session, &cmd, to_model, ai_core::hooks::of("user_shell"), &event_tx);
                     let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
                 }
                 Ok(Job::Undo) => {
@@ -647,15 +685,27 @@ mod tests {
             rx.try_iter().filter_map(|e| match e { ai_core::Event::Text(t) => Some(t), _ => None }).collect()
         };
 
-        run_bash(&mut s, "echo secret-out", false, &tx);
+        run_bash(&mut s, "echo secret-out", false, &[], &tx);
         assert!(texts(&rx).iter().any(|t| t.trim_end() == "  · secret-out"), "!! still shows the output");
         assert_eq!(s.entries.len(), 2, "!! adds nothing to the session");
         assert!(!s.path_messages().iter().any(|m| m.to_string().contains("secret-out")));
 
-        run_bash(&mut s, "echo shared-out", true, &tx);
+        run_bash(&mut s, "echo shared-out", true, &[], &tx);
         assert!(texts(&rx).iter().any(|t| t.trim_end() == "  · shared-out"));
         assert_eq!(s.entries.len(), 3);
         assert!(s.path_messages().iter().any(|m| m.to_string().contains("shared-out")), "! reaches the model");
+
+        // F09: a user_shell hook that fails refuses the command; nothing runs, nothing reaches the model
+        let deny = [crate::config::Hook { command: "exit 2".into(), timeout: 10 }];
+        run_bash(&mut s, "echo never-run", true, &deny, &tx);
+        let ends: Vec<(bool, String)> = rx.try_iter().filter_map(|e| match e {
+            ai_core::Event::ToolEnd { ok, output, .. } => Some((ok, output)),
+            ai_core::Event::Text(t) => { assert!(!t.contains("never-run"), "it must not run: {t}"); None }
+            _ => None,
+        }).collect();
+        assert_eq!(ends.len(), 1);
+        assert!(!ends[0].0 && ends[0].1.starts_with("blocked: user_shell hook `exit 2` exited 2"), "{:?}", ends[0]);
+        assert_eq!(s.entries.len(), 3, "a refused command adds nothing");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -833,12 +883,13 @@ mod tests {
 
     #[test]
     fn slash_menu_filters_on_prefix_and_closes_once_args_start() {
-        assert_eq!(app::filter_cmds("/").len(), app::CMDS.len());
-        let re: Vec<&str> = app::filter_cmds("/re").iter().map(|c| c.name).collect();
+        let cmds = app::builtins();
+        assert_eq!(app::filter_cmds(&cmds, "/").len(), cmds.len());
+        let re: Vec<String> = app::filter_cmds(&cmds, "/re").into_iter().map(|c| c.name).collect();
         assert_eq!(re, vec!["/resume", "/rename", "/reload"]);
-        assert!(app::filter_cmds("/use x").is_empty()); // args started
-        assert!(app::filter_cmds("hello").is_empty());
-        assert!(app::filter_cmds("/zz").is_empty());
+        assert!(app::filter_cmds(&cmds, "/use x").is_empty()); // args started
+        assert!(app::filter_cmds(&cmds, "hello").is_empty());
+        assert!(app::filter_cmds(&cmds, "/zz").is_empty());
     }
 
     #[test]

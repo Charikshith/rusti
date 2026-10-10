@@ -1022,7 +1022,7 @@ impl Shell {
     }
 }
 
-fn shell(cmd: &str) -> Command {
+pub(crate) fn shell(cmd: &str) -> Command {
     current_shell().command(cmd)
 }
 
