@@ -148,5 +148,5 @@ Where: tui/render.rs panel_rows, src/tree.rs
 ### Extension Model Follow-ups
 When: feat-extension-model landed templates, skills, theme files, hooks and MCP prompts in the TUI
 What: expand `/template` and `/skill:` in one-shot runs too; `${@:N:L}` argument slices; argument completion
-for template hints; project `.rusti/SYSTEM.md` (queued as its own task)
+for template hints
 Where: main.rs task dispatch, resources.rs expand, tui/app.rs menu_items

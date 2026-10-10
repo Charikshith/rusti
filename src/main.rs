@@ -37,8 +37,10 @@ flags
   --context N            compact the history once the prompt passes N tokens (default 100000;
                          a profile's own \"context\" wins over the config's, this flag over both)
   --system-prompt X      replace the base system prompt (X is a file if one exists, else text;
-                         default ~/.rusti/SYSTEM.md, else the built-in one)
-  --append-system-prompt X  add X to it, repeatable (default ~/.rusti/APPEND_SYSTEM.md)
+                         default ./.rusti/SYSTEM.md once trusted, else ~/.rusti/SYSTEM.md,
+                         else the built-in one)
+  --append-system-prompt X  add X to it, repeatable (default ~/.rusti/APPEND_SYSTEM.md, then
+                         ./.rusti/APPEND_SYSTEM.md once trusted)
   --yolo                 no permission prompts, no project-root guard (does not imply --trust)
   --trust                trust this folder's model.json and .rusti without asking
   --self-test            offline check against a fake server
@@ -64,7 +66,8 @@ on stdin, a JSON decision comes back on stdout (readme.md § extensions).
 extensions: ~/.rusti/prompts/NAME.md is the command /NAME, ~/.rusti/skills/NAME/SKILL.md (and
 ~/.agents/skills) a skill, ~/.rusti/themes/NAME.json a palette; ./.rusti has the same once trusted.
 trust: a folder whose model.json sets mcp, shell, shell_command_prefix, hooks, read_allow or
-allow (or whose .rusti has prompts, skills, themes or SYSTEM.md, or that has .agents/skills)
+allow (or whose .rusti has prompts, skills, themes, SYSTEM.md or APPEND_SYSTEM.md, or that
+has .agents/skills)
 is asked about once: [y]es for this run, [a]lways (saved by path in ~/.rusti/trust.json), or
 no. Untrusted, those are ignored with one warning; max_iters, context, theme and footer still
 apply. Piped and one-shot runs are untrusted unless --trust.
