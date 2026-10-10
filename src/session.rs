@@ -178,13 +178,28 @@ pub struct Entry {
     /// branch it happened on and nowhere else: resume and /tree get it free.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loaded: Vec<String>,
+    /// Set on the summary entry a compaction writes: what the next compaction
+    /// updates instead of starting over, and the files the summarized part touched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<Compaction>,
     #[serde(default)]
     pub ts: u64,
 }
 
+/// What one compaction left behind for the next. The file lists are cumulative:
+/// each compaction carries the previous one's forward.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Compaction {
+    pub summary: String,
+    #[serde(default)]
+    pub read_files: Vec<String>,
+    #[serde(default)]
+    pub modified_files: Vec<String>,
+}
+
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, loaded: Vec::new(), ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, loaded: Vec::new(), compaction: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.
@@ -264,8 +279,10 @@ impl Session {
                 std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
             }
         }
-        std::fs::write(&self.path, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("writing {}: {e}", self.path))
+        let tmp = format!("{}.tmp", self.path);
+        std::fs::write(&tmp, serde_json::to_string_pretty(self).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("writing {tmp}: {e}"))?;
+        std::fs::rename(&tmp, &self.path).map_err(|e| format!("writing {}: {e}", self.path))
     }
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -396,6 +413,27 @@ fn clip(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reader racing repeated saves sees the old or the new session, never a torn file.
+    #[test]
+    fn save_replaces_the_file_whole() {
+        let p = std::env::temp_dir().join("rusti_atomic_save_test.json");
+        let path = p.to_string_lossy().into_owned();
+        let mut s = Session::with_path("m".into(), &path);
+        let sys = s.add(Entry::new("system", "x".repeat(200_000)), None);
+        s.add(Entry::new("user", "go".into()), Some(sys));
+        s.save().unwrap();
+        let saving = {
+            let s = Session::load_from(&path);
+            std::thread::spawn(move || (0..50).for_each(|_| s.save().unwrap()))
+        };
+        while !saving.is_finished() {
+            assert_eq!(Session::load_from(&path).entries.len(), 2);
+        }
+        saving.join().unwrap();
+        assert!(!std::path::Path::new(&format!("{path}.tmp")).exists());
+        std::fs::remove_file(&p).ok();
+    }
 
     #[test]
     fn info_reports_message_count_and_latest_user_message() {

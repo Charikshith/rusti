@@ -46,7 +46,9 @@ rusti
 
 # flags/env still override the saved profile
 ./target/release/rusti --max-iters 100 "task"   # tool rounds per task (default 50, env RUSTI_MAX_ITERS)
-./target/release/rusti --context 60000 "task"   # compact history once the prompt exceeds N tokens (default 100000, env RUSTI_CONTEXT)
+./target/release/rusti --context 60000 "task"   # compact history once the prompt exceeds N tokens (default 100000, env RUSTI_CONTEXT; see § compaction)
+./target/release/rusti --json "task"            # the run as JSON lines on stdout, for programs (see § JSON and RPC modes)
+./target/release/rusti --rpc                    # drive rusti over JSON lines on stdin/stdout
 ./target/release/rusti --yolo "task"            # no permission prompts, no project-root guard (env RUSTI_YOLO=1)
 ./target/release/rusti --trust "task"           # trust this folder's model.json / .rusti without asking
 ./target/release/rusti --self-test       # offline check, fake server
@@ -101,6 +103,7 @@ does the same for a model that makes one call per turn, and returns one combined
 
 ```
 main.rs      CLI
+├── rpc      --json event lines and the --rpc command loop
 ├── config   model.json profiles
 ├── session  tree-shaped session persistence (.rusti/sessions/NAME.json)
 ├── tree     interactive session tree browser (ANSI TUI / plain list)
@@ -463,6 +466,106 @@ selection semantics (same as pi's `/tree`):
 
 in interactive terminals: ↑/↓ to navigate, Enter to branch, Esc to cancel.
 with piped stdin: plain numbered list, type a number and press Enter.
+
+## compaction
+
+When the prompt passes the context limit, rusti summarizes the older part of the session
+and carries on from the summary. The limit is `--context` / `RUSTI_CONTEXT` if given, else
+the active profile's own `"context"`, else the config's `"context"`, else 100000 tokens. A
+profile's `"context"` makes the limit follow the model, including after `/model`:
+
+```json
+{"models": [{"name": "big", "url": "...", "model": "kimi-k2.6", "context": 200000},
+            {"name": "small", "url": "...", "model": "llama3.2", "context": 24000}]}
+```
+
+- **What is kept:** the newest entries up to min(20000, limit/5) estimated tokens (4 chars a
+  token), cut only where no tool result is separated from its call. The rest becomes one
+  summary entry; the old entries stay in the session tree.
+- **The summary** has fixed sections (Goal, Constraints & Preferences, Progress with Done /
+  In Progress / Blocked, Key Decisions, Next Steps, Critical Context) followed by
+  `<read-files>` and `<modified-files>` lists taken from the tool calls. A later compaction
+  updates that summary and carries the file lists forward instead of starting over.
+- **When:** before a request once the last prompt (or, at the start of a turn, the
+  estimate) passes the limit; once on a provider's context-overflow error, after which the
+  request is sent again; and on `/compact [focus]` in the TUI (`compact` over RPC), where
+  `focus` tells the summary what to keep.
+- The summary shows as one `⟳ compacted` row; Ctrl+O shows its text.
+
+## JSON and RPC modes
+
+Two modes let another program run rusti without scraping text. stdout carries only JSON
+lines (one object per LF-terminated line, every object with `"v": 1` and a `"type"`);
+everything for humans goes to stderr. `"v"` changes only when a field changes meaning or
+goes away; new fields and new types can appear in v1, so ignore what you do not know.
+
+**`rusti --json [flags] TASK`** runs one task. The first line is `session`, then the run's
+events, then a last `task_end` that adds `"answer"` (the final reply). Exit code 0 or 1.
+Questions cannot be answered here: a permission prompt is refused unless `--yolo`, and
+`ask_user` gets `"no answer given"`; the `ask` line still shows what was asked. Like any
+one-shot run, the folder is untrusted unless `--trust`.
+
+```sh
+rusti --json "run the tests and fix what fails" | jq -c 'select(.type=="tool_end")'
+```
+
+**Events** (both modes):
+
+| type | fields |
+|------|--------|
+| `session` | `name`, `path`, `model`, `messages` (user messages on the path), `cwd`, `thinking` |
+| `text_delta` / `thinking_delta` | `text`: a streamed chunk of the reply / of the model's reasoning |
+| `text` | `text`: a whole transcript line (attachments, todo lists, warnings) |
+| `tool_start` | `id`, `summary`, e.g. `"read src/main.rs"` |
+| `tool_end` | `id`, `summary`, `ok`, `ms`, `output` (the tool's result) |
+| `usage` | `tokens`, `prompt`, `estimated`, `gen_ms`, `cached` (null when not reported); none for compaction's summary request |
+| `retry` | `attempt`, `of`, `wait_ms`, `error` |
+| `ask` | `id`, `question`, `choices`: `[{label, value}]`, empty for a free-text question |
+| `steer_delivered` | `text`: queued steer text that just joined the conversation |
+| `compaction_start` | `reason` (`threshold`, `overflow`, `manual`), `messages`, `tokens` |
+| `compaction_end` | `summary`, `tokens` (estimated, after) |
+| `notice`, `git`, `session_name`, `resumed` | status: `text`, `branch`, `name`, `messages` |
+| `task_end` | `ok`, `error` (`"interrupted"` after an abort); `--json` adds `answer` |
+
+Tool calls can run in parallel, so a `tool_end` belongs to the `tool_start` with the same `id`.
+
+**`rusti --rpc [flags]`** stays up and reads one command per stdin line. It writes the
+`session` line at start, then a `response` for every command and the same events as
+`--json`. A command may carry any JSON `"id"`; its response echoes it:
+`{"v":1,"type":"response","id":7,"command":"prompt","ok":true,"data":{...}}`, or
+`"ok":false` with `"error"`. Match responses by id, not by position: events a command
+causes can arrive before or after its response. Closing stdin lets the running task and
+the queue finish, refuses any question still open, and exits 0.
+
+| command | fields | data / effect |
+|---------|--------|---------------|
+| `prompt` | `text`, `mode` | idle: runs it (`accepted: "run"`), and `task_end` marks the end. Busy: `mode` must be `steer` (joins the running task after its current tool calls) or `follow_up` (runs as its own task afterwards, one at a time); `@path` images attach as in the TUI |
+| `abort` | | cancels the running task, drops queued steers and follow-ups, answers open questions no; `dropped` |
+| `answer` | `ask`, `text` | answers the `ask` line with that `id`; for a permission prompt send one of its choice values (`yes`, `no`, `always`) |
+| `new_session` | `name`? | saves this session, starts an empty one (auto name if none); `name` |
+| `resume_session` | `name`? | switches to that saved session, or the latest; `name`, `messages` |
+| `set_model` | `name` | switches to a saved profile, its vision, `cache` and `context` included; `model`, `context_limit` |
+| `set_thinking` | `level`? | sends `reasoning_effort: level` (e.g. `low`, `high`) from the next request; none clears it |
+| `set_plan` | `on` | plan mode on or off (writes and commands refused) |
+| `compact` | `instructions`? | compacts now, focused on the instructions; `compacted`: false when it all fits |
+| `get_state` | | `busy`, `session`, `thinking`, `plan`, `context_limit`, `steers`, `follow_ups`, `asks` (open ask ids) |
+| `get_messages` | | `messages`: the active path in chat-completions form, as last saved |
+
+`new_session`, `resume_session`, `set_model`, `set_thinking` and `compact` need the agent
+idle and fail with an error while a task runs, and their response marks the end; `new_session`, `resume_session`, `set_model` and
+`set_thinking` send a fresh `session` line (when it changed) before that response. Permission prompts and `ask_user` become `ask` lines that wait for an
+`answer` (`--yolo` skips permission prompts as anywhere else).
+
+```
+→ {"id":1,"type":"prompt","text":"add a --version flag"}
+← {"v":1,"type":"response","id":1,"command":"prompt","ok":true,"data":{"accepted":"run"}}
+← {"v":1,"type":"tool_start","id":1,"summary":"edit src/main.rs"}
+← {"v":1,"type":"ask","id":"q1","question":"allow edit_file edit src/main.rs?","choices":[...]}
+→ {"id":2,"type":"answer","ask":"q1","text":"yes"}
+← {"v":1,"type":"response","id":2,"command":"answer","ok":true,"data":{}}
+← {"v":1,"type":"tool_end","id":1,"summary":"edit src/main.rs  +3 -0","ok":true,"ms":2,"output":"..."}
+← {"v":1,"type":"task_end","ok":true,"error":null}
+```
 
 ## /reload
 

@@ -44,6 +44,10 @@ pub fn run(rx: Receiver<ai_core::Event>) -> io::Result<()> {
             Ok(ai_core::Event::TaskEnd { .. }) => break,
             Ok(ai_core::Event::Reload { .. }) => {} // /reload is a TUI-only slash command
             Ok(ai_core::Event::Delivered(_)) => {} // only the TUI queues steers
+            Ok(ai_core::Event::CompactStart { reason, messages, .. }) => {
+                writeln!(out, "  ⟳ compacting context ({reason}): {messages} messages → summary")?;
+            }
+            Ok(ai_core::Event::CompactEnd { tokens, .. }) => { writeln!(out, "  ⟳ compacted: ~{tokens} tokens now")?; }
             Err(_) => break,
         }
     }

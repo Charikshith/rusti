@@ -142,6 +142,11 @@ pub struct ModelProfile {
     /// none: a server that does not know the fields may reject the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheMode>,
+    /// This model's compaction limit in prompt tokens (same unit as --context),
+    /// so the limit follows the model: it wins over the config's "context"
+    /// while this profile is in use; --context still wins over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<u64>,
 }
 
 /// `"cache"` on a profile. An unknown value fails the parse like any typo,
@@ -420,7 +425,7 @@ pub fn ask_profile() -> Option<ModelProfile> {
     let url = required("url (http://host:port/v1/chat/completions)", "")?;
     let key = prompt("api key (optional)", "")?;
     let model = prompt("model id", "gpt-4o-mini")?;
-    Some(ModelProfile { name, url, key, model, vision: None, cache: None })
+    Some(ModelProfile { name, url, key, model, vision: None, cache: None, context: None })
 }
 
 fn prompt(label: &str, default: &str) -> Option<String> {

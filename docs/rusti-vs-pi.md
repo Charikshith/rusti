@@ -54,7 +54,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
    - rusti has prompt templates, Agent Skills, theme files with hot reload, and out-of-process hooks on six events (`resources.rs`, `ai_core/hooks.rs`, readme § extensions), plus MCP tools and prompts. It has no in-process extension API and no packages.
 4. **Programmatic interfaces.**
    - Pi has `--mode json` event streams (`docs/json.md`), a JSONL RPC protocol with about 30 commands (`docs/rpc-commands.md`), and a JS SDK built around `createAgentSession()` (`docs/sdk.md`).
-   - rusti has plain one-shot text output only. `--json` is an open-work item.
+   - rusti has `--json` (one-shot events as JSONL) and `--rpc` (JSONL commands on stdin, about a dozen of them), with no SDK (`rpc.rs`, readme.md § JSON and RPC modes).
 5. **Message queueing while the agent runs.**
    - Pi: Enter queues a steering message, Alt+Enter queues a follow-up, and Alt+Up pulls queued messages back into the editor (`docs/usage.md:36-40`, `docs/keybindings.md`).
    - rusti: the same steer / follow-up / dequeue set, with Ctrl+Q for follow-up because Alt+Enter is its newline key (feat-queue-while-working, `tui/app.rs`). Steers all go at once; follow-ups one at a time.
@@ -63,7 +63,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
    - rusti has the tree, resume, rename, /new and markdown export.
 7. **Manual `/compact` and a structured summary.**
    - Pi: summary sections Goal, Progress and Next Steps, cumulative read and modified file lists, and compact-and-retry on overflow (`docs/compaction.md`).
-   - rusti: auto-compaction only.
+   - rusti: now has both: `/compact [focus]`, the same sections and file lists updated iteratively, a token keep window and one compact-and-retry on overflow (`ai_core/mod.rs`). No split-turn second summary: the one transcript summary covers a cut inside a turn.
 8. **Cost display.** Pi's footer shows cost and `/session` shows per-session cost (`README.md`, `docs/sessions.md`). rusti shows tokens and context % only.
 9. **MCP breadth.** Pi supports stdio plus streamable HTTP with OAuth, `pi mcp add|remove|list|login`, tool exposure modes, and lazy `tool_search` and `codemode` (`docs/mcp.md`, `docs/cli.md:141-182`). rusti supports stdio only.
 
@@ -73,7 +73,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 |---|---|---|
 | Session storage | One pretty-printed JSON tree per session in `.rusti/sessions/NAME.json` (unnamed ones auto-named; a legacy `./session.json` is still read), stored inside the project (`session.rs`) | Append-only JSONL v3 per session under `~/.pi/agent/sessions/--<path>--/` (`docs/session-format.md`, `docs/sessions.md`) |
 | Branching | Pick an entry in `/tree` or `--tree`; the semantics follow Pi's (`readme.md` "session tree") | Same model, plus labels, filters, folding and optional branch summarization (`docs/sessions.md`) |
-| Compaction | Automatic past `--context` (default 100k). Summarises all but the last 8 entries into a new branch: system → summary → copied tail (`ai_core/mod.rs`) | Automatic at `contextWindow − reserveTokens` (16384 reserved), keeps about 20k recent tokens, handles a cut that falls mid-turn, and also has manual `/compact` (`docs/compaction.md`) |
+| Compaction | Automatic past `--context` (default 100k, or the profile's own `context`). Keeps the newest ~20k tokens and summarises the rest into a new branch: system → summary → copied tail; manual `/compact` (`ai_core/mod.rs`) | Automatic at `contextWindow − reserveTokens` (16384 reserved), keeps about 20k recent tokens, handles a cut that falls mid-turn, and also has manual `/compact` (`docs/compaction.md`) |
 | Context files | First non-empty `AGENTS.md`, then `RUSTI.md`, then `CLAUDE.md`, from the cwd only; 20 KB cap; re-read every turn (`ai_core/mod.rs`) | All `AGENTS.md`/`CLAUDE.md` files from `~/.pi/agent`, parent directories and the cwd, concatenated. `SYSTEM.md` replaces the system prompt and `APPEND_SYSTEM.md` appends to it (`README.md`, `docs/security.md:57`) |
 | Config | `~/.rusti/config.json` (global) plus `./model.json` (project allow list and overrides) (`config.rs`) | `~/.pi/agent/settings.json` plus `.pi/settings.json`; project resources load only after the project is trusted (`docs/settings.md`, `docs/security.md:27-57`) |
 | `!cmd` / `!!cmd` | `!` output streams into the transcript live, then goes to the model; `!!` output never does (`readme.md` "shell commands") | `!` sends output to the model, `!!` does not (`docs/usage.md`) |
@@ -91,7 +91,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 |---|---|---|---|
 | Interactive TUI | **yes**: custom ANSI renderer with no framework, alternate screen, CSI 2026 sync (`tui/mod.rs`, `tui/render.rs`) | **yes**: regular mode (native scrollback) or fullscreen mode (fixed editor, transcript search, mouse), picked with `--tui-mode` (`docs/usage.md:86`) | rusti is hand-rolled on crossterm and always uses the alternate screen, with no scrollback mode |
 | Bare command opens UI | **yes**: bare `rusti` on a TTY (feat-075, `main.rs`) | **yes**: `pi` | Same |
-| Other front ends | **yes**: plain stream fallback when not a TTY (`tui/plain.rs`) | **yes**: print, json and rpc modes | See area 10 |
+| Other front ends | **yes**: plain stream fallback when not a TTY (`tui/plain.rs`), `--json` and `--rpc` (`rpc.rs`) | **yes**: print, json and rpc modes | See area 10 |
 | Slash command menu | **yes**: `/` opens a filterable menu of built-ins, prompt templates, skills and MCP prompts, tagged by source (`tui/app.rs`) | **yes**: autocomplete for built-ins, templates, skills and extensions | Pi's also takes extension commands |
 | Keybindings | **yes, fixed**: Esc interrupt, Ctrl+C twice to quit, Ctrl+D, Ctrl+O output, Ctrl+T thinking, Ctrl+V/Alt+V image, Shift/Alt+Enter, history, PgUp/PgDn, mouse wheel (`tui/app.rs`) | **yes, configurable**: `~/.pi/agent/keybindings.json`, kill ring, undo, word navigation (`docs/keybindings.md`) | rusti bindings cannot be rebound |
 | Editor features | **partial**: multi-line, history, `@` file picker and Tab path completion (`tui/app.rs`). No `$EDITOR` (open-work) | **yes**: `@` fuzzy file refs, Tab path completion, Ctrl+G `$EDITOR` (`docs/usage.md`) | Pi ahead |
@@ -177,9 +177,9 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 
 | Feature | rusti | Pi | Difference |
 |---|---|---|---|
-| Auto compaction | **yes**: past `--context` (default 100k); keeps the last 8 entries (`ai_core/mod.rs`) | **yes**: reserve- and keep-token thresholds, split-turn handling, retry on overflow (`docs/compaction.md`) | Pi's rules are richer |
-| Manual `/compact` | **no** (open-work) | **yes**: `/compact [instructions]` | |
-| Structured summary | partial: a free-form prompt (`ai_core/mod.rs`) | **yes**: Goal, Constraints, Progress and similar sections, plus file lists | |
+| Auto compaction | **yes**: past `--context` (default 100k) or a profile's `context`; keeps the newest min(20k, limit/5) tokens; one compact-and-retry on a context-overflow error (`ai_core/mod.rs`) | **yes**: reserve- and keep-token thresholds, split-turn handling, retry on overflow (`docs/compaction.md`) | Pi derives the limit from a model catalog; rusti from the profile |
+| Manual `/compact` | **yes**: `/compact [focus]`, RPC `compact` | **yes**: `/compact [instructions]` | |
+| Structured summary | **yes**: Goal, Constraints & Preferences, Progress, Key Decisions, Next Steps, Critical Context, cumulative read and modified file lists, updated in place on the next compaction (`ai_core/mod.rs`) | **yes**: Goal, Constraints, Progress and similar sections, plus file lists | |
 | Compaction hook | **yes**: `pre_compact` returns a summary or skips it | **yes**: `session_before_compact` | |
 | Context files | **yes**: the first of AGENTS.md, RUSTI.md, CLAUDE.md in the cwd, re-read each turn | **yes**: all levels concatenated; `-nc` disables them | Pi walks parent directories |
 | System prompt override | **yes**: `~/.rusti/SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt`; replaces only the base text (readme.md § project instructions) | **yes**: `SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt` | rusti reads no project `.rusti/SYSTEM.md` yet (waits for project trust) |
@@ -213,7 +213,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Settings UI | partial: `/settings` (footer segments), `/themes`, `/mcp` | **yes**: `/settings`, `pi config` | |
 | Malformed-file safety | **yes**: reported, and saving is refused (`config.rs`) | not stated in docs | |
 | Env vars | `LLM_URL`, `LLM_KEY`, `LLM_MODEL`, `RUSTI_SESSION`, `RUSTI_MAX_ITERS`, `RUSTI_CONTEXT`, `RUSTI_YOLO`, `RUSTI_HOME` | about 15 `PI_*` variables plus provider keys (`docs/environment-variables.md`) | |
-| CLI flags | `--tui --session --resume --tree --url --key --model --use --list --add --max-iters --context --system-prompt --append-system-prompt --yolo --trust --self-test --help --version` (`main.rs`) | about 40 flags, plus `install`, `remove`, `update`, `list`, `config`, `mcp` and `auth` subcommands (`docs/cli.md`) | |
+| CLI flags | `--tui --session --resume --tree --url --key --model --use --list --add --max-iters --context --json --rpc --system-prompt --append-system-prompt --yolo --trust --self-test --help --version` (`main.rs`) | about 40 flags, plus `install`, `remove`, `update`, `list`, `config`, `mcp` and `auth` subcommands (`docs/cli.md`) | |
 | Iteration cap | **yes**: `--max-iters` (default 50) | not stated as a setting | |
 
 ## 9. Extensibility
@@ -234,8 +234,8 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Feature | rusti | Pi | Difference |
 |---|---|---|---|
 | One-shot | **yes**: `rusti "task"`; answer on stdout, status on stderr (`main.rs`) | **yes**: `-p`, or automatic when stdin/stdout is not a TTY; piped stdin is prepended to the prompt (`docs/cli-integration.md`) | Piped stdin keeps rusti in one-shot mode but is not read as the task; with no argument the task defaults to "say hello" (`main.rs`) |
-| JSON events | **no** (open-work `--json`) | **yes**: `--mode json` (`docs/json.md`) | |
-| RPC | none | **yes**: `--mode rpc`, about 30 commands, extension-UI sub-protocol (`docs/rpc-commands.md`, `docs/rpc-extension-ui.md`) | |
+| JSON events | **yes**: `--json`, versioned JSONL (`rpc.rs`, readme.md § JSON and RPC modes) | **yes**: `--mode json` (`docs/json.md`) | |
+| RPC | **yes**: `--rpc`: prompt (steer / follow-up), abort, answer, new/resume session, set_model, set_thinking, set_plan, compact, get_state, get_messages; `ask_user` and permission prompts become `ask` lines answered by id (`rpc.rs`) | **yes**: `--mode rpc`, about 30 commands, extension-UI sub-protocol (`docs/rpc-commands.md`, `docs/rpc-extension-ui.md`) | No extension-UI protocol or typed client in rusti |
 | SDK or library | **no**: no `[lib]` target; only an internal `Event` sink (`ai_core/mod.rs`) | **yes**: `createAgentSession()` and related APIs (`docs/sdk.md`) | |
 | Offline self-test | **yes**: `--self-test` against a fake SSE server | not a user command | |
 
@@ -258,8 +258,8 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
   - provider breadth, native APIs and OAuth
   - thinking-level control
   - any extension, skill or template mechanism
-  - JSON, RPC and SDK output
-  - manual `/compact` and cost display
+  - an SDK
+  - cost display
 - **Where rusti is ahead of Pi's core:**
   - safety by default: gate, plan mode, write guard, undo
   - a batteries-included tool set: sub-agent, background jobs, web_fetch, todo, ask_user

@@ -76,6 +76,7 @@ pub enum Job {
     Undo,               // put back the files the last turn changed, then rewind to before it
     Bash { cmd: String, to_model: bool }, // "!cmd" / "!!cmd": run it here, stream the output; "!" lets the model see it
     Export(Option<String>), // write the active path out as markdown
+    Compact(Option<String>), // /compact [instructions]: summarize the older history now
     McpPrompt { server: String, name: String, args: serde_json::Map<String, serde_json::Value> }, // /server:prompt: prompts/get, then run it as the message
     Reload,
 }
@@ -217,7 +218,7 @@ fn rename_session(session: &mut Session, name: &str) -> Result<String, String> {
 /// /new: save the active session and swap in an empty one at `name`, or at an
 /// auto name. Returns the new name, or why not. The model rides along; the
 /// last turn's undo frame and the todo list belong to the old session.
-fn new_session(session: &mut Session, name: Option<&str>) -> Result<String, String> {
+pub(crate) fn new_session(session: &mut Session, name: Option<&str>) -> Result<String, String> {
     // save first: an unsaved session must exist on disk before a name is
     // checked or picked against it, or the new one could land on its path
     if !session.is_empty() {
@@ -541,6 +542,18 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                 Ok(Job::Bash { cmd, to_model }) => {
                     run_bash(&mut session, &cmd, to_model, ai_core::hooks::of("user_shell"), &event_tx);
                     let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
+                }
+                Ok(Job::Compact(focus)) => {
+                    cancel_agent.store(false, Ordering::Relaxed);
+                    let ev = match rt.block_on(ai_core::compact(&client, &mut session, &cancel_agent, "manual", focus.as_deref())) {
+                        Ok(true) => ai_core::Event::TaskEnd { ok: true, error: None },
+                        Ok(false) => {
+                            let _ = event_tx.send(ai_core::Event::Text("  ℹ nothing to compact: the conversation fits in the kept window".into()));
+                            ai_core::Event::TaskEnd { ok: true, error: None }
+                        }
+                        Err(e) => ai_core::Event::TaskEnd { ok: false, error: Some(e) },
+                    };
+                    let _ = event_tx.send(ev);
                 }
                 Ok(Job::Undo) => {
                     for l in ai_core::tools::undo_turn() {
