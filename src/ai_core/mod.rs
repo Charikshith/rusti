@@ -404,15 +404,27 @@ fn instructions_from(dir: &std::path::Path) -> Option<(String, String)> {
 /// rusti's own docs, compiled in so an installed binary with no source checkout
 /// still has them, then written to ~/.rusti/docs so read_file and grep work on
 /// them like any other file. The prompt carries only the paths, never the text.
-const DOCS: [(&str, &str); 2] = [("readme.md", include_str!("../../readme.md")), ("help.txt", crate::HELP)];
+/// Names are repo-relative, so the readme's links into docs/ resolve there too.
+const DOCS: [(&str, &str); 10] = [
+    ("readme.md", include_str!("../../readme.md")),
+    ("docs/configuration.md", include_str!("../../docs/configuration.md")),
+    ("docs/safety.md", include_str!("../../docs/safety.md")),
+    ("docs/tools.md", include_str!("../../docs/tools.md")),
+    ("docs/tui.md", include_str!("../../docs/tui.md")),
+    ("docs/sessions.md", include_str!("../../docs/sessions.md")),
+    ("docs/extensions.md", include_str!("../../docs/extensions.md")),
+    ("docs/json-rpc.md", include_str!("../../docs/json-rpc.md")),
+    ("docs/architecture.md", include_str!("../../docs/architecture.md")),
+    ("help.txt", crate::HELP),
+];
 
 /// Rewrites a file only when it differs, so an upgrade refreshes the docs and
 /// an ordinary start writes nothing. ponytail: two rusti versions running at
 /// once flip-flop the files; per-version dirs if that ever matters.
 fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
     for (name, body) in DOCS {
         let p = dir.join(name);
+        std::fs::create_dir_all(p.parent().unwrap())?;
         if std::fs::read_to_string(&p).ok().as_deref() != Some(body) {
             std::fs::write(p, body)?;
         }
@@ -420,21 +432,27 @@ fn write_docs(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Topic -> where it is answered, in the user's words. Each § is a `## `
-/// heading in readme.md; a test pins that, so a renamed heading fails CI.
-const DOC_TOPICS: &str = "install/update (readme.md § Install), models, API keys, config files, prompt-cache markers, parallel tool calls and batch, flags (readme.md § Use, help.txt), \
-permissions, Shift+Tab permission modes and --yolo (readme.md § safety), slash commands, keys, themes, status line, hiding thinking, @ file references and Tab completion (help.txt, readme.md § TUI), \
-sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers, deferred tools and tool_search (readme.md § MCP servers), \
-AGENTS.md, SYSTEM.md, --system-prompt (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
-\"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
-/reload (readme.md § /reload), compaction, /compact, per-model \"context\" (readme.md § compaction), --json, --rpc and their line formats (readme.md § JSON and RPC modes), prompt templates, skills, theme files, hooks, MCP prompts (readme.md § extensions), how rusti is built (readme.md § architecture)";
+/// Topic -> where it is answered, in the user's words. Each `FILE § heading` is
+/// a `## ` heading in that DOCS file; a test pins that, so a renamed heading fails CI.
+const DOC_TOPICS: &str = "install/update (readme.md § Install), flags (readme.md § Use, help.txt), \
+models, API keys, config files, where config lives (docs/configuration.md § config files), prompt-cache markers (docs/configuration.md § prompt-cache markers), \
+read_file limits and read_max_bytes (docs/tools.md § read_file limits), parallel tool calls and batch (docs/tools.md § parallel tool calls and batch), \
+delegate and background jobs (docs/tools.md § sub-agents and background jobs), \
+permissions, Shift+Tab permission modes and --yolo (docs/safety.md § permission modes), project trust and --trust (docs/safety.md § project trust), \
+slash commands, keys, themes, status line, hiding thinking, @ file references and Tab completion (help.txt, docs/tui.md § slash commands), \
+sessions, /new, /resume, /tree, /undo (docs/sessions.md § session tree), MCP servers, deferred tools and tool_search (docs/extensions.md § MCP servers), \
+AGENTS.md, SYSTEM.md, --system-prompt (docs/configuration.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
+\"shell_command_prefix\" settings (docs/configuration.md § shell commands, help.txt), /reload (docs/tui.md § /reload), \
+compaction, /compact, per-model \"context\" (docs/sessions.md § compaction), --json, --rpc and their line formats (docs/json-rpc.md § events), \
+prompt templates, skills, theme files, hooks, MCP prompts (docs/extensions.md § prompt templates), how rusti is built (docs/architecture.md § modules)";
 
 fn docs_section(dir: &str) -> String {
+    let files = DOCS.map(|(name, _)| format!("{dir}/{name}")).join(", ");
     format!(
         "# rusti documentation\n\
 Read these only when the user asks about rusti itself (using, configuring or extending this agent), never for their project's code.\n\
-- Docs: {dir}/readme.md and {dir}/help.txt (absolute paths; do not resolve them against the working directory)\n\
-- When asked about: {DOC_TOPICS}\n\
+- Docs: {files} (absolute paths; do not resolve them against the working directory)\n\
+- When asked about (file names relative to {dir}): {DOC_TOPICS}\n\
 - Read the whole file before answering, and answer from it rather than from memory."
     )
 }
@@ -1806,18 +1824,45 @@ pub fn self_test() {
     std::fs::remove_file("_test_model.json").unwrap();
     println!("self-test OK");
 }
-    /// The docs pointer: every § in the topic map is a real readme heading (the
+    /// The docs pointer: every FILE § heading in the topic map is a real heading (the
     /// rot a renamed heading causes), the block names absolute docs paths, and
     /// the files written out are the ones compiled in.
     #[test]
     fn docs_pointer_names_real_files_and_headings() {
         let readme = DOCS[0].1;
-        for part in DOC_TOPICS.split("§ ").skip(1) {
-            let heading = part.split(|c| c == ')' || c == ',').next().unwrap().trim();
-            assert!(readme.lines().any(|l| l == format!("## {heading}")), "no '## {heading}' in readme.md");
+        let doc = |name: &str| DOCS.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is not in DOCS")).1;
+        // every `FILE § heading` -> that heading's text in that file
+        let refs: Vec<(&str, &str)> = DOC_TOPICS.match_indices(" § ").map(|(i, sep)| {
+            let file = DOC_TOPICS[..i].rsplit(|c| c == '(' || c == ' ').next().unwrap();
+            let heading = DOC_TOPICS[i + sep.len()..].split(|c| c == ')' || c == ',').next().unwrap().trim();
+            (file, heading)
+        }).collect();
+        assert!(refs.len() >= 15);
+        let section = |file: &str, heading: &str| -> String {
+            let mut lines = doc(file).lines().skip_while(|l| *l != format!("## {heading}"));
+            assert!(lines.next().is_some(), "no '## {heading}' in {file}");
+            lines.take_while(|l| !l.starts_with("## ")).collect::<Vec<_>>().join("\n")
+        };
+        for (file, heading) in &refs {
+            section(file, heading);
+        }
+        // the answer to a question about rusti is in the section its topic points at
+        let answer = |topic: &str| {
+            let i = DOC_TOPICS.find(topic).unwrap();
+            let (file, heading) = refs.iter().zip(DOC_TOPICS.match_indices(" § ")).find(|(_, (j, _))| *j > i).unwrap().0;
+            section(file, heading)
+        };
+        assert!(answer("where config lives").contains("`~/.rusti/config.json`"));
+        assert!(answer("permission modes").contains("| auto | runs without asking"));
+        // every docs/ file is reachable: from the topic map and from the readme
+        for (name, _) in &DOCS[1..DOCS.len() - 1] {
+            assert!(refs.iter().any(|(f, _)| f == name), "{name} is in no topic");
+            assert!(readme.contains(&format!("]({name})")), "the readme does not link {name}");
         }
         let block = docs_section("/home/u/.rusti/docs");
-        assert!(block.contains("/home/u/.rusti/docs/readme.md") && block.contains("/home/u/.rusti/docs/help.txt"));
+        for (name, _) in DOCS {
+            assert!(block.contains(&format!("/home/u/.rusti/docs/{name}")), "{name} missing from the docs block");
+        }
         assert!(block.contains("only when the user asks about rusti itself"), "the gate that keeps unrelated tasks from reading docs");
 
         let dir = std::env::temp_dir().join(format!("rusti_docs_{}", std::process::id()));
@@ -2177,7 +2222,7 @@ branch: "), "{c2}");
     }
 
     /// Shift+Tab cycles manual → plan → auto → devil → manual, and each mode
-    /// decides a representative tool set the way the readme says.
+    /// decides a representative tool set the way docs/safety.md says.
     #[test]
     fn permission_modes_cycle_and_decide() {
         use Mode::*;

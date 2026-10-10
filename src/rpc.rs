@@ -1,8 +1,8 @@
 // Machine front ends. --json runs one task and writes the agent's events to
 // stdout as JSONL; --rpc stays up, reads JSONL commands on stdin and writes
 // responses plus the same events to stdout. Logs go to stderr in both, so
-// stdout only ever carries protocol lines. The formats are in readme.md
-// § JSON and RPC modes.
+// stdout only ever carries protocol lines. The formats are in
+// docs/json-rpc.md.
 
 use crate::ai_core::{self, llm, Event};
 use crate::session::Session;
