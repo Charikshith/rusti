@@ -181,13 +181,16 @@ fn rpc_abort_right_after_accepted_cancels_that_run() {
 /// ask_user whose arguments hold no usable question (empty, null, or JSON that
 /// does not parse, here a raw newline inside the string) is refused back to the
 /// model. Asked, it was a question with no text that sat unseen under
-/// "working…" until someone happened to type.
+/// "working…" until someone happened to type. A batch whose arguments do not
+/// parse is refused with the parse error too, not as a batch with no calls.
 #[test]
 fn ask_user_without_a_usable_question_is_refused_not_asked() {
-    let cases = [("", "non-empty"), ("null", "non-empty"), ("{\"question\": \"push where?\nmain or feature\"}", "not valid JSON")];
-    for (raw, why) in cases {
+    let cases = [("ask_user", "", "non-empty"), ("ask_user", "null", "non-empty"),
+        ("ask_user", "{\"question\": \"push where?\nmain or feature\"}", "not valid JSON"),
+        ("batch", "{\"calls\": [{\"name\": \"ask_user\", \"args\": {\"question\": \"a\nb\"}}]}", "not valid JSON")];
+    for (name, raw, why) in cases {
         let call = sse(json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
-            "function": {"name": "ask_user", "arguments": raw}}]}), "tool_calls");
+            "function": {"name": name, "arguments": raw}}]}), "tool_calls");
         let (url, bodies) = fake_llm(vec![call, sse(json!({"content": "ok"}), "stop")]);
         let (mut child, rx) = spawn("rpc_ask_args", &url, &["--rpc"]);
         let mut stdin = child.stdin.take().unwrap();

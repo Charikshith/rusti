@@ -1213,15 +1213,15 @@ pub async fn run_agent(
                 "" => None,
                 raw => serde_json::from_str::<Value>(raw).err(),
             };
-            let subs = if tc.name == "batch" { batch_calls(&tc.arguments) } else { vec![(tc.name.clone(), tc.arguments.clone())] };
+            let subs = if tc.name == "batch" && unparsed.is_none() { batch_calls(&tc.arguments) } else { vec![(tc.name.clone(), tc.arguments.clone())] };
             for (name, args) in subs {
                 let id = TOOL_ID.fetch_add(1, Ordering::Relaxed);
                 let summary = tool_summary(&name, &args);
                 emit(Event::ToolStart { id, summary: summary.clone() });
                 let run = match (name.as_str(), &unparsed) {
-                    ("batch", _) => Err("batch cannot nest; list the calls directly".into()),
                     ("", _) => Err("this call has no `name`; each entry needs {name, args}".into()),
                     (_, Some(e)) => Err(format!("the arguments are not valid JSON ({e}); resend the call with its arguments as one JSON object")),
+                    ("batch", _) => Err("batch cannot nest; list the calls directly".into()),
                     _ => gate(&name, &args, &summary, hooks::of("pre_tool"), |s, a| {
                         let name = name.clone();
                         async move { permitted(&name, &a, &s).await }

@@ -86,8 +86,9 @@ that row, so you can see the model working. The choice is saved as `"hide_thinki
 The row above the input says what the turn is waiting on. `working…` means the model. When
 `ask_user` has asked you something it reads `answer above · enter sends · esc cancels`: type
 the answer and press Enter. Esc interrupts the turn at any point, including while the provider
-has gone quiet mid-reply, and a provider that sends nothing for 120 seconds fails the turn with
-`stream stalled: no data for 120s`.
+has gone quiet. A provider that sends nothing for 10 minutes before its reply starts fails the
+turn with `no response for 10 min`; once the reply is streaming, 120 seconds of silence fails it
+with `stream stalled: no data for 120s`.
 
 ## steering and follow-ups
 

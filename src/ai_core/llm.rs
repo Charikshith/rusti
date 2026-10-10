@@ -14,9 +14,13 @@ use std::time::{Duration, Instant};
 const RETRIES: u32 = 3;
 /// First backoff step; doubles per attempt (1s, 2s, 4s). Tests shrink it.
 pub static RETRY_BASE_MS: AtomicU64 = AtomicU64::new(1000);
-/// A server silent this long (no headers, or no bytes mid-stream) has stalled:
-/// the call fails instead of waiting forever. Thinking models stream their
-/// reasoning, so a live reply is never quiet this long.
+/// Silence allowed before the first data line (headers, error body, first
+/// event): a local server prefilling a long prompt or a model that reasons
+/// without streaming it can be quiet for minutes and still be alive.
+const FIRST_WAIT: Duration = Duration::from_secs(600);
+/// Silence allowed between chunks once data has started flowing: a reply
+/// that stops mid-stream this long has stalled, so the call fails instead
+/// of waiting forever.
 const STALL: Duration = Duration::from_secs(120);
 /// How often a wait on the server wakes to look at the cancel flag (Esc).
 const TICK: Duration = Duration::from_millis(100);
@@ -39,7 +43,8 @@ pub struct Client {
     pub cache: Option<CacheMode>,
     /// Sent as `reasoning_effort` when set (RPC set_thinking); None sends nothing.
     pub reasoning: Option<String>,
-    /// STALL; a field so a test can shorten it.
+    /// FIRST_WAIT and STALL; fields so a test can shorten them.
+    first_wait: Duration,
     stall: Duration,
 }
 
@@ -77,21 +82,27 @@ impl Client {
         // a pooled connection reused next turn is dead -> "error sending request".
         // No pooling = fresh connection per request (localhost handshake is free).
         let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
-        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), cache: None, reasoning: None, stall: STALL }
+        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), cache: None, reasoning: None, first_wait: FIRST_WAIT, stall: STALL }
     }
 
     /// Await `fut`, waking every TICK so Esc ends the wait at once, and give up
-    /// once the server has been silent for `stall`. Without this a stalled
-    /// provider left the turn on "working…" with Esc unable to reach it.
-    async fn wait<F: std::future::Future>(&self, fut: F, cancel: &AtomicBool) -> Result<F::Output, String> {
+    /// once the server has been silent too long: `first_wait` until data has
+    /// `started` flowing, `stall` after. Without this a stalled provider left
+    /// the turn on "working…" with Esc unable to reach it.
+    async fn wait<F: std::future::Future>(&self, fut: F, cancel: &AtomicBool, started: bool) -> Result<F::Output, String> {
         let mut fut = std::pin::pin!(fut);
         let t0 = Instant::now();
+        let limit = if started { self.stall } else { self.first_wait };
         loop {
             match tokio::time::timeout(TICK, &mut fut).await {
                 Ok(v) => return Ok(v),
                 Err(_) if cancel.load(Ordering::Relaxed) => return Err("interrupted".into()),
-                Err(_) if t0.elapsed() >= self.stall => {
-                    return Err(format!("stream stalled: no data for {}s", self.stall.as_secs()))
+                Err(_) if t0.elapsed() >= limit => {
+                    return Err(if started {
+                        format!("stream stalled: no data for {}s", limit.as_secs())
+                    } else {
+                        format!("no response for {} min", limit.as_secs() / 60)
+                    })
                 }
                 Err(_) => {}
             }
@@ -128,11 +139,11 @@ impl Client {
             if !self.key.is_empty() {
                 req = req.bearer_auth(&self.key);
             }
-            let err = match self.wait(req.send(), cancel).await? {
+            let err = match self.wait(req.send(), cancel, false).await? {
                 Ok(r) if r.status().is_success() => break r,
                 Ok(r) => {
                     let status = r.status();
-                    let text = self.wait(r.text(), cancel).await?.unwrap_or_default();
+                    let text = self.wait(r.text(), cancel, false).await?.unwrap_or_default();
                     let msg = format!("HTTP {status}: {}", truncate(&text, 500));
                     // once: the field is gone after this, so a second 400 is a real error
                     if body.get("stream_options").is_some() && rejects_stream_options(status.as_u16(), &text) {
@@ -176,14 +187,16 @@ impl Client {
         // the reply ends at [DONE], not when the server gets round to closing:
         // one that keeps the socket open would otherwise hold the turn forever
         let mut done = false;
+        let mut started = false;
         while !done {
             if cancel.load(Ordering::Relaxed) {
                 return Err("interrupted".into());
             }
-            match self.wait(stream.next(), cancel).await? {
+            match self.wait(stream.next(), cancel, started).await? {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
                     for ev in take_sse_events(&mut buf) {
+                        started |= ev.lines().any(|l| l.starts_with("data:"));
                         done |= handle_event(&ev, quiet, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
                     }
                 }
@@ -416,28 +429,46 @@ fn truncate(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
-    /// A server that goes quiet mid-reply with the socket still open fails the
-    /// call once the stall limit passes, rather than holding the turn forever.
-    #[test]
-    fn a_silent_stream_fails_as_stalled() {
+    /// Serve `head` on one connection, then hold the socket open in silence,
+    /// and return the error chat_stream gives up with under the given limits.
+    fn silent_after(head: &'static str, first_wait: Duration, stall: Duration) -> String {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             let _ = s.read(&mut [0u8; 65536]);
-            let part = r#"data: {"choices":[{"delta":{"content":"half a reply"},"finish_reason":null}]}"#;
-            s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n{part}\n\n").as_bytes()).unwrap();
+            s.write_all(head.as_bytes()).unwrap();
             std::thread::sleep(Duration::from_secs(30)); // silent, socket open
         });
         let mut c = Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), String::new(), "m".into());
-        c.stall = Duration::from_millis(300);
+        c.first_wait = first_wait;
+        c.stall = stall;
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let t0 = Instant::now();
         let r = rt.block_on(c.chat_stream(&[json!({"role": "user", "content": "hi"})], None, "k", &AtomicBool::new(false), true));
-        let err = r.err().unwrap_or_default();
-        assert!(err.starts_with("stream stalled: no data for"), "{err}");
         assert!(t0.elapsed() < Duration::from_secs(5), "gave up after the limit, not the server");
+        r.err().unwrap_or_default()
+    }
+
+    /// A server that goes quiet mid-reply with the socket still open fails the
+    /// call once the between-chunks limit passes, rather than holding the turn.
+    #[test]
+    fn a_silent_stream_fails_as_stalled() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n\
+            data: {\"choices\":[{\"delta\":{\"content\":\"half a reply\"},\"finish_reason\":null}]}\n\n";
+        let err = silent_after(head, Duration::from_secs(60), Duration::from_millis(300));
+        assert!(err.starts_with("stream stalled: no data for"), "{err}");
+    }
+
+    /// Before the first data line the longer limit applies: a server still
+    /// prefilling is not cut off at the between-chunks limit, and the error
+    /// names the phase that went quiet.
+    #[test]
+    fn silence_before_the_first_data_line_gets_the_longer_limit() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: keepalive\n\n";
+        let err = silent_after(head, Duration::from_millis(600), Duration::from_millis(100));
+        assert!(err.starts_with("no response for"), "{err}");
     }
 
     #[test]
