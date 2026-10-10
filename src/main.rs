@@ -39,7 +39,8 @@ flags
   --system-prompt X      replace the base system prompt (X is a file if one exists, else text;
                          default ~/.rusti/SYSTEM.md, else the built-in one)
   --append-system-prompt X  add X to it, repeatable (default ~/.rusti/APPEND_SYSTEM.md)
-  --yolo                 no permission prompts, no project-root guard (does not imply --trust)
+  --yolo                 start in devil mode: no permission prompts, no project-root guard
+                         (does not imply --trust)
   --trust                trust this folder's model.json and .rusti without asking
   --self-test            offline check against a fake server
   --help, --version
@@ -72,7 +73,7 @@ apply. Piped and one-shot runs are untrusted unless --trust.
 
 slash commands (--tui)
   /model /use     switch model profile        /resume /rename   list, switch and name sessions
-  /new [NAME]     start a new session here, keeping the model, plan mode and MCP servers
+  /new [NAME]     start a new session here, keeping the model, permission mode and MCP servers
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
   /export         transcript to markdown      /reload           rebuild and relaunch
@@ -91,6 +92,7 @@ slash commands (--tui)
   ctrl+t          hide/show the model's thinking (saved as \"hide_thinking\" in config.json)
   @PATH           pick a project file to name in the message (the model reads it)
   tab             complete the path before the cursor
+  shift+tab       permission mode: manual → plan → auto → devil (readme.md § safety)
 ";
 
 fn main() {
@@ -193,7 +195,7 @@ fn main() {
     }
 
     if args.iter().any(|a| a == "--yolo") || std::env::var("RUSTI_YOLO").map_or(false, |v| v == "1") {
-        ai_core::tools::YOLO.store(true, std::sync::atomic::Ordering::Relaxed);
+        ai_core::set_mode(ai_core::Mode::Devil);
     }
     if let Some(n) = get(&args, "--max-iters", "RUSTI_MAX_ITERS") {
         match n.parse::<usize>() {

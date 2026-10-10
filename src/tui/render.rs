@@ -217,10 +217,16 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     frame.extend(input);
 
     let footer = app::footer_right(
-        &app.footer, crate::ai_core::plan_mode(), &app.session, &app.model, &app.branch,
+        &app.footer, crate::ai_core::mode(), &app.session, &app.model, &app.branch,
         app.sess_tok, app.turn_ctx, crate::ai_core::context_limit(), app.cache_pct,
     );
-    frame.push(format!("{}{}{RESET}", theme::current().dim, truncate_str(&footer, w)));
+    let t = theme::current();
+    // devil mode must be impossible to miss: its segment leads, in the warning colour
+    let footer = match truncate_str(&footer, w).strip_prefix("DEVIL") {
+        Some(rest) => format!("{}{BOLD}DEVIL{RESET}{}{rest}", t.warn, t.dim),
+        None => truncate_str(&footer, w),
+    };
+    frame.push(format!("{}{footer}{RESET}", t.dim));
 
     // ── differential draw ──
     let mut out = stdout();

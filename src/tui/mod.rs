@@ -962,35 +962,42 @@ mod tests {
 
     #[test]
     fn footer_shows_only_the_parts_that_exist() {
+        use crate::ai_core::Mode::*;
         let on = crate::config::Footer::default();
         assert_eq!(
-            app::footer_right(&on, false, "main", "mimo", "master", 4321, 25_000, 100_000, None),
+            app::footer_right(&on, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, None),
             "main · mimo · ⎇ master · 4.3k tok · ctx 25%"
         );
         // fresh session: no name, no branch, nothing generated — but ctx is
         // reported at 0% rather than hidden, since it resets every turn
-        assert_eq!(app::footer_right(&on, false, "", "mimo", "", 0, 0, 100_000, None), "mimo · ctx 0%");
+        assert_eq!(app::footer_right(&on, Manual, "", "mimo", "", 0, 0, 100_000, None), "mimo · ctx 0%");
         // plan mode leads, so a narrow terminal cuts it last
-        assert_eq!(app::footer_right(&on, true, "", "mimo", "", 0, 0, 100_000, None), "plan · mimo · ctx 0%");
+        assert_eq!(app::footer_right(&on, Plan, "", "mimo", "", 0, 0, 100_000, None), "plan · mimo · ctx 0%");
         // cache hits show once the server reports them, and only then
-        assert_eq!(app::footer_right(&on, false, "", "mimo", "", 0, 0, 100_000, Some(82)), "mimo · ctx 0% · cache 82%");
+        assert_eq!(app::footer_right(&on, Manual, "", "mimo", "", 0, 0, 100_000, Some(82)), "mimo · ctx 0% · cache 82%");
     }
 
     #[test]
     fn settings_hide_footer_segments_but_never_plan_mode() {
+        use crate::ai_core::Mode::*;
         let off = crate::config::Footer {
             session: false, model: false, branch: false, tokens: false, context: false, cache: false,
         };
         // everything off still announces plan mode: it is why writes get refused
-        assert_eq!(app::footer_right(&off, true, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "plan");
-        assert_eq!(app::footer_right(&off, false, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "");
+        assert_eq!(app::footer_right(&off, Plan, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "plan");
+        assert_eq!(app::footer_right(&off, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "");
+        // and every other mode but manual, devil loudest
+        assert_eq!(app::footer_right(&off, Auto, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "auto");
+        assert_eq!(app::footer_right(&off, Devil, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "DEVIL");
+        // entering devil says plainly what is off; it is a warning row, not info
+        assert!(app::mode_notice(Devil).starts_with("  ⚠") && app::mode_notice(Devil).contains("project-root guard is off"));
         let ctx_only = crate::config::Footer { context: true, ..off.clone() };
         assert_eq!(
-            app::footer_right(&ctx_only, false, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)),
+            app::footer_right(&ctx_only, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)),
             "ctx 25%"
         );
         let cache_only = crate::config::Footer { cache: true, ..off };
-        assert_eq!(app::footer_right(&cache_only, false, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "cache 82%");
+        assert_eq!(app::footer_right(&cache_only, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "cache 82%");
     }
 
     #[test]

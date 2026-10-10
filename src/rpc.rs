@@ -314,6 +314,7 @@ impl Rpc {
             session.as_object_mut().map(|o| o.remove(k));
         }
         json!({"busy": q.busy, "session": session, "thinking": thinking, "plan": ai_core::plan_mode(),
+               "mode": format!("{:?}", ai_core::mode()).to_lowercase(),
                "context_limit": ai_core::context_limit(), "steers": ai_core::steers().len(),
                "follow_ups": q.follow.len(), "asks": asks})
     }

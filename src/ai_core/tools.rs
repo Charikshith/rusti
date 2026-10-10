@@ -771,13 +771,10 @@ fn seg_match(pat: &str, s: &str) -> bool {
     m(&p, &s)
 }
 
-/// --yolo: no permission prompts and no project-root guard.
-pub static YOLO: AtomicBool = AtomicBool::new(false);
-
 /// Refuse writes outside the working directory (the project root). Resolves the
 /// deepest existing ancestor so new files and `..` tricks are judged on the real path.
 pub fn guard(path: &str) -> Result<(), String> {
-    if YOLO.load(Ordering::Relaxed) {
+    if super::mode() == super::Mode::Devil {
         return Ok(());
     }
     static ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -802,7 +799,7 @@ pub fn guard(path: &str) -> Result<(), String> {
     if full.starts_with(root) {
         Ok(())
     } else {
-        Err(format!("refused: {path} is outside the project root {} (run with --yolo to allow)", root.display()))
+        Err(format!("refused: {path} is outside the project root {} (devil mode or --yolo allows it)", root.display()))
     }
 }
 

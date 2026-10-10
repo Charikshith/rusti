@@ -44,7 +44,7 @@ const BUILTINS: &[(&str, &str, bool)] = &[
     ("/quit", "exit rusti (same as ctrl+c twice)", false),
     ("/undo", "put back the files the last turn changed and rewind to before it", false),
     ("/commit", "stage the work and commit it with a drafted message", false),
-    ("/plan", "toggle plan mode: read and propose, change nothing", false),
+    ("/plan", "toggle plan mode: read and propose, change nothing (shift+tab cycles all modes)", false),
     ("/settings", "choose which segments the status line shows", false),
     ("/themes", "pick the colour palette, or /themes <name>", false),
     ("/mcp", "list MCP servers and switch them on or off", false),
@@ -814,6 +814,8 @@ pub fn ui_loop(
                         }
                         // Tab with no menu open completes the path before the cursor
                         (KeyCode::Tab, _) => tab_complete(&mut app),
+                        // Shift+Tab cycles the permission mode: manual → plan → auto → devil
+                        (KeyCode::BackTab, _) => cycle_mode(&mut app),
                         // Ctrl+T folds reasoning blocks; like Ctrl+O it is only a redraw
                         (KeyCode::Char('t'), KeyModifiers::CONTROL) => toggle_thinking(&mut app),
                         // Ctrl+D exits, only when input is empty (pi: exit when editor empty)
@@ -1467,13 +1469,36 @@ fn drop_mcp_ok(app: &mut App) {
 /// The status line: what this session is, and how full it is. Every segment
 /// except `plan` is toggleable via /settings — plan is a mode you are IN, not
 /// decoration, so hiding it would hide the reason writes are being refused.
+/// Shift+Tab: the next permission mode, announced in the transcript.
+fn cycle_mode(app: &mut App) {
+    let m = ai_core::mode().next();
+    ai_core::set_mode(m);
+    app.lines.push(mode_notice(m).into());
+}
+
+pub fn mode_notice(m: ai_core::Mode) -> &'static str {
+    match m {
+        ai_core::Mode::Manual => "  ℹ manual mode: every write, command and fetch asks first",
+        ai_core::Mode::Plan => "  ℹ plan mode: reads and searches only, every write and command is refused",
+        ai_core::Mode::Auto => {
+            "  ℹ auto mode: edits and commands inside the project run without asking; deletes, fetches, \
+             MCP tools and risky commands (rm, git push, installs, sudo, …) still ask"
+        }
+        ai_core::Mode::Devil => "  ⚠ DEVIL mode: no permission prompts and the project-root guard is off",
+    }
+}
+
 pub fn footer_right(
-    f: &crate::config::Footer, plan: bool, session: &str, model: &str, branch: &str,
+    f: &crate::config::Footer, mode: ai_core::Mode, session: &str, model: &str, branch: &str,
     sess_tok: u64, ctx: u64, limit: u64, cache_pct: Option<u64>,
 ) -> String {
     let mut parts = Vec::new();
-    if plan {
-        parts.push("plan".to_string()); // first, so a narrow terminal truncates it last
+    // first, so a narrow terminal truncates it last; manual stays implicit
+    match mode {
+        ai_core::Mode::Manual => {}
+        ai_core::Mode::Plan => parts.push("plan".to_string()),
+        ai_core::Mode::Auto => parts.push("auto".to_string()),
+        ai_core::Mode::Devil => parts.push("DEVIL".to_string()),
     }
     if f.session && !session.is_empty() {
         parts.push(session.to_string());
