@@ -1,0 +1,17 @@
+{
+  "id": "feat-json-rpc-compaction",
+  "name": "JSON events mode, RPC mode, compaction improvements (Q18, Q19, Q17)",
+  "description": "--json runs one task and writes every agent Event to stdout as a versioned JSON line ({\"v\":1,\"type\":...}); a session line opens it and a task_end with the final answer closes it; logs stay on stderr; questions are answered 'no answer given', so permission prompts are refused unless --yolo. --rpc stays up: JSONL commands on stdin (prompt with steer/follow_up mode, abort, answer, new_session, resume_session, set_model, set_thinking, set_plan, compact, get_state, get_messages), responses correlated by id, the same event lines, and ask_user / permission prompts as ask lines answered by id. Compaction: /compact [focus] in the TUI and RPC; a structured summary (Goal, Constraints & Preferences, Progress, Key Decisions, Next Steps, Critical Context) built from a plain-text transcript, with cumulative read/modified file lists, updated in place on the next compaction; a token keep window (min(20k, limit/5)) instead of the last 8 entries; a profile's own \"context\" sets the limit while it is in use (--context still wins); one compact-and-retry on a provider context-overflow error; the summary sits behind Ctrl+O instead of streaming into the transcript. All in rpc.rs, ai_core/mod.rs, ai_core/llm.rs, plus small TUI/main/config hooks.",
+  "dependencies": [],
+  "status": "done",
+  "evidence": "cargo test: rpc::tests::events_serialize_to_versioned_lines, rpc::tests::rpc_commands_answer_by_id_and_queue_while_busy, rpc::tests::unanswerable_questions_are_refused_not_hung; ai_core::compaction_cut_keeps_a_token_window_and_never_orphans_a_tool_result, ai_core::compaction_summary_is_structured_and_updates_iteratively, ai_core::a_context_overflow_compacts_and_retries_once, ai_core::compaction_keeps_the_turn_context (updated); ai_core::llm::tests::context_overflow_errors_are_told_apart; tests/rpc.rs drives the real binary in --json and --rpc against a fake chat server (prompt, ask/answer round trip, get_state, get_messages, EOF exit). cargo run -- --self-test OK. cargo test: 84 + 2 + 1 passed.",
+  "decisions": [
+    "RPC has its own agent loop in rpc.rs instead of sending the TUI's Job enum: a Job carries no id and reports outcomes as transcript text, and RPC responses need the id and a real result. It reuses the Event sink, the STEER queue, tui::new_session, run_agent and compact.",
+    "Steer and follow-up follow D3: steers join the running task after its tool batch, all at once; follow-ups run one at a time after it. Busy and the follow-up queue share one lock with the agent thread's go-idle check, so nothing queued at the last moment is stranded.",
+    "Session-changing RPC commands are refused while a task runs rather than queued, so a response always reports the actual outcome. Responses are correlated by id, not position (events travel through the sink on another thread).",
+    "'thinking changes' = set_thinking sending reasoning_effort, the OpenAI-compatible knob; rusti had no thinking level before, and nothing is sent unless it is set.",
+    "A profile's \"context\" is a limit in the same unit as --context, not a model window minus a reserve: one meaning for one word across flag, config and profile.",
+    "No split-turn second summary as Pi does: the cut can land mid-turn and the one transcript-based summary covers the turn's beginning.",
+    "pre_compact hook (Phase 3) not built: a marked seam in compact() between planning the cut and the summary request."
+  ]
+}

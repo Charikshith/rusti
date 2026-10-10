@@ -44,6 +44,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd { name: "/mcp", desc: "list MCP servers and switch them on or off", soon: false },
     Cmd { name: "/test", desc: "/test <cmd> - loop until it exits 0", soon: true },
     Cmd { name: "/export", desc: "/export [file.md] - write the transcript out as markdown", soon: false },
+    Cmd { name: "/compact", desc: "/compact [focus] - summarize the older history now to free context", soon: false },
 ];
 
 /// Menu rows visible at once; up/down walks the whole filtered list.
@@ -1001,6 +1002,18 @@ pub fn ui_loop(
                     }
                 }
                 ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
+                ai_core::Event::CompactStart { reason, messages, .. } => {
+                    app.flush();
+                    let why = if reason == "overflow" { " (the provider said the context was full)" } else { "" };
+                    app.lines.push(format!("  ⟳ compacting context: {messages} messages → summary{why}"));
+                }
+                // the summary stays behind Ctrl+O: it is for the model, and
+                // streaming it into the transcript buried the actual work
+                ai_core::Event::CompactEnd { summary, tokens } => {
+                    app.flush();
+                    app.lines.push(format!("  ⟳ compacted: ~{}k tokens of context now  (ctrl+o)", (tokens + 500) / 1000));
+                    app.lines.extend(summary.lines().map(|l| format!("{HIDDEN}  · {l}")));
+                }
                 ai_core::Event::Delivered(t) => {
                     app.flush();
                     app.msg_num += 1;
@@ -1112,6 +1125,14 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
                 app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
             } else {
                 start_task(app, job_tx, COMMIT_TASK.into());
+            }
+        }
+        "/compact" => {
+            if !app.done {
+                app.lines.push("  ✗ finish or Esc-interrupt the current task first".into());
+            } else {
+                app.done = false; // the summary is a model call: show it working
+                let _ = job_tx.send(Job::Compact((!arg.is_empty()).then(|| arg.to_string())));
             }
         }
         "/undo" => {
@@ -1512,6 +1533,7 @@ fn switch_model(app: &mut App, job_tx: &Sender<Job>, name: &str) {
         Some(p) => {
             app.model = p.model.clone();
             ai_core::tools::set_vision(p.vision != Some(false));
+            ai_core::use_profile_context(p.context);
             let _ = job_tx.send(Job::Model {
                 url: p.url.clone(),
                 key: p.key.clone(),

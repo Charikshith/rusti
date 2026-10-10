@@ -28,6 +28,19 @@ pub struct Client {
     /// is one profile, so it stops sending it for the Client's lifetime: until
     /// /model switches profile or rusti restarts.
     no_stream_options: AtomicBool,
+    /// Sent as `reasoning_effort` when set (RPC set_thinking); None sends nothing.
+    pub reasoning: Option<String>,
+}
+
+/// A provider error saying the request did not fit the model's context:
+/// compacting and resending can fix it, resending as-is cannot.
+pub fn is_overflow(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.starts_with("http 413")
+        || ["context_length_exceeded", "context length", "context window", "maximum context", "too many tokens",
+            "prompt is too long", "input is too long", "reduce the length"]
+            .iter()
+            .any(|k| e.contains(k))
 }
 
 /// A 400 that blames `stream_options`: the server does not take the field,
@@ -53,7 +66,7 @@ impl Client {
         // a pooled connection reused next turn is dead -> "error sending request".
         // No pooling = fresh connection per request (localhost handshake is free).
         let http = reqwest::Client::builder().pool_max_idle_per_host(0).build().unwrap();
-        Client { url, key, model, http, no_stream_options: AtomicBool::new(false) }
+        Client { url, key, model, http, no_stream_options: AtomicBool::new(false), reasoning: None }
     }
 
     pub async fn chat_stream(
@@ -61,10 +74,14 @@ impl Client {
         messages: &[Value],
         tools: Option<&[Value]>,
         cancel: &AtomicBool,
+        quiet: bool, // stream no text or thinking deltas: a compaction summary is not a reply
     ) -> Result<ChatResult, String> {
         let mut body = json!({ "model": self.model, "messages": messages, "stream": true });
         if let Some(t) = tools {
             body["tools"] = Value::Array(t.to_vec());
+        }
+        if let Some(r) = &self.reasoning {
+            body["reasoning_effort"] = json!(r);
         }
         // without it OpenAI streams no usage at all, so every count is a guess
         if !self.no_stream_options.load(Ordering::Relaxed) {
@@ -131,7 +148,7 @@ impl Client {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
                     for ev in take_sse_events(&mut buf) {
-                        handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
+                        handle_event(&ev, quiet, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
                     }
                 }
                 Some(Err(e)) => return Err(format!("stream error: {e}")),
@@ -141,7 +158,7 @@ impl Client {
         if !buf.is_empty() {
             // server closed without a trailing blank line
             let ev = String::from_utf8_lossy(&buf).into_owned();
-            handle_event(&ev, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
+            handle_event(&ev, quiet, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached)?;
         }
 
         // usage when the server volunteers it (many OpenAI-compatible ones
@@ -194,6 +211,7 @@ struct ToolCallAcc {
 
 fn handle_event(
     ev: &str,
+    quiet: bool,
     content: &mut String,
     calls: &mut Vec<ToolCallAcc>,
     finish: &mut Option<String>,
@@ -232,7 +250,9 @@ fn handle_event(
                 if !c.is_empty() {
                     first.get_or_insert_with(Instant::now);
                     content.push_str(c);
-                    emit(Event::TextDelta(c.to_string()));
+                    if !quiet {
+                        emit(Event::TextDelta(c.to_string()));
+                    }
                 }
             }
             // thinking models (QwQ, DeepSeek R1, GLM) stream their scratchpad
@@ -242,7 +262,7 @@ fn handle_event(
                 .or_else(|| delta.get("reasoning"))
                 .and_then(|x| x.as_str())
             {
-                if !r.is_empty() {
+                if !r.is_empty() && !quiet {
                     first.get_or_insert_with(Instant::now);
                     emit(Event::ReasoningDelta(r.to_string()));
                 }
@@ -319,11 +339,22 @@ mod tests {
     }
 
     #[test]
+    fn context_overflow_errors_are_told_apart() {
+        assert!(is_overflow(r#"HTTP 400 Bad Request: {"error":{"code":"context_length_exceeded"}}"#)); // OpenAI
+        assert!(is_overflow("HTTP 400 Bad Request: prompt is too long: 210000 tokens > 200000 maximum")); // Anthropic
+        assert!(is_overflow("HTTP 400 Bad Request: This model's maximum context length is 8192 tokens"));
+        assert!(is_overflow("HTTP 413 Payload Too Large: "));
+        assert!(!is_overflow("HTTP 400 Bad Request: model not found"));
+        assert!(!is_overflow("HTTP 401 Unauthorized: bad key"));
+        assert!(!is_overflow("request failed: connection refused"));
+    }
+
+    #[test]
     fn usage_read_from_choices_when_not_top_level() {
         let (mut content, mut calls, mut finish, mut first) = (String::new(), Vec::new(), None, None);
         let (mut usage, mut prompt, mut cached) = (None, None, None);
         let kimi = r#"data: {"usage":null,"choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":100,"completion_tokens":7,"total_tokens":107,"cached_tokens":40}}]}"#;
-        handle_event(kimi, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached).unwrap();
+        handle_event(kimi, false, &mut content, &mut calls, &mut finish, &mut first, &mut usage, &mut prompt, &mut cached).unwrap();
         assert_eq!((usage, prompt, cached), (Some(7), Some(100), Some(40)));
         assert_eq!(finish.as_deref(), Some("stop"));
     }

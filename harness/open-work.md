@@ -15,11 +15,6 @@ Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the orde
 
 ## Priority — Add When Needed
 
-### Compaction Follow-ups
-When: feat-029 landed with a global --context limit and a summary that streams into the transcript
-What: per-profile `context` field in model.json so the limit follows the model; `/compact` slash command for manual trigger; collapse the streamed summary into one dim block; retry-on-HTTP-400-context-error as a reactive trigger
-Where: config.rs profile, tui/app.rs handle_command, ai_core/mod.rs compact()
-
 ### unicode-width Word Wrap
 When: CJK or emoji output garbles the TUI
 What: Use unicode-width crate for character display width
@@ -101,11 +96,6 @@ When: feat-039 landed `/plan` as a toggle in the TUI only
 What: a `--plan` flag so one-shot CLI runs can plan too; auto-drop the mode when the user replies "go"/"do it"
 (needs an approval state machine — only worth it if the toggle proves annoying)
 Where: main.rs, tui/app.rs handle_command
-
-### --json NDJSON Output
-When: Scripting/CI use of the one-shot CLI (--help/--version landed as feat-034)
-What: `--json` streams the Event enum as NDJSON on the plain (piped) path instead of prose
-Where: main.rs, tui/plain.rs
 
 ## Model / API
 

@@ -6,7 +6,7 @@ pub mod tools;
 
 use crate::session::{Entry, Session};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 /// Events the agent emits, for a TUI (or any front end) to render.
@@ -34,6 +34,11 @@ pub enum Event {
     TaskEnd { ok: bool, error: Option<String> }, // whole task finished
     Reload { exe: String, args: Vec<String> },   // TUI /reload: new binary built, ready to relaunch
     Delivered(String),                           // queued steer text just joined the conversation
+    /// Compaction began: why ("threshold", "overflow" or "manual"), how many
+    /// entries it summarizes, and the path's estimated tokens before.
+    CompactStart { reason: String, messages: usize, tokens: u64 },
+    /// Compaction finished: the summary that replaced them, estimated tokens after.
+    CompactEnd { summary: String, tokens: u64 },
 }
 
 /// Optional front-end sink. When set, the agent sends Events instead of
@@ -91,6 +96,10 @@ pub(crate) fn emit(ev: Event) {
             Event::Usage { .. } => {}  // per-turn stats are a TUI line
             Event::Reload { .. } => {} // TUI-only; no-op without a front end
             Event::Delivered(_) => {}  // only the TUI queues steers
+            Event::CompactStart { reason, messages, .. } => {
+                eprintln!("  ⟳ compacting context ({reason}): {messages} messages → summary")
+            }
+            Event::CompactEnd { tokens, .. } => eprintln!("  ⟳ compacted: ~{tokens} tokens now"),
         },
     }
 }
@@ -113,8 +122,14 @@ pub fn set_max_iters(n: usize) {
 }
 
 /// Prompt tokens above which the next request is preceded by compaction.
-/// Set it to ~80% of the model's window; --context / RUSTI_CONTEXT override.
-static CONTEXT_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(100_000);
+/// Set it to ~80% of the model's window. The config's "context" sets it, a
+/// profile's own "context" wins while that profile is in use, and --context /
+/// RUSTI_CONTEXT win over both.
+static CONTEXT_LIMIT: AtomicU64 = AtomicU64::new(100_000);
+/// The config's limit (or the default): what a profile without its own gets.
+static CONTEXT_BASE: AtomicU64 = AtomicU64::new(100_000);
+/// --context / RUSTI_CONTEXT was given, so no profile switch moves the limit.
+static CONTEXT_PINNED: AtomicBool = AtomicBool::new(false);
 
 pub fn set_context_limit(n: u64) {
     CONTEXT_LIMIT.store(n.max(1000), Ordering::Relaxed);
@@ -124,53 +139,230 @@ pub fn context_limit() -> u64 {
     CONTEXT_LIMIT.load(Ordering::Relaxed)
 }
 
-/// Entries kept verbatim after compaction (the current task's recent steps).
-const KEEP_TAIL: usize = 8;
+/// The config's "context": the limit for every profile that names none.
+pub fn set_config_context(n: u64) {
+    CONTEXT_BASE.store(n.max(1000), Ordering::Relaxed);
+    set_context_limit(n);
+}
 
-const COMPACT_PROMPT: &str = "The conversation above is being compacted to free context. Write a dense summary \
-for an agent that will continue the task with only this summary plus the most recent messages. Include: the \
-original task and any constraints the user stated; what has been done so far (files read/changed, commands run, \
-their outcomes); what was learned; decisions and their reasons; what is still left to do. Use exact file paths, \
-identifiers, and error text. No preamble.";
+/// --context: the limit for this run, whichever profile is picked.
+pub fn pin_context(n: u64) {
+    set_context_limit(n);
+    CONTEXT_PINNED.store(true, Ordering::Relaxed);
+}
 
-/// Index where the kept tail starts: the earliest non-tool entry within the
-/// last KEEP_TAIL, so no tool result is left without its call. None when
-/// there is nothing before it worth summarizing.
-pub fn compact_cut(roles: &[&str]) -> Option<usize> {
-    if roles.first() != Some(&"system") {
+/// A profile was picked (at startup, /model, RPC set_model): its own
+/// "context" applies, or the config's when it has none.
+pub fn use_profile_context(n: Option<u64>) {
+    if !CONTEXT_PINNED.load(Ordering::Relaxed) {
+        set_context_limit(n.unwrap_or(CONTEXT_BASE.load(Ordering::Relaxed)));
+    }
+}
+
+/// Tokens kept verbatim after compaction: the newest entries up to a fifth of
+/// the limit, at most 20k, so a small limit still leaves room to work.
+fn keep_tokens() -> u64 {
+    (context_limit() / 5).min(20_000)
+}
+
+/// Rough tokens an entry costs in a request: 4 chars a token, the guess llm.rs
+/// makes when the server reports no usage, and ~1200 per image.
+pub fn estimate_tokens(e: &Entry) -> u64 {
+    let chars = e.content.len()
+        + e.context.as_ref().map_or(0, String::len)
+        + e.tool_calls.as_ref().map_or(0, |t| t.to_string().len());
+    (chars as u64).div_ceil(4) + 1200 * (e.images.len() + usize::from(e.image.is_some())) as u64
+}
+
+/// Index where the kept tail starts, from each entry's (role, tokens). Walking
+/// back from the newest entry, the tail grows until it holds `keep` tokens;
+/// the cut then moves back to the nearest non-tool entry, so a tool result
+/// keeps its call (forward instead when no call is left before it). `first` is
+/// the first entry that can be summarized: 1, or 2 when entry 1 is the last
+/// compaction's summary. None when the path fits in `keep` or nothing before
+/// the tail is worth summarizing.
+pub fn compact_cut(entries: &[(&str, u64)], first: usize, keep: u64) -> Option<usize> {
+    if entries.first().map(|e| e.0) != Some("system") {
         return None;
     }
-    let from = roles.len().saturating_sub(KEEP_TAIL).max(1);
-    let cut = (from..roles.len())
-        .find(|&i| roles[i] != "tool")
-        .or_else(|| (1..roles.len()).rev().find(|&i| roles[i] != "tool"))?;
-    (cut > 1).then_some(cut)
+    let mut acc = 0;
+    let at = (first..entries.len()).rev().find(|&i| {
+        acc += entries[i].1;
+        acc >= keep
+    })?;
+    let call = |i: &usize| entries[*i].0 != "tool";
+    let cut = (first..=at).rev().find(call).or_else(|| (at..entries.len()).find(call))?;
+    (cut > first).then_some(cut)
+}
+
+/// The (name, arguments) of each tool call on an assistant entry.
+fn calls_of(e: &Entry) -> Vec<(&str, Value)> {
+    e.tool_calls
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let args = c["function"]["arguments"].as_str().and_then(|s| serde_json::from_str(s).ok());
+            (c["function"]["name"].as_str().unwrap_or("?"), args.unwrap_or(Value::Null))
+        })
+        .collect()
+}
+
+/// Files the summarized entries read and changed, added to what the last
+/// compaction recorded. A file both read and changed is listed as changed.
+fn touched_files(entries: &[Entry], prev: Option<&crate::session::Compaction>) -> (Vec<String>, Vec<String>) {
+    use std::collections::BTreeSet;
+    let mut read: BTreeSet<String> = prev.map(|p| p.read_files.iter().cloned().collect()).unwrap_or_default();
+    let mut modified: BTreeSet<String> = prev.map(|p| p.modified_files.iter().cloned().collect()).unwrap_or_default();
+    for (name, args) in entries.iter().flat_map(calls_of) {
+        let arg = |k: &str| args[k].as_str().map(str::to_string);
+        match name {
+            "read_file" => read.extend(arg("path")),
+            "write_file" | "edit_file" | "multi_edit" | "delete_file" => modified.extend(arg("path")),
+            "move_file" => modified.extend(arg("from").into_iter().chain(arg("to"))),
+            _ => {}
+        }
+    }
+    read.retain(|f| !modified.contains(f));
+    (read.into_iter().collect(), modified.into_iter().collect())
+}
+
+/// The entries to summarize as a plain-text transcript: the model reads
+/// something to summarize rather than a conversation to continue, and a
+/// tool call needs no matching result. Tool results are cut to 2000 chars.
+fn transcript(entries: &[Entry]) -> String {
+    let mut out = String::new();
+    for e in entries {
+        match e.role.as_str() {
+            "user" => out.push_str(&format!("[User]: {}\n\n", e.content.trim())),
+            "assistant" => {
+                if !e.content.trim().is_empty() {
+                    out.push_str(&format!("[Assistant]: {}\n\n", e.content.trim()));
+                }
+                let calls: Vec<String> = calls_of(e).iter().map(|(n, a)| tool_summary(n, a)).collect();
+                if !calls.is_empty() {
+                    out.push_str(&format!("[Assistant tool calls]: {}\n\n", calls.join("; ")));
+                }
+            }
+            "tool" => {
+                let failed = if e.ok == Some(false) { " (failed)" } else { "" };
+                out.push_str(&format!("[Tool result{failed}]: {}\n\n", tools::truncate(e.content.trim(), 2000)));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+const SUMMARY_HEAD: &str = "[Summary of the conversation so far; earlier messages were compacted]";
+
+const SUMMARY_SYSTEM: &str = "You write the working memory of a coding agent whose earlier conversation is being \
+compacted to free context. Another agent will continue the task from your summary plus the most recent messages. \
+Reply with the summary only, in exactly this markdown format, keeping every heading (write \"none\" under an empty one):
+
+## Goal
+What the user wants done.
+
+## Constraints & Preferences
+Requirements and preferences the user stated.
+
+## Progress
+### Done
+### In Progress
+### Blocked
+
+## Key Decisions
+Each decision and why it was made.
+
+## Next Steps
+What is still left, in order.
+
+## Critical Context
+Exact file paths, identifiers, commands, error text and values the work depends on.
+
+Do not continue the conversation, answer questions in it or call tools.";
+
+/// The user message of a summary request: the transcript, and on a later
+/// compaction the previous summary to update rather than start over.
+fn summary_request(conversation: &str, prev: Option<&str>, focus: Option<&str>) -> String {
+    let mut s = String::new();
+    if let Some(p) = prev {
+        s.push_str(&format!("<previous-summary>\n{p}\n</previous-summary>\n\n"));
+    }
+    s.push_str(&format!("<conversation>\n{conversation}</conversation>\n\n"));
+    s.push_str(match prev {
+        Some(_) => "Update the previous summary with the conversation that followed it: keep what still holds, \
+move finished work to Done, add new decisions and context, and drop what is obsolete.",
+        None => "Summarize the conversation.",
+    });
+    if let Some(f) = focus.map(str::trim).filter(|f| !f.is_empty()) {
+        s.push_str(&format!("\n\nThe user asked this compaction to focus on: {f}"));
+    }
+    s
+}
+
+/// What the model reads in place of the summarized entries: the summary, then
+/// the cumulative file lists.
+fn summary_text(c: &crate::session::Compaction) -> String {
+    let mut s = format!("{SUMMARY_HEAD}\n{}", c.summary);
+    for (tag, files) in [("read-files", &c.read_files), ("modified-files", &c.modified_files)] {
+        if !files.is_empty() {
+            s.push_str(&format!("\n\n<{tag}>\n{}\n</{tag}>", files.join("\n")));
+        }
+    }
+    s
 }
 
 /// Summarize the active path (minus its tail) with one LLM call, then branch:
 /// system -> summary -> copies of the tail. The old entries stay in the tree.
-async fn compact(client: &llm::Client, session: &mut Session, cancel: &AtomicBool) -> Result<(), String> {
+/// `reason` is "threshold", "overflow" or "manual"; `focus` is what /compact
+/// was given. Ok(false) when there was nothing to compact.
+pub async fn compact(
+    client: &llm::Client,
+    session: &mut Session,
+    cancel: &AtomicBool,
+    reason: &str,
+    focus: Option<&str>,
+) -> Result<bool, String> {
     let path: Vec<Entry> = session.path().into_iter().cloned().collect();
-    let roles: Vec<&str> = path.iter().map(|e| e.role.as_str()).collect();
-    let Some(cut) = compact_cut(&roles) else { return Ok(()) };
-    emit(Event::Text(format!("  ⟳ compacting context: {} messages → summary", cut - 1)));
-    // ponytail: the summary streams into the transcript like any reply; a collapsed block would need TUI work
-    let mut msgs: Vec<Value> = path[..cut].iter().map(|e| e.to_message()).collect();
-    msgs.push(json!({"role": "user", "content": COMPACT_PROMPT}));
-    let res = client.chat_stream(&msgs, None, cancel).await?;
-    let summary = format!("[Summary of the conversation so far; earlier messages were compacted]\n{}", res.content.trim());
-    let mut head = Entry::new("user", summary);
+    let prev = path.get(1).and_then(|e| e.compaction.clone());
+    let first = if prev.is_some() { 2 } else { 1 };
+    let sizes: Vec<(&str, u64)> = path.iter().map(|e| (e.role.as_str(), estimate_tokens(e))).collect();
+    let Some(cut) = compact_cut(&sizes, first, keep_tokens()) else { return Ok(false) };
+    let tokens_before = sizes.iter().map(|s| s.1).sum();
+    let old = &path[first..cut];
+    emit(Event::CompactStart { reason: reason.into(), messages: old.len(), tokens: tokens_before });
+    let (read_files, modified_files) = touched_files(old, prev.as_ref());
+    // Seam for the pre_compact hook (Phase 3): it runs here, given `reason`,
+    // `focus` and the entries in `old`, and may cancel (return Ok(false)) or
+    // hand back its own summary in place of the request below.
+    let request = summary_request(&transcript(old), prev.as_ref().map(|p| p.summary.as_str()), focus);
+    let msgs = [json!({"role": "system", "content": SUMMARY_SYSTEM}), json!({"role": "user", "content": request})];
+    // ponytail: one request however long `old` is; summarize it in chunks if
+    // the summary request itself ever overflows
+    let res = client.chat_stream(&msgs, None, cancel, true).await?;
+    let summary = res.content.trim().to_string();
+    if summary.is_empty() {
+        return Err("compaction failed: the model returned an empty summary".into());
+    }
+    let info = crate::session::Compaction { summary: summary.clone(), read_files, modified_files, tokens_before };
+    let mut head = Entry::new("user", summary_text(&info));
     if path[cut..].iter().all(|e| e.context.is_none()) {
         head.context = path[..cut].iter().rev().find_map(|e| e.context.clone());
     }
+    head.compaction = Some(info);
     let mut parent = session.add(head, Some(path[0].id.clone()));
     for e in &path[cut..] {
         parent = session.add(e.clone(), Some(parent)); // add() reassigns id/parent/ts
     }
-    session.save().map_err(|e| format!("saving session: {e}"))
+    session.save().map_err(|e| format!("saving session: {e}"))?;
+    let tokens = session.path().iter().map(|e| estimate_tokens(e)).sum();
+    emit(Event::CompactEnd { summary, tokens });
+    Ok(true)
 }
 
-/// Project instructions files, first hit wins. Read every turn so edits are live.
+// Project instructions files, first hit wins. Read every turn so edits are live.
 const INSTRUCTION_FILES: &[&str] = &["AGENTS.md", "RUSTI.md", "CLAUDE.md"];
 const MAX_INSTRUCTIONS: usize = 20_000;
 
@@ -216,7 +408,7 @@ permissions and --yolo (readme.md § safety), slash commands, keys, themes, stat
 sessions, /new, /resume, /tree, /undo (readme.md § session tree), MCP servers (readme.md § MCP servers), \
 AGENTS.md, SYSTEM.md, --system-prompt (readme.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
 \"shell_command_prefix\" settings (readme.md § shell commands, help.txt), delegate and background jobs (readme.md § sub-agents and background jobs), \
-/reload (readme.md § /reload), how rusti is built (readme.md § architecture)";
+/reload (readme.md § /reload), compaction, /compact, per-model \"context\" (readme.md § compaction), --json, --rpc and their line formats (readme.md § JSON and RPC modes), how rusti is built (readme.md § architecture)";
 
 fn docs_section(dir: &str) -> String {
     format!(
@@ -594,7 +786,10 @@ pub async fn run_agent(
         session.add(u, session.active.clone());
     }
     let tools = tool_schemas();
-    let mut last_prompt = 0u64;
+    // an estimate until the first reply reports the real size, so a resumed
+    // session that is already over the limit compacts before it is sent
+    let mut last_prompt: u64 = session.path().iter().map(|e| estimate_tokens(e)).sum();
+    let mut overflowed = false;
     if DEPTH.load(Ordering::Relaxed) == 0 {
         tools::undo_begin_turn(); // a delegate sub-run is part of the same turn
     }
@@ -603,10 +798,22 @@ pub async fn run_agent(
         if cancel.load(Ordering::Relaxed) {
             return Err("interrupted".into());
         }
-        if last_prompt > CONTEXT_LIMIT.load(Ordering::Relaxed) {
-            compact(client, session, cancel).await?;
+        if last_prompt > context_limit() {
+            compact(client, session, cancel, "threshold", None).await?;
         }
-        let res = client.chat_stream(&session.path_messages(), Some(&tools), cancel).await?;
+        let res = match client.chat_stream(&session.path_messages(), Some(&tools), cancel, false).await {
+            // the provider's window is smaller than the limit thought: compact
+            // and resend, once; a second overflow, or nothing left to compact, is the error
+            Err(e) if !overflowed && llm::is_overflow(&e) => {
+                overflowed = true;
+                if compact(client, session, cancel, "overflow", None).await? {
+                    last_prompt = 0;
+                    continue;
+                }
+                return Err(e);
+            }
+            r => r?,
+        };
         last_prompt = res.prompt_tokens;
         if res.finish_reason != "tool_calls" {
             session.add(Entry::new("assistant", res.content.clone()), session.active.clone());
@@ -959,17 +1166,7 @@ pub fn self_test() {
     assert_eq!(MAX_ITERS.load(Ordering::Relaxed), 1);
     set_max_iters(50);
 
-    // compaction cut: tail starts at a non-tool entry; nothing to summarize -> None
-    assert_eq!(compact_cut(&["system", "user", "assistant"]), None);
-    assert_eq!(compact_cut(&["user", "assistant"]), None);
-    let long: Vec<&str> = ["system", "user"].iter().copied()
-        .chain(std::iter::repeat(["assistant", "tool"]).take(6).flatten()).collect(); // 14 entries
-    assert_eq!(compact_cut(&long), Some(6)); // 14-8=6 lands on "assistant"
-    let stepped = &long[..11]; // 11-8=3 lands on a tool -> step forward to its next non-tool (4)
-    assert_eq!(compact_cut(stepped), Some(4));
-    let mut tools_only = vec!["system", "user", "assistant"];
-    tools_only.extend(std::iter::repeat("tool").take(10)); // one call, many results: fall back to the call
-    assert_eq!(compact_cut(&tools_only), Some(2));
+    // the compaction cut point has its own #[test]s: compaction_cut_*
     set_context_limit(0);
     assert_eq!(CONTEXT_LIMIT.load(Ordering::Relaxed), 1000); // floors
     set_context_limit(100_000);
@@ -1147,6 +1344,7 @@ pub fn self_test() {
         key: "".into(),
         model: "gpt-x".into(),
         vision: None,
+        context: None,
     });
     c.default = Some("m1".into());
     c.save_to("_test_model.json").unwrap();
@@ -1316,32 +1514,91 @@ branch: "), "{c2}");
         }
     }
 
+    /// A fake chat server: answers each request in turn with the next of
+    /// `replies` (an SSE body, or "400:<body>" for an error) and hands every
+    /// request body it read to the returned channel.
+    #[cfg(test)]
+    fn fake_llm(replies: Vec<String>) -> (llm::Client, mpsc::Receiver<Value>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel::<Value>();
+        std::thread::spawn(move || {
+            for (reply, s) in replies.iter().zip(listener.incoming()) {
+                let mut s = s.unwrap();
+                let mut req = Vec::new();
+                let mut buf = [0u8; 65536];
+                let body = loop {
+                    let k = s.read(&mut buf).unwrap();
+                    req.extend_from_slice(&buf[..k]);
+                    let Some(h) = req.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+                    let head = String::from_utf8_lossy(&req[..h]).to_lowercase();
+                    let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
+                    if req.len() >= h + 4 + len {
+                        break serde_json::from_slice::<Value>(&req[h + 4..h + 4 + len]).unwrap();
+                    }
+                };
+                let _ = tx.send(body);
+                let resp = match reply.strip_prefix("400:") {
+                    Some(err) => format!("HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{err}", err.len()),
+                    None => format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()),
+                };
+                s.write_all(resp.as_bytes()).unwrap();
+            }
+        });
+        (llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into()), rx)
+    }
+
+    #[cfg(test)]
+    fn sse(text: &str) -> String {
+        format!("data: {}\n\ndata: [DONE]\n\n", json!({"choices": [{"delta": {"content": text}, "finish_reason": "stop"}]}))
+    }
+
+    /// An assistant entry calling `name` with `args`, as run_agent stores one.
+    #[cfg(test)]
+    fn call(name: &str, args: Value) -> Entry {
+        let mut a = Entry::new("assistant", String::new());
+        a.tool_calls = Some(json!([{"id": "c", "type": "function", "function": {"name": name, "arguments": args.to_string()}}]));
+        a
+    }
+
+    /// The kept tail is a token budget, not an entry count, and it starts at a
+    /// non-tool entry: a tool result never loses the call it answers.
+    #[test]
+    fn compaction_cut_keeps_a_token_window_and_never_orphans_a_tool_result() {
+        let mut long = vec![("system", 10), ("user", 10)];
+        long.extend(std::iter::repeat([("assistant", 10), ("tool", 10)]).take(6).flatten()); // 14 entries
+        assert_eq!(compact_cut(&long, 1, 20), Some(12), "the last 20 tokens start on an assistant entry");
+        assert_eq!(compact_cut(&long, 1, 30), Some(10), "landing on a tool result steps back to its call");
+        assert_eq!(compact_cut(&long, 1, 1000), None, "the whole path fits: nothing to compact");
+        assert_eq!(compact_cut(&[("system", 5), ("user", 9), ("assistant", 9)], 1, 5), Some(2));
+        assert_eq!(compact_cut(&[("user", 50), ("assistant", 50)], 1, 10), None, "no system entry, no compaction");
+        assert_eq!(compact_cut(&[("system", 5), ("user", 500)], 1, 10), None, "one huge message: nothing before it");
+
+        // one call with many results: back to the call, never between results
+        let mut tools_only = vec![("system", 10), ("user", 10), ("assistant", 10)];
+        tools_only.extend(std::iter::repeat(("tool", 10)).take(10));
+        assert_eq!(compact_cut(&tools_only, 1, 30), Some(2));
+        // ...and no call before them at all: forward, past the results
+        assert_eq!(compact_cut(&[("system", 1), ("tool", 10), ("tool", 10), ("user", 10)], 1, 15), Some(3));
+
+        // after a compaction, entry 1 is the summary: it alone is never "something to summarize"
+        let again = [("system", 10), ("user", 10), ("user", 10), ("assistant", 10)];
+        assert_eq!(compact_cut(&again, 2, 10), Some(3));
+        assert_eq!(compact_cut(&again, 2, 20), None);
+
+        // estimate: 4 chars a token, plus each image
+        let mut e = Entry::new("user", "x".repeat(400));
+        assert_eq!(estimate_tokens(&e), 100);
+        e.images.push("data:image/png;base64,".into());
+        assert_eq!(estimate_tokens(&e), 1300);
+    }
+
     /// Compacting mid-turn summarizes away the user entry that carried this
     /// turn's context; the summary must carry it on, or plan mode is forgotten.
     #[test]
     fn compaction_keeps_the_turn_context() {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let mut req = Vec::new();
-            let mut buf = [0u8; 65536];
-            loop {
-                let k = s.read(&mut buf).unwrap();
-                req.extend_from_slice(&buf[..k]);
-                let Some(h) = req.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
-                let head = String::from_utf8_lossy(&req[..h]).to_lowercase();
-                let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).unwrap().trim().parse().unwrap();
-                if req.len() >= h + 4 + len { break; }
-            }
-            let ok = "data: {\"choices\":[{\"delta\":{\"content\":\"sum\"},\"finish_reason\":\"stop\"}]}\r\n\r\ndata: [DONE]\r\n\r\n";
-            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ok}", ok.len());
-            s.write_all(resp.as_bytes()).unwrap();
-        });
-
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
+        let (client, _) = fake_llm(vec![sse("sum")]);
         let path = std::env::temp_dir().join(format!("rusti_compact_{}.json", std::process::id()));
         let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
         let mut leaf = session.add(Entry::new("system", "sys".into()), None);
@@ -1349,15 +1606,110 @@ branch: "), "{c2}");
         u.context = turn_context(true, false);
         leaf = session.add(u, Some(leaf));
         for i in 0..12 {
-            leaf = session.add(Entry::new("assistant", format!("step {i}")), Some(leaf));
+            // 10k chars each: 30k tokens in all, past the 20k keep window
+            leaf = session.add(Entry::new("assistant", format!("step {i} {}", "x".repeat(10_000))), Some(leaf));
         }
-        rt.block_on(compact(&client, &mut session, &AtomicBool::new(false))).unwrap();
+        assert!(rt().block_on(compact(&client, &mut session, &AtomicBool::new(false), "manual", None)).unwrap());
         std::fs::remove_file(&path).ok();
 
         let msgs = session.path_messages();
         assert!(msgs.len() < 14, "the path was compacted");
         assert!(!msgs.iter().any(|m| m["content"] == "plan it"), "the turn's user entry was summarized away");
         assert!(msgs[1]["content"].as_str().unwrap().contains(PLAN_ON), "the summary carries plan mode on");
+    }
+
+    #[cfg(test)]
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+    }
+
+    /// The summary request is a transcript plus the structured format; the
+    /// summary entry lists the files read and changed, and a second compaction
+    /// updates the first summary (files carried forward) instead of starting over.
+    #[test]
+    fn compaction_summary_is_structured_and_updates_iteratively() {
+        let (client, rx) = fake_llm(vec![sse("## Goal\nfirst summary"), sse("## Goal\nsecond summary")]);
+        let path = std::env::temp_dir().join(format!("rusti_compact_iter_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        let big = "y".repeat(30_000); // 7.5k tokens a result: three pass the 20k keep window
+        let mut leaf = session.add(Entry::new("system", "sys".into()), None);
+        leaf = session.add(Entry::new("user", "fix the parser".into()), Some(leaf));
+        for (name, args) in [
+            ("read_file", json!({"path": "src/a.rs"})),
+            ("read_file", json!({"path": "src/b.rs"})),
+            ("edit_file", json!({"path": "src/b.rs", "old_text": "x", "new_text": "y"})),
+            ("move_file", json!({"from": "src/c.rs", "to": "src/d.rs"})),
+        ] {
+            leaf = session.add(call(name, args), Some(leaf));
+            leaf = session.add(Entry::new("tool", "ok".into()), Some(leaf));
+        }
+        let pad = |session: &mut Session, mut leaf: String| {
+            for _ in 0..4 {
+                leaf = session.add(call("list_dir", json!({"path": "."})), Some(leaf));
+                leaf = session.add(Entry::new("tool", big.clone()), Some(leaf));
+            }
+        };
+        pad(&mut session, leaf);
+        let no = AtomicBool::new(false);
+        assert!(rt().block_on(compact(&client, &mut session, &no, "manual", None)).unwrap());
+
+        let first = rx.recv().unwrap();
+        assert!(first["tools"].is_null(), "a summary request offers no tools");
+        let (sys, user) = (first["messages"][0]["content"].as_str().unwrap(), first["messages"][1]["content"].as_str().unwrap());
+        for h in ["## Goal", "## Constraints & Preferences", "### Done", "## Key Decisions", "## Next Steps", "## Critical Context"] {
+            assert!(sys.contains(h), "{h} missing from the format");
+        }
+        assert!(user.starts_with("<conversation>\n[User]: fix the parser"), "{user}");
+        assert!(user.contains("[Assistant tool calls]: read src/a.rs") && !user.contains("<previous-summary>"));
+        assert!(user.contains("[Tool result]: ") && !user.contains(&big), "tool results are cut short");
+
+        let head = session.path()[1].clone();
+        let info = head.compaction.clone().expect("the summary entry records the compaction");
+        assert_eq!(info.summary, "## Goal\nfirst summary");
+        assert!(head.content.starts_with(SUMMARY_HEAD));
+        assert!(head.content.contains("<read-files>\nsrc/a.rs\n</read-files>"), "{}", head.content);
+        assert!(head.content.contains("<modified-files>\nsrc/b.rs\nsrc/c.rs\nsrc/d.rs\n</modified-files>"), "read then edited: listed as changed");
+
+        // more work, then compact again with a focus
+        let mut leaf = session.active.clone().unwrap();
+        leaf = session.add(call("write_file", json!({"path": "src/e.rs", "content": "z"})), Some(leaf));
+        leaf = session.add(Entry::new("tool", "wrote".into()), Some(leaf));
+        pad(&mut session, leaf);
+        assert!(rt().block_on(compact(&client, &mut session, &no, "manual", Some("the parser tests"))).unwrap());
+        std::fs::remove_file(&path).ok();
+        let second = rx.recv().unwrap();
+        let user = second["messages"][1]["content"].as_str().unwrap();
+        assert!(user.starts_with("<previous-summary>\n## Goal\nfirst summary\n</previous-summary>"), "{user}");
+        assert!(!user.contains("[User]: fix the parser"), "the old summary is not re-read as conversation");
+        assert!(user.ends_with("focus on: the parser tests"));
+        let info = session.path()[1].compaction.clone().unwrap();
+        assert_eq!(info.summary, "## Goal\nsecond summary");
+        assert_eq!(info.modified_files, ["src/b.rs", "src/c.rs", "src/d.rs", "src/e.rs"], "carried forward, plus the new ones");
+        assert_eq!(session.path().iter().filter(|e| e.compaction.is_some()).count(), 1, "one summary on the path");
+    }
+
+    /// A provider that rejects the request as too long gets one compaction and
+    /// the same request again; the run then finishes as if nothing happened.
+    #[test]
+    fn a_context_overflow_compacts_and_retries_once() {
+        let overflow = r#"400:{"error":{"message":"This model's maximum context length is 8192 tokens","code":"context_length_exceeded"}}"#;
+        let (client, rx) = fake_llm(vec![overflow.into(), sse("## Goal\nsum"), sse("ok")]);
+        let path = std::env::temp_dir().join(format!("rusti_overflow_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        let mut leaf = session.add(Entry::new("system", "sys".into()), None);
+        for i in 0..6 {
+            leaf = session.add(Entry::new("user", format!("q{i} {}", "z".repeat(20_000))), Some(leaf));
+            leaf = session.add(Entry::new("assistant", format!("a{i}")), Some(leaf));
+        }
+        let r = rt().block_on(run_agent(&client, &mut session, "next", &[], &AtomicBool::new(false)));
+        std::fs::remove_file(&path).ok();
+        assert_eq!(r.unwrap(), "ok");
+        let (_, summary, retried) = (rx.recv().unwrap(), rx.recv().unwrap(), rx.recv().unwrap());
+        assert!(summary["tools"].is_null());
+        let resent = retried["messages"].as_array().unwrap();
+        assert!(resent[1]["content"].as_str().unwrap().starts_with(SUMMARY_HEAD), "resent with the summary in place");
+        assert!(resent.len() < 14);
+        assert!(resent.last().unwrap()["content"].as_str().unwrap().starts_with("next"), "the new task is kept");
     }
 
     /// Plan mode is announced on the turn it is on, and its end is announced

@@ -133,6 +133,11 @@ pub struct ModelProfile {
     /// instead of an endpoint dropping them silently. Unset means try.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    /// This model's compaction limit in prompt tokens (same unit as --context),
+    /// so the limit follows the model: it wins over the config's "context"
+    /// while this profile is in use; --context still wins over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<u64>,
 }
 
 /// Which status-line segments are drawn. All on by default; /settings toggles
@@ -378,7 +383,7 @@ pub fn ask_profile() -> Option<ModelProfile> {
     let url = required("url (http://host:port/v1/chat/completions)", "")?;
     let key = prompt("api key (optional)", "")?;
     let model = prompt("model id", "gpt-4o-mini")?;
-    Some(ModelProfile { name, url, key, model, vision: None })
+    Some(ModelProfile { name, url, key, model, vision: None, context: None })
 }
 
 fn prompt(label: &str, default: &str) -> Option<String> {

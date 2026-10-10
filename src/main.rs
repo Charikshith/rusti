@@ -8,6 +8,7 @@
 
 mod ai_core;
 mod config;
+mod rpc;
 mod session;
 mod tree;
 mod tui;
@@ -17,9 +18,14 @@ rusti — minimal coding agent
 
 usage: rusti [flags]              interactive terminal UI
        rusti [flags] TASK         one-shot: run the task, print the answer, exit
+       rusti --json [flags] TASK  one-shot, the run's events as JSON lines on stdout
+       rusti --rpc [flags]        long-lived: JSON-line commands on stdin, responses and events on stdout
 
 flags
   --tui                  force the UI (bare `rusti` in a terminal already opens it)
+  --json                 one-shot run for programs: events as JSONL on stdout, logs on stderr;
+                         permission prompts are refused unless --yolo (readme.md § JSON and RPC modes)
+  --rpc                  drive rusti from another program over JSONL on stdin/stdout (same section)
   --session NAME         use .rusti/sessions/NAME.json (unnamed: a new s-YYYYMMDD-HHMM)
   --resume               continue a session (the latest unless --session names one)
   --tree                 browse a session's tree (the latest unless --session names one)
@@ -27,7 +33,8 @@ flags
   --use NAME             make a saved profile the default, then exit
   --list                 list saved profiles      --add   add one interactively
   --max-iters N          tool rounds per task (default 50)
-  --context N            compact the history once the prompt passes N tokens (default 100000)
+  --context N            compact the history once the prompt passes N tokens (default 100000;
+                         a profile's own \"context\" wins over the config's, this flag over both)
   --system-prompt X      replace the base system prompt (X is a file if one exists, else text;
                          default ~/.rusti/SYSTEM.md, else the built-in one)
   --append-system-prompt X  add X to it, repeatable (default ~/.rusti/APPEND_SYSTEM.md)
@@ -61,6 +68,7 @@ slash commands (--tui)
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
   /export         transcript to markdown      /reload           rebuild and relaunch
+  /compact [FOCUS] summarize the older history now, optionally focused on FOCUS
   /settings       show/hide status-line parts  /mcp              MCP servers on/off
   /themes         pick the colour palette     /quit
   !CMD            run a shell command, output streamed; it goes to the model too
@@ -137,8 +145,11 @@ fn main() {
     let task_arg = task_arg(&args);
     // bare `rusti` (or `rusti --resume`) in a terminal opens the TUI, like other
     // coding agents; a task argument or piped stdin stays a one-shot run
-    let tui_mode = args.iter().any(|a| a == "--tui")
-        || (task_arg.is_none() && !args.iter().any(|a| a == "--tree") && is_terminal::is_terminal(std::io::stdin()));
+    let json = args.iter().any(|a| a == "--json");
+    let rpc = args.iter().any(|a| a == "--rpc");
+    // --json and --rpc are for programs: never the UI, whatever stdin is
+    let tui_mode = !json && !rpc && (args.iter().any(|a| a == "--tui")
+        || (task_arg.is_none() && !args.iter().any(|a| a == "--tree") && is_terminal::is_terminal(std::io::stdin())));
 
     // trust before the first load that applies gated keys: only the TUI asks
     let here = std::path::Path::new(".");
@@ -163,7 +174,7 @@ fn main() {
         ai_core::set_max_iters(n);
     }
     if let Some(n) = saved.context {
-        ai_core::set_context_limit(n);
+        ai_core::set_config_context(n);
     }
     if let Some(n) = saved.read_max_bytes {
         ai_core::tools::set_read_max(n);
@@ -180,7 +191,7 @@ fn main() {
     }
     if let Some(n) = get(&args, "--context", "RUSTI_CONTEXT") {
         match n.parse::<u64>() {
-            Ok(n) if n > 0 => ai_core::set_context_limit(n),
+            Ok(n) if n > 0 => ai_core::pin_context(n),
             _ => { eprintln!("--context needs a positive token count, got '{n}'"); std::process::exit(1); }
         }
     }
@@ -219,10 +230,10 @@ fn main() {
         // tui mode never uses `task` (TuiConfig doesn't take one) — skip the
         // blocking stdin prompt so `--tui --resume` (incl. /reload's relaunch)
         // doesn't stall before the TUI even starts
-        task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| prompt("next instruction", "")) };
+        task = if tui_mode || rpc { String::new() } else { task_arg.unwrap_or_else(|| prompt("next instruction", "")) };
     } else {
         session = session::Session::with_path(model.clone(), &session_path);
-        task = if tui_mode { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
+        task = if tui_mode || rpc { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
     }
 
     let client = ai_core::llm::Client::new(url, key, model.clone());
@@ -239,6 +250,13 @@ fn main() {
     // status goes to stderr to keep stdout the answer alone for piping
     for line in ai_core::mcp::connect_all().into_iter().chain(ai_core::prompt_note()) {
         eprintln!("{}", line.trim_start());
+    }
+
+    if rpc {
+        std::process::exit(rpc::run_rpc(client, session));
+    }
+    if json {
+        std::process::exit(rpc::run_json(client, session, &task));
     }
 
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -321,6 +339,7 @@ fn resolve_model(args: &[String]) -> (String, String, String) {
     }
 
     ai_core::tools::set_vision(prof.vision != Some(false));
+    ai_core::use_profile_context(prof.context);
     let url = explicit_url.unwrap_or(prof.url);
     let key = explicit_key.unwrap_or(prof.key);
     let model = explicit_model.unwrap_or(if prof.model.is_empty() { "gpt-4o-mini".into() } else { prof.model });

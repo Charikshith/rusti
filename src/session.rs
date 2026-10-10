@@ -173,13 +173,31 @@ pub struct Entry {
     /// prefix cache keeps matching. The transcript and export never show it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// Set on the summary entry a compaction writes: what the next compaction
+    /// updates instead of starting over, and the files the summarized part touched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<Compaction>,
     #[serde(default)]
     pub ts: u64,
 }
 
+/// What one compaction left behind for the next. The file lists are cumulative:
+/// each compaction carries the previous one's forward.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Compaction {
+    pub summary: String,
+    #[serde(default)]
+    pub read_files: Vec<String>,
+    #[serde(default)]
+    pub modified_files: Vec<String>,
+    /// Estimated tokens of the path before this compaction.
+    #[serde(default)]
+    pub tokens_before: u64,
+}
+
 impl Entry {
     pub fn new(role: &str, content: String) -> Entry {
-        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, ts: 0 }
+        Entry { id: String::new(), parent: None, role: role.into(), content, tool_calls: None, tool_call_id: None, ok: None, image: None, images: Vec::new(), context: None, compaction: None, ts: 0 }
     }
 
     /// This entry in OpenAI chat-completions message format.
