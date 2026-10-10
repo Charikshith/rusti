@@ -896,8 +896,9 @@ pub fn ui_loop(
                         }
                         // Tab with no menu open completes the path before the cursor
                         (KeyCode::Tab, _) => tab_complete(&mut app),
-                        // Shift+Tab cycles the permission mode: manual → plan → auto → devil
-                        (KeyCode::BackTab, _) => cycle_mode(&mut app),
+                        // Shift+Tab cycles the permission mode: manual → plan → auto → devil.
+                        // The status line names it in place, so cycling leaves the transcript alone.
+                        (KeyCode::BackTab, _) => ai_core::set_mode(ai_core::mode().next()),
                         // Ctrl+T folds reasoning blocks; like Ctrl+O it is only a redraw
                         (KeyCode::Char('t'), KeyModifiers::CONTROL) => toggle_thinking(&mut app),
                         // Ctrl+D exits, only when input is empty (pi: exit when editor empty)
@@ -1259,15 +1260,8 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         }
         "/plan" => {
             let on = !ai_core::plan_mode();
+            // the status line carries the state and what it means
             ai_core::set_plan(on);
-            // the footer carries the state; this is just the confirmation
-            app.notice = Some((
-                match on {
-                    true => "plan mode on — reads and searches only".to_string(),
-                    false => "plan mode off".to_string(),
-                },
-                std::time::Instant::now(),
-            ));
         }
         "/commit" => {
             if !app.done {
@@ -1548,41 +1542,26 @@ fn drop_mcp_ok(app: &mut App) {
     shift_rows(app, 0, -((before - app.lines.len()) as isize));
 }
 
-/// Shift+Tab: the next permission mode, announced in the transcript.
-fn cycle_mode(app: &mut App) {
-    let m = ai_core::mode().next();
-    ai_core::set_mode(m);
-    app.lines.push(mode_notice(m).into());
-}
-
-pub fn mode_notice(m: ai_core::Mode) -> &'static str {
+/// The mode's status-line name and its one-line meaning.
+pub fn mode_label(m: ai_core::Mode) -> (&'static str, &'static str) {
     match m {
-        ai_core::Mode::Manual => "  ℹ manual mode: every write, command and fetch asks first",
-        ai_core::Mode::Plan => "  ℹ plan mode: reads and searches only, every write and command is refused",
-        ai_core::Mode::Auto => {
-            "  ℹ auto mode: edits and commands inside the project run without asking; deletes, fetches, \
-             MCP tools and risky commands (rm, git push, installs, sudo, …) still ask"
-        }
-        ai_core::Mode::Devil => "  ⚠ DEVIL mode: no permission prompts and the project-root guard is off",
+        ai_core::Mode::Manual => ("manual", "every write, command and fetch asks"),
+        ai_core::Mode::Plan => ("plan", "read-only, writes and commands refused"),
+        ai_core::Mode::Auto => ("auto", "project edits run unasked, risky ones ask"),
+        ai_core::Mode::Devil => ("DEVIL", "no prompts, root guard off"),
     }
 }
 
-/// The status line: what this session is, and how full it is. Every segment
-/// except the permission mode is toggleable via /settings — plan, auto and DEVIL
-/// are modes you are IN, not decoration, so hiding one would hide why a write is
-/// refused, or why it ran unasked.
+/// The status line: the permission mode, then what this session is and how
+/// full it is, fitted to `w` columns. Every segment except the mode is
+/// toggleable via /settings — the mode is what you are IN, not decoration, so
+/// hiding it would hide why a write is refused, or why it ran unasked. The
+/// mode's description gives way first on a narrow terminal, its name never.
 pub fn footer_right(
     f: &crate::config::Footer, mode: ai_core::Mode, session: &str, model: &str, branch: &str,
-    sess_tok: u64, ctx: u64, limit: u64, cache_pct: Option<u64>,
+    sess_tok: u64, ctx: u64, limit: u64, cache_pct: Option<u64>, w: usize,
 ) -> String {
     let mut parts = Vec::new();
-    // first, so a narrow terminal truncates it last; manual stays implicit
-    match mode {
-        ai_core::Mode::Manual => {}
-        ai_core::Mode::Plan => parts.push("plan".to_string()),
-        ai_core::Mode::Auto => parts.push("auto".to_string()),
-        ai_core::Mode::Devil => parts.push("DEVIL".to_string()),
-    }
     if f.session && !session.is_empty() {
         parts.push(session.to_string());
     }
@@ -1604,7 +1583,16 @@ pub fn footer_right(
     if let (true, Some(p)) = (f.cache, cache_pct) {
         parts.push(format!("cache {p}%"));
     }
-    parts.join(" · ")
+    let (name, desc) = mode_label(mode);
+    let rest: String = parts.iter().map(|p| format!(" · {p}")).collect();
+    let room = w.saturating_sub(name.len() + 2 + rest.chars().count());
+    let desc = match desc.chars().count() {
+        n if n <= room => desc.to_string(),
+        // ponytail: under ~8 columns a cut description is noise, so it goes
+        _ if room >= 8 => format!("{}…", desc.chars().take(room - 1).collect::<String>()),
+        _ => return format!("{name}{rest}").chars().take(w).collect(),
+    };
+    format!("{name}: {desc}{rest}")
 }
 
 /// Move a picker selection by delta and keep it inside the visible window.
@@ -1955,6 +1943,19 @@ fn pick_model(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mode change lives on the status line only: toggling /plan back and
+    /// forth adds nothing to the transcript and raises no notice.
+    #[test]
+    fn plan_toggle_leaves_the_transcript_alone() {
+        let mut a = app();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        for _ in 0..4 {
+            handle_command("/plan", &mut a, &tx);
+        }
+        assert!(a.lines.is_empty() && a.notice.is_none());
+        assert_eq!(ai_core::mode(), ai_core::Mode::Manual, "an even number of toggles is back where it started");
+    }
 
     fn app() -> App {
         App::new("m".into(), "s".into(), vec![], vec![], 0, Default::default())

@@ -1062,40 +1062,55 @@ mod tests {
     fn footer_shows_only_the_parts_that_exist() {
         use crate::ai_core::Mode::*;
         let on = crate::config::Footer::default();
+        let fr = |m, session, branch, tok, ctx, cache| app::footer_right(&on, m, session, "mimo", branch, tok, ctx, 100_000, cache, 200);
         assert_eq!(
-            app::footer_right(&on, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, None),
-            "main · mimo · ⎇ master · 4.3k tok · ctx 25%"
+            fr(Manual, "main", "master", 4321, 25_000, None),
+            "manual: every write, command and fetch asks · main · mimo · ⎇ master · 4.3k tok · ctx 25%"
         );
         // fresh session: no name, no branch, nothing generated — but ctx is
         // reported at 0% rather than hidden, since it resets every turn
-        assert_eq!(app::footer_right(&on, Manual, "", "mimo", "", 0, 0, 100_000, None), "mimo · ctx 0%");
-        // plan mode leads, so a narrow terminal cuts it last
-        assert_eq!(app::footer_right(&on, Plan, "", "mimo", "", 0, 0, 100_000, None), "plan · mimo · ctx 0%");
+        assert_eq!(fr(Manual, "", "", 0, 0, None), "manual: every write, command and fetch asks · mimo · ctx 0%");
         // cache hits show once the server reports them, and only then
-        assert_eq!(app::footer_right(&on, Manual, "", "mimo", "", 0, 0, 100_000, Some(82)), "mimo · ctx 0% · cache 82%");
+        assert!(fr(Manual, "", "", 0, 0, Some(82)).ends_with(" · mimo · ctx 0% · cache 82%"));
+    }
+
+    /// Every mode, manual too, leads with its name and what it means — always,
+    /// not as a notice that ages out, so the status line is never ambiguous.
+    #[test]
+    fn footer_always_names_and_explains_the_mode() {
+        use crate::ai_core::Mode::*;
+        let on = crate::config::Footer::default();
+        for m in [Manual, Plan, Auto, Devil] {
+            let (name, desc) = app::mode_label(m);
+            let f = app::footer_right(&on, m, "", "mimo", "", 0, 0, 100_000, None, 200);
+            assert_eq!(f, format!("{name}: {desc} · mimo · ctx 0%"));
+        }
+        // narrow: the description gives way, ellipsised, before the other segments
+        let f = app::footer_right(&on, Auto, "", "mimo", "", 0, 0, 100_000, None, 35);
+        assert_eq!(f, "auto: project edit… · mimo · ctx 0%");
+        assert_eq!(f.chars().count(), 35);
+        // narrower still: the description goes entirely; the name never does
+        assert_eq!(app::footer_right(&on, Devil, "", "mimo", "", 0, 0, 100_000, None, 20), "DEVIL · mimo · ctx 0");
+        assert_eq!(app::footer_right(&on, Devil, "", "mimo", "", 0, 0, 100_000, None, 5), "DEVIL");
     }
 
     #[test]
-    fn settings_hide_footer_segments_but_never_plan_mode() {
+    fn settings_hide_footer_segments_but_never_the_mode() {
         use crate::ai_core::Mode::*;
         let off = crate::config::Footer {
             session: false, model: false, branch: false, tokens: false, context: false, cache: false,
         };
-        // everything off still announces plan mode: it is why writes get refused
-        assert_eq!(app::footer_right(&off, Plan, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "plan");
-        assert_eq!(app::footer_right(&off, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "");
-        // and every other mode but manual, devil loudest
-        assert_eq!(app::footer_right(&off, Auto, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "auto");
-        assert_eq!(app::footer_right(&off, Devil, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "DEVIL");
-        // entering devil says plainly what is off; it is a warning row, not info
-        assert!(app::mode_notice(Devil).starts_with("  ⚠") && app::mode_notice(Devil).contains("project-root guard is off"));
+        let fr = |f: &crate::config::Footer, m| app::footer_right(f, m, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82), 200);
+        // everything off still announces the mode: it is why writes get refused, or run unasked
+        assert_eq!(fr(&off, Plan), "plan: read-only, writes and commands refused");
+        assert_eq!(fr(&off, Manual), "manual: every write, command and fetch asks");
+        assert_eq!(fr(&off, Auto), "auto: project edits run unasked, risky ones ask");
+        // entering devil says plainly what is off
+        assert_eq!(fr(&off, Devil), "DEVIL: no prompts, root guard off");
         let ctx_only = crate::config::Footer { context: true, ..off.clone() };
-        assert_eq!(
-            app::footer_right(&ctx_only, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)),
-            "ctx 25%"
-        );
+        assert!(fr(&ctx_only, Manual).ends_with("asks · ctx 25%"));
         let cache_only = crate::config::Footer { cache: true, ..off };
-        assert_eq!(app::footer_right(&cache_only, Manual, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82)), "cache 82%");
+        assert!(fr(&cache_only, Manual).ends_with("asks · cache 82%"));
     }
 
     #[test]
