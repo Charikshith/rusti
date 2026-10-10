@@ -3,7 +3,7 @@
 ## Suggested Order (2026-09-13 review)
 
 Tier 1 — done (feat-028/029/030/031: prompt tokens, compaction, retry, failure output)
-Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and deliberately skipped — see its entry below.
+Tier 2 — done (feat-032/033/034/035/036/037: /tree picker, /undo, --help/--version, git + /commit, ! bash mode, footer). Parallel Tool Calls examined and skipped 2026-09-13, then built in feat-tools-phase4 (F07).
 Tier 3 — resequenced 2026-09-13 by friction-removed ÷ effort, not by the order they were filed:
   3a — done (feat-038/039/040/041: project config, plan mode, web fetch, /export; /session dropped as redundant
      with /resume, see feat-042)
@@ -60,14 +60,12 @@ When: feat-030 retries connect/status failures only
 What: honor `Retry-After` on 429; retry a `stream error` that arrives before the first token (today it fails the turn)
 Where: ai_core/llm.rs chat_stream
 
-### Parallel Tool Calls — examined 2026-09-13, deliberately not done
-When: Model emits several independent tool calls in one turn; they run one by one
-Why not: the agent runs on `new_current_thread`, and every tool but `delegate` is blocking (fs, Command::output),
-so `join_all` would not overlap anything. Real concurrency needs a multi-thread runtime + spawn_blocking, which puts
-the shared `Mutex` statics (UNDO, ALLOWED, JOBS) and the interactive permission prompt under contention, and the TUI's
-single `tool_line` would need per-call tracking. The win is milliseconds on fs calls; two long commands are already
-served by run_background/job_output.
-Revisit if: profiling shows tool time actually dominates a turn.
+### Parallel Tool Calls — follow-ups
+When: feat-tools-phase4 runs adjacent parallel-safe calls concurrently (spawn_blocking works on current_thread)
+What: codemode (scripted calls, D6 deferred); Esc does not kill commands already running in a parallel group (nor a
+lone one); two parallel `run_command`s can still collide on a shared lock such as cargo's target dir (D6 accepts it);
+images a parallel group's reads attach arrive in completion order, not call order
+Where: ai_core/mod.rs run_agent step 2, ai_core/tools.rs PENDING_IMAGES
 
 ### Clippy `read amount is not handled` (pre-existing)
 When: noticed 2026-09-14 while verifying feat-058; `cargo clippy` fails on it, so clippy can't be a gate until it goes
@@ -109,19 +107,19 @@ Where: main.rs, tui/plain.rs
 
 ## Model / API
 
-### Prompt Caching Headers
-When: Long system prompt + history re-sent every turn on providers that support caching
-What: Send provider cache-control markers on the system/early messages when the profile opts in
-Where: ai_core/llm.rs request body, config.rs profile field
+### Prompt Caching Follow-ups
+When: feat-tools-phase4 added opt-in `"cache": "anthropic" | "openai"` markers (F10 C3)
+What: a 1h TTL / `prompt_cache_retention` option; cache warming (needs a cost model, flagged in F10)
+Where: ai_core/llm.rs mark_cache, config.rs CacheMode
 
 ### Image Input — follow-ups
 When: F03 (feat-image-input) attaches `@` images on submit, resizes and has the vision flag; left over:
-What: (a) two read_file images in one tool batch keep only the last, since PENDING_IMAGE holds one;
+What: (a) done in feat-tools-phase4: PENDING_IMAGES is a list, so two reads in one batch both attach;
 (b) a dragged path without a leading `@` is not attached — bracketed paste (A4) could mark pasted paths;
 (c) a steer's `@` images are found when it is queued and attached on delivery, not re-checked in between;
 (d) plain mode prints `· attached` rows to stdout, as every Event::Text row is, which a pipe then carries;
 (e) inline terminal display (kitty/iTerm2/sixel), an images kill switch, and normalising MCP tool images
-Where: ai_core/tools.rs PENDING_IMAGE, ai_core/mod.rs emit, tui/mod.rs Job::Task
+Where: ai_core/tools.rs PENDING_IMAGES, ai_core/mod.rs emit, tui/mod.rs Job::Task
 
 ### Native Anthropic / Gemini APIs
 When: Endpoint isn't OpenAI-compatible

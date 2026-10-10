@@ -133,6 +133,21 @@ pub struct ModelProfile {
     /// instead of an endpoint dropping them silently. Unset means try.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    /// Explicit prompt-cache markers this endpoint understands. Unset sends
+    /// none: a server that does not know the fields may reject the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheMode>,
+}
+
+/// `"cache"` on a profile. An unknown value fails the parse like any typo,
+/// rather than silently caching nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheMode {
+    /// cache_control on the system prompt, the last tool and the last message
+    Anthropic,
+    /// prompt_cache_key, so requests of one session route to the same cache
+    Openai,
 }
 
 /// Which status-line segments are drawn. All on by default; /settings toggles
@@ -166,6 +181,10 @@ pub struct McpServer {
     pub env: std::collections::BTreeMap<String, String>,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Leave this server's tools out of every request until tool_search
+    /// loads them: a big server stops costing its schemas on every turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub defer: bool,
 }
 
 fn yes() -> bool {
@@ -378,7 +397,7 @@ pub fn ask_profile() -> Option<ModelProfile> {
     let url = required("url (http://host:port/v1/chat/completions)", "")?;
     let key = prompt("api key (optional)", "")?;
     let model = prompt("model id", "gpt-4o-mini")?;
-    Some(ModelProfile { name, url, key, model, vision: None })
+    Some(ModelProfile { name, url, key, model, vision: None, cache: None })
 }
 
 fn prompt(label: &str, default: &str) -> Option<String> {
@@ -439,6 +458,22 @@ mod tests {
         let old = Config::load_from(p);
         assert!(old.footer.cache && !old.footer.context, "a missing segment defaults on, saved ones keep their value");
         let _ = std::fs::remove_file(p);
+    }
+
+    /// The Phase 4 opt-ins: `"cache"` on a profile and `"defer"` on an MCP
+    /// server. Both default off and stay out of the file until set; an unknown
+    /// cache mode is a parse error, not a silent no-op.
+    #[test]
+    fn cache_and_defer_are_opt_in() {
+        let c: Config = serde_json::from_str(r#"{"models":[{"name":"a","url":"u","cache":"anthropic"},{"name":"b","url":"u"}],
+            "mcp":{"gh":{"command":"gh-mcp","defer":true},"fs":{"command":"fs"}}}"#).unwrap();
+        assert_eq!(c.models[0].cache, Some(CacheMode::Anthropic));
+        assert_eq!(c.models[1].cache, None, "default off");
+        assert!(c.mcp["gh"].defer && !c.mcp["fs"].defer, "deferral is per server, off by default");
+        let back = serde_json::to_string(&c).unwrap();
+        assert_eq!(back.matches("defer").count(), 1, "unset stays out: {back}");
+        assert_eq!(serde_json::from_str::<ModelProfile>(r#"{"name":"o","url":"u","cache":"openai"}"#).unwrap().cache, Some(CacheMode::Openai));
+        assert!(serde_json::from_str::<ModelProfile>(r#"{"name":"x","url":"u","cache":"bogus"}"#).is_err());
     }
 
     /// A hand-edit typo ("base" for "url") fails the whole parse. It must not

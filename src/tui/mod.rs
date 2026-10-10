@@ -67,7 +67,7 @@ pub struct TuiConfig {
 /// rebuilding + relaunching the binary in place.
 pub enum Job {
     Task(String),
-    Model { url: String, key: String, model: String },
+    Model { url: String, key: String, model: String, cache: Option<crate::config::CacheMode> },
     ResumePath(String), // load this session file and continue it
     Rename(String),     // rename the active session file
     New { name: Option<String>, history: Vec<String> }, // save this session, start an empty one; history is the input history to keep
@@ -341,7 +341,7 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
 /// so the model reads it next turn; `!!` output never leaves the screen.
 fn run_bash(session: &mut Session, cmd: &str, to_model: bool, event_tx: &mpsc::Sender<ai_core::Event>) {
     let summary = format!("$ {cmd}");
-    let _ = event_tx.send(ai_core::Event::ToolStart(summary.clone()));
+    let _ = event_tx.send(ai_core::Event::ToolStart { id: 0, summary: summary.clone() });
     let t0 = std::time::Instant::now();
     let tx = event_tx.clone();
     let (ok, out) = ai_core::tools::run_command_live(cmd, 0, Arc::new(move |l: &str| {
@@ -349,7 +349,7 @@ fn run_bash(session: &mut Session, cmd: &str, to_model: bool, event_tx: &mpsc::S
     }));
     // the output is already on screen; the row keeps only the "[exit N]" / "timed out" line
     let why = if ok { "" } else { out.lines().next().unwrap_or("").trim_matches(['[', ']']) };
-    let _ = event_tx.send(ai_core::Event::ToolEnd { summary, ok, ms: t0.elapsed().as_millis(), output: why.into() });
+    let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary, ok, ms: t0.elapsed().as_millis(), output: why.into() });
     if to_model && !session.is_empty() {
         session.add(crate::session::Entry::new("user", format!("I ran `{cmd}` myself:\n{out}")), session.active.clone());
         let _ = session.save();
@@ -391,8 +391,9 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     };
                     let _ = event_tx.send(ev);
                 }
-                Ok(Job::Model { url, key, model }) => {
+                Ok(Job::Model { url, key, model, cache }) => {
                     client = llm::Client::new(url, key, model.clone());
+                    client.cache = cache;
                     session.model = model.clone();
                     // no transcript note: the bottom status line already shows the model
                 }
@@ -411,7 +412,7 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     }
                 }
                 Ok(Job::Reload) => {
-                    let _ = event_tx.send(ai_core::Event::ToolStart("cargo build --release".into()));
+                    let _ = event_tx.send(ai_core::Event::ToolStart { id: 0, summary: "cargo build --release".into() });
                     let manifest = format!("{MANIFEST_DIR}/Cargo.toml");
                     // rusti's own target dir, warm from ordinary cargo builds: a
                     // private one meant a second copy of every dependency and a
@@ -425,14 +426,14 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                         .output();
                     let ms = t0.elapsed().as_millis();
                     let fail = |event_tx: &mpsc::Sender<ai_core::Event>, detail: String| {
-                        let _ = event_tx.send(ai_core::Event::ToolEnd { summary: "cargo build --release".into(), ok: false, ms, output: String::new() });
+                        let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary: "cargo build --release".into(), ok: false, ms, output: String::new() });
                         let _ = event_tx.send(ai_core::Event::Text(format!("  ✗ reload failed:\n{detail}")));
                         let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
                     };
                     match out {
                         Ok(o) if o.status.success() => match stage_reload_exe(&target_dir) {
                             Ok(exe) => {
-                                let _ = event_tx.send(ai_core::Event::ToolEnd { summary: "cargo build --release".into(), ok: true, ms, output: String::new() });
+                                let _ = event_tx.send(ai_core::Event::ToolEnd { id: 0, summary: "cargo build --release".into(), ok: true, ms, output: String::new() });
                                 // a turn that failed before its first save leaves entries only in
                                 // memory; persist now so --resume finds them (and doesn't exit 1)
                                 let resume = !session.is_empty() && session.save().is_ok();
