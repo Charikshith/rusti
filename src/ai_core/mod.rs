@@ -585,14 +585,17 @@ async fn run_call(
     (ok, result, loads)
 }
 
-/// A batch call's {name, args} list. Malformed entries are dropped, so a
-/// batch with none left is reported by batch_result instead of run.
+/// A batch call's {name, args} list. An entry with no string `name` keeps its
+/// place as name "" with the entry itself as args, refused when permitted.
 fn batch_calls(args: &Value) -> Vec<(String, Value)> {
     args["calls"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|c| Some((c["name"].as_str()?.to_string(), c.get("args").cloned().unwrap_or_else(|| json!({})))))
+        .map(|c| match c["name"].as_str() {
+            Some(n) => (n.to_string(), c.get("args").cloned().unwrap_or_else(|| json!({}))),
+            None => (String::new(), c.clone()),
+        })
         .collect()
 }
 
@@ -742,7 +745,11 @@ pub async fn run_agent(
                 let id = TOOL_ID.fetch_add(1, Ordering::Relaxed);
                 let summary = tool_summary(&name, &args);
                 emit(Event::ToolStart { id, summary: summary.clone() });
-                let permit = if name == "batch" { Err("batch cannot nest; list the calls directly".into()) } else { permitted(&name, &summary).await };
+                let permit = match name.as_str() {
+                    "batch" => Err("batch cannot nest; list the calls directly".into()),
+                    "" => Err("this call has no `name`; each entry needs {name, args}".into()),
+                    _ => permitted(&name, &summary).await,
+                };
                 calls.push((name, args, id, summary, permit));
             }
             spans.push(start..calls.len());
@@ -750,13 +757,15 @@ pub async fn run_agent(
         // Step 2: run them. A run of parallel-safe calls goes at once; any
         // other call is a barrier, run alone in its place, so a read the model
         // put after a write still sees the write.
-        let loaded = session.loaded();
-        let mut results = Vec::new();
+        let mut loaded = session.loaded();
+        let mut results: Vec<Outcome> = Vec::new();
         for group in parallel_groups(&calls.iter().map(|c| c.0.as_str()).collect::<Vec<_>>()) {
             let runs = calls[group].iter().map(|(name, args, id, summary, permit)| {
                 run_call(client, name, args, *id, summary.clone(), permit.clone(), &loaded, cancel)
             });
-            results.extend(futures_util::future::join_all(runs).await);
+            let done = futures_util::future::join_all(runs).await;
+            loaded.extend(done.iter().flat_map(|o| o.2.iter().cloned()));
+            results.extend(done);
         }
         // Step 3: results join the session in call order, whatever order they
         // finished in. Chained under each other, not as siblings of the
@@ -1741,6 +1750,32 @@ branch: "), "{c2}");
         assert!(session.loaded().is_empty(), "another branch never loaded it");
     }
 
+    /// A second tool_search in the same turn sees what the first loaded, so
+    /// it offers a new match instead of the same one again.
+    #[test]
+    fn tool_search_twice_in_one_turn_loads_different_tools() {
+        let _q = STEER_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let tool = |n: &str| json!({"type": "function", "function": {"name": n, "description": "Open a support ticket", "parameters": {"type": "object", "properties": {}}}});
+        let (a, b) = ("mcp__defer2__open_ticket", "mcp__defer2__open_ticket_draft");
+        mcp::SERVERS.lock().unwrap().push(std::sync::Arc::new(mcp::dead_server("defer2", true, vec![
+            (a.into(), "open_ticket".into(), tool(a)),
+            (b.into(), "open_ticket_draft".into(), tool(b)),
+        ])));
+        let q = json!({"query": "support ticket", "limit": 1});
+        let (port, _rx) = fake_llm(vec![calls_sse(&[("tool_search", q.clone()), ("tool_search", q)]), DONE_SSE.into()]);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
+        let path = std::env::temp_dir().join(format!("rusti_ts2_{}.json", std::process::id()));
+        let mut session = Session::with_path("fake".into(), &path.to_string_lossy());
+        let r = rt.block_on(run_agent(&client, &mut session, "file a ticket", &[], &AtomicBool::new(false)));
+        mcp::SERVERS.lock().unwrap().retain(|s| s.name != "defer2");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(r.unwrap(), "ok");
+        let mut loaded = session.loaded();
+        loaded.sort();
+        assert_eq!(loaded, [a, b], "each search loaded a different tool");
+    }
+
     /// A batch opens into its calls, each run by the usual rules, and comes
     /// back as one tool result with a header per call; a nested batch is
     /// refused, not run, and fails the batch (F07).
@@ -1751,6 +1786,7 @@ branch: "), "{c2}");
             {"name": "list_dir", "args": {"path": "src"}},
             {"name": "grep", "args": {"pattern": "fn run_agent", "path": "src", "glob": "*.rs"}},
             {"name": "batch", "args": {"calls": []}},
+            {"args": {"path": "src"}},
         ]}))]), DONE_SSE.into()]);
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let client = llm::Client::new(format!("http://127.0.0.1:{port}/v1/chat/completions"), "".into(), "fake".into());
@@ -1763,9 +1799,10 @@ branch: "), "{c2}");
         let results: Vec<&Entry> = session.path().into_iter().filter(|e| e.role == "tool").collect();
         assert_eq!(results.len(), 1, "one result for the one batch call");
         let (out, ok) = (&results[0].content, results[0].ok);
-        assert!(out.starts_with("[1/3] ok list src\n") && out.contains("ai_core/"), "{out}");
-        assert!(out.contains("\n\n[2/3] ok grep \"fn run_agent\" in src\n") && out.contains("mod.rs"), "{out}");
-        assert!(out.contains("\n\n[3/3] failed batch (0 calls)\nbatch cannot nest"), "{out}");
+        assert!(out.starts_with("[1/4] ok list src\n") && out.contains("ai_core/"), "{out}");
+        assert!(out.contains("\n\n[2/4] ok grep \"fn run_agent\" in src\n") && out.contains("mod.rs"), "{out}");
+        assert!(out.contains("\n\n[3/4] failed batch (0 calls)\nbatch cannot nest"), "{out}");
+        assert!(out.contains("\n\n[4/4] failed ") && out.contains("has no `name`"), "a nameless entry is reported, not dropped: {out}");
         assert_eq!(ok, Some(false), "one failed call fails the batch");
         assert!(!batch_result(vec![]).0, "a batch with no calls is an error, not a silent success");
     }
