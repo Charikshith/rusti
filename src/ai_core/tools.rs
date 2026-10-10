@@ -523,60 +523,190 @@ pub fn write_file(path: &str, content: &str) -> (bool, String) {
     }
 }
 
-/// timeout_secs = 0 -> CMD_TIMEOUT_SECS. The process is killed at the deadline.
+/// timeout_secs = 0 -> CMD_TIMEOUT_SECS. At the deadline the command is killed
+/// with everything it started.
 pub fn run_command(cmd: &str, timeout_secs: u64) -> (bool, String) {
-    run_command_live(cmd, timeout_secs, Arc::new(|_: &str| {}))
+    run_command_live(cmd, timeout_secs, Arc::new(|_: &str| {}), &AtomicBool::new(false))
 }
 
 /// run_command that also hands `live` each output line as it arrives, for a
-/// front end to show while the command is still running.
-pub fn run_command_live(cmd: &str, timeout_secs: u64, live: Arc<dyn Fn(&str) + Send + Sync>) -> (bool, String) {
-    let mut child = match shell(cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+/// front end to show while the command is still running, and kills it as soon
+/// as `stop` is set (Esc).
+pub fn run_command_live(cmd: &str, timeout_secs: u64, live: Arc<dyn Fn(&str) + Send + Sync>, stop: &AtomicBool) -> (bool, String) {
+    let mut child = match own_group(&mut shell(cmd)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return (false, format!("failed to run command: {e}")),
     };
-    let out_t = read_live(child.stdout.take().unwrap(), live.clone());
-    let err_t = read_live(child.stderr.take().unwrap(), live);
+    let tree = Tree::of(&child);
+    let out = read_live(child.stdout.take().unwrap(), live.clone());
+    let err = read_live(child.stderr.take().unwrap(), live);
     let secs = if timeout_secs == 0 { CMD_TIMEOUT_SECS } else { timeout_secs };
     let deadline = Instant::now() + Duration::from_secs(secs);
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                // ponytail: reader threads are not joined — a grandchild (the shell spawns one)
-                // may still hold the pipe; they exit when it does. Use a job object if it matters.
+                tree.kill(&mut child);
                 return (false, format!("[timed out after {secs}s; process killed]"));
+            }
+            Ok(None) if stop.load(Ordering::Relaxed) => {
+                tree.kill(&mut child);
+                return (false, "[interrupted; process killed]".into());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
             Err(e) => return (false, format!("failed to wait for command: {e}")),
         }
     };
     let code = status.code().unwrap_or(-1);
-    let mut s = format!("[exit {code}]\n");
-    s.push_str(&String::from_utf8_lossy(&out_t.join().unwrap_or_default()));
-    s.push_str(&String::from_utf8_lossy(&err_t.join().unwrap_or_default()));
+    let ([out, err], held) = drain([out, err]);
+    let mut s = format!("[exit {code}]\n{}{}", String::from_utf8_lossy(&out), String::from_utf8_lossy(&err));
+    if held {
+        s.push_str("\n[something it started in the background still holds the output; use run_background for servers and watchers]");
+    }
     (code == 0, truncate(&s, MAX_RESULT))
 }
 
+/// A pipe read on its own thread: the bytes so far, and the thread.
+pub(crate) type Reader = (Arc<Mutex<Vec<u8>>>, std::thread::JoinHandle<()>);
+
 /// Read a pipe to the end, passing each complete line to `live` on the way.
-fn read_live(mut r: impl std::io::Read + Send + 'static, live: Arc<dyn Fn(&str) + Send + Sync>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let (mut all, mut chunk, mut from) = (Vec::new(), [0u8; 8192], 0);
+/// The bytes collect where the caller can take them before the end, since the
+/// end may never come (see drain).
+pub(crate) fn read_live(mut r: impl std::io::Read + Send + 'static, live: Arc<dyn Fn(&str) + Send + Sync>) -> Reader {
+    let all = Arc::new(Mutex::new(Vec::new()));
+    let buf = all.clone();
+    let reader = std::thread::spawn(move || {
+        let (mut line, mut chunk) = (Vec::new(), [0u8; 8192]);
         while let Ok(n) = r.read(&mut chunk) {
             if n == 0 { break; }
-            all.extend_from_slice(&chunk[..n]);
-            while let Some(i) = all[from..].iter().position(|&b| b == b'\n') {
-                live(String::from_utf8_lossy(&all[from..from + i]).trim_end_matches('\r'));
+            buf.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]);
+            line.extend_from_slice(&chunk[..n]);
+            let mut from = 0;
+            while let Some(i) = line[from..].iter().position(|&b| b == b'\n') {
+                live(String::from_utf8_lossy(&line[from..from + i]).trim_end_matches('\r'));
                 from += i + 1;
             }
+            line.drain(..from);
         }
-        if from < all.len() {
-            live(&String::from_utf8_lossy(&all[from..]));
+        if !line.is_empty() {
+            live(&String::from_utf8_lossy(&line));
         }
-        all
-    })
+    });
+    (all, reader)
+}
+
+/// How long the readers get once the command has exited. A child it left
+/// running (`server &`) holds the pipes open for as long as that child lives,
+/// and what was written before the exit is read within microseconds.
+const DRAIN: Duration = Duration::from_millis(500);
+
+/// Each reader's bytes once it reaches the end of its pipe, or once DRAIN is
+/// up, and whether some pipe was still held open then.
+pub(crate) fn drain(readers: [Reader; 2]) -> ([Vec<u8>; 2], bool) {
+    let until = Instant::now() + DRAIN;
+    while readers.iter().any(|r| !r.1.is_finished()) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let held = readers.iter().any(|r| !r.1.is_finished());
+    (readers.map(|r| std::mem::take(&mut *r.0.lock().unwrap_or_else(|e| e.into_inner()))), held)
+}
+
+/// Start `c` as the leader of a process group of its own (Unix), so Tree::kill
+/// reaches everything it starts.
+pub(crate) fn own_group(c: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(c, 0);
+    c
+}
+
+/// Everything a command starts, so killing it reaches them all: the shell
+/// alone left `cd web && npm test`'s real worker running, holding the pipes.
+/// Unix: the process group own_group made. Windows: a job object, because
+/// taskkill /T loses MSYS programs (Git Bash is the default shell), where each
+/// exec starts a process whose Windows parent has already exited.
+pub(crate) struct Tree(#[cfg(windows)] win::Job);
+
+impl Tree {
+    /// The tree of a child just spawned (through own_group). ponytail: on
+    /// Windows the child joins the job a moment after it starts; anything it
+    /// spawns within those microseconds stays outside it.
+    pub(crate) fn of(child: &std::process::Child) -> Tree {
+        #[cfg(windows)]
+        let tree = Tree(win::Job::holding(child));
+        #[cfg(not(windows))]
+        let tree = {
+            let _ = child;
+            Tree()
+        };
+        tree
+    }
+
+    /// Kill the whole tree, then reap the child.
+    pub(crate) fn kill(&self, child: &mut std::process::Child) {
+        #[cfg(windows)]
+        self.0.terminate();
+        // the group is ours only while the child is unreaped: once waited on,
+        // its pid is free for some other process to lead a group with
+        #[cfg(unix)]
+        if let Ok(None) = child.try_wait() {
+            let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())])
+                .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(windows)]
+mod win {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> *mut c_void;
+        fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
+        fn TerminateJobObject(job: *mut c_void, exit_code: u32) -> i32;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+    }
+
+    /// A job object handle; null when none could be made, and then inert.
+    /// Closing it kills nothing: a background job may outlive rusti, as before.
+    pub struct Job(*mut c_void);
+
+    // SAFETY: a kernel handle, valid from any thread; only ever used whole
+    unsafe impl Send for Job {}
+
+    impl Job {
+        pub fn holding(child: &std::process::Child) -> Job {
+            // SAFETY: Win32 calls on handles that are live for the call: ours
+            // from CreateJobObjectW, and the child's, which it owns
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if !job.is_null() && AssignProcessToJobObject(job, child.as_raw_handle()) == 0 {
+                    CloseHandle(job);
+                    return Job(std::ptr::null_mut());
+                }
+                Job(job)
+            }
+        }
+
+        pub fn terminate(&self) {
+            if !self.0.is_null() {
+                // SAFETY: a job handle we own, not yet closed
+                unsafe { TerminateJobObject(self.0, 1) };
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: closed once, here
+                unsafe { CloseHandle(self.0) };
+            }
+        }
+    }
 }
 
 pub fn edit_file(path: &str, old_text: &str, new_text: &str) -> (bool, String) {
@@ -1067,6 +1197,7 @@ pub(crate) fn shell(cmd: &str) -> Command {
 struct Job {
     cmd: String,
     child: std::process::Child,
+    tree: Tree,
     out: Arc<Mutex<Vec<u8>>>,
 }
 
@@ -1091,15 +1222,16 @@ fn pump(mut r: impl std::io::Read + Send + 'static, buf: Arc<Mutex<Vec<u8>>>) {
 
 /// Start a long-running command (server, watcher); returns a job id for job_output/job_stop.
 pub fn run_background(cmd: &str) -> (bool, String) {
-    let mut child = match shell(cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match own_group(&mut shell(cmd)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return (false, format!("failed to start: {e}")),
     };
+    let tree = Tree::of(&child);
     let out = Arc::new(Mutex::new(Vec::new()));
     pump(child.stdout.take().unwrap(), out.clone());
     pump(child.stderr.take().unwrap(), out.clone());
     let id = NEXT_JOB.fetch_add(1, Ordering::Relaxed) as u32;
-    JOBS.lock().unwrap().push((id, Job { cmd: cmd.to_string(), child, out }));
+    JOBS.lock().unwrap().push((id, Job { cmd: cmd.to_string(), child, tree, out }));
     (true, format!("job {id} started: {cmd}"))
 }
 
@@ -1117,7 +1249,16 @@ pub fn job_output(id: u32) -> (bool, String) {
         Some((_, j)) => {
             let st = status(&mut j.child);
             let out = String::from_utf8_lossy(&j.out.lock().unwrap()).into_owned();
-            let tail = if out.len() > MAX_RESULT { format!("…\n{}", &out[out.len() - MAX_RESULT..]) } else { out };
+            let tail = if out.len() > MAX_RESULT {
+                // the last MAX_RESULT bytes, from the first whole char in them
+                let mut cut = out.len() - MAX_RESULT;
+                while !out.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                format!("…\n{}", &out[cut..])
+            } else {
+                out
+            };
             (true, format!("[job {id} {st}]\n{tail}"))
         }
         None => (false, format!("no such job: {id}")),
@@ -1131,13 +1272,7 @@ pub fn job_stop(id: u32) -> (bool, String) {
     };
     let (_, mut j) = jobs.remove(pos);
     let was = status(&mut j.child);
-    if cfg!(windows) {
-        // the shell wraps the real process; taskkill /T takes the whole tree down
-        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &j.child.id().to_string()])
-            .stdout(Stdio::null()).stderr(Stdio::null()).status();
-    }
-    let _ = j.child.kill();
-    let _ = j.child.wait();
+    j.tree.kill(&mut j.child); // the shell wraps the real process, so the whole tree goes
     (true, format!("job {id} stopped (was {was})"))
 }
 
@@ -1499,5 +1634,80 @@ mod tests {
         let src = concat!(env!("CARGO_MANIFEST_DIR"), "/_bands.png");
         assert_eq!(image_dims(&shrink(src, 100, 0).unwrap()), Some((100, 100)));
         assert_eq!(image_dims(&shrink(src, 60, 80).unwrap()), Some((60, 60)), "JPEG too");
+    }
+
+    /// The shell commands below are POSIX; cmd is the shell only on a Windows
+    /// box without Git Bash, where these cases cannot be written the same way.
+    fn posix_shell() -> bool {
+        current_shell().flag != "/C"
+    }
+
+    /// job_output keeps the last MAX_RESULT bytes. That cut landing inside a
+    /// multi-byte char panicked with JOBS locked, which poisoned every job tool
+    /// for the rest of the session and took the agent thread down at job_stop.
+    #[test]
+    fn job_output_cuts_a_long_tail_on_a_char_boundary() {
+        if !posix_shell() {
+            return;
+        }
+        // 21,000 bytes of 日 (3 bytes each): the tail's first byte is mid-char
+        let (ok, msg) = run_background("printf '\\346\\227\\245%.0s' $(seq 1 7000)");
+        assert!(ok, "{msg}");
+        let id: u32 = msg.split_whitespace().nth(1).unwrap().parse().unwrap();
+        let mut out = String::new();
+        for _ in 0..200 {
+            out = job_output(id).1;
+            if out.contains("exited") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(out.contains("exited 0") && out.contains("…\n日"), "{}", &out[..out.len().min(200)]);
+        assert!(job_stop(id).0);
+    }
+
+    /// A command that leaves a child running (`server &`) returns when its
+    /// shell exits. The child holds the pipes open, and waiting for them to
+    /// close sat out the child's whole life, past timeout_secs and Esc alike.
+    #[test]
+    fn a_backgrounded_child_does_not_hold_run_command() {
+        if !posix_shell() {
+            return;
+        }
+        let t0 = Instant::now();
+        let (ok, out) = run_command("sleep 6 & echo started", 30);
+        assert!(ok && out.contains("started"), "{out}");
+        assert!(t0.elapsed() < Duration::from_secs(4), "returned after {:?}", t0.elapsed());
+    }
+
+    /// A timed-out or interrupted command is killed with everything it
+    /// started: killing the shell alone left a compound command's worker (here
+    /// the inner sh) running, and still writing.
+    #[test]
+    fn timeout_and_interrupt_kill_the_whole_command() {
+        if !posix_shell() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("rusti_kill_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = |n: &str| dir.join(n).to_string_lossy().replace('\\', "/");
+        let cmd = |m: &str| format!("sh -c 'sleep 2; echo late > \"{m}\"'; echo unreachable");
+        let (ok, out) = run_command(&cmd(&marker("timeout")), 1);
+        assert!(!ok && out.contains("timed out"), "{out}");
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                stop.store(true, Ordering::Relaxed);
+            });
+            let t0 = Instant::now();
+            let (ok, out) = run_command_live(&cmd(&marker("esc")), 0, Arc::new(|_: &str| {}), &stop);
+            assert!(!ok && out.contains("interrupted") && t0.elapsed() < Duration::from_secs(2), "{out}");
+        });
+        std::thread::sleep(Duration::from_secs(3));
+        for m in ["timeout", "esc"] {
+            assert!(!Path::new(&marker(m)).exists(), "{m}: a child outlived the kill");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

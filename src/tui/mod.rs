@@ -1,12 +1,11 @@
 // TUI module: pi-style renderer on the alternate screen with synchronized output.
 // Differential rendering — only changed lines get redrawn.
 // Always-visible input field, model name in status line.
-// Falls back to plain stream for piped stdin.
+// Needs a terminal: piped stdin is a one-shot TASK run, or --json / --rpc.
 
 mod app;
 mod render;
 mod theme;
-mod plain;
 
 pub use app::utc_offset_min; // session auto names read local time too
 pub use app::image_refs; // a one-shot task attaches its @ images the same way
@@ -404,8 +403,8 @@ fn branch_at(session: &mut Session, id: &str, event_tx: &mpsc::Sender<ai_core::E
 ///
 /// The user_shell hooks (F09) see it first: they may run something else in
 /// its place (ssh to a box), run it themselves and hand back the result, or
-/// refuse it.
-fn run_bash(session: &mut Session, cmd: &str, to_model: bool, hooks: &[crate::config::Hook], event_tx: &mpsc::Sender<ai_core::Event>) {
+/// refuse it. Esc (`cancel`) kills the command.
+fn run_bash(session: &mut Session, cmd: &str, to_model: bool, hooks: &[crate::config::Hook], event_tx: &mpsc::Sender<ai_core::Event>, cancel: &AtomicBool) {
     let summary = format!("$ {cmd}");
     let _ = event_tx.send(ai_core::Event::ToolStart { id: 0, summary: summary.clone() });
     let t0 = std::time::Instant::now();
@@ -427,7 +426,7 @@ fn run_bash(session: &mut Session, cmd: &str, to_model: bool, hooks: &[crate::co
                 line(event_tx, &format!("a user_shell hook runs: {run}"));
             }
             let tx = event_tx.clone();
-            let (ok, out) = ai_core::tools::run_command_live(&run, 0, Arc::new(move |l: &str| line(&tx, l)));
+            let (ok, out) = ai_core::tools::run_command_live(&run, 0, Arc::new(move |l: &str| line(&tx, l)), cancel);
             (run, ok, out)
         }
     };
@@ -447,8 +446,13 @@ fn task_end(r: Result<String, String>) -> ai_core::Event {
     }
 }
 
-/// Entry point: spawns agent in background thread, renders TUI or plain stream.
+/// Entry point: spawns agent in background thread, renders the TUI.
 pub fn run(cfg: TuiConfig) -> io::Result<()> {
+    // checked before anything starts: past here the agent thread is up, and
+    // without a terminal nothing would ever hand it a task
+    if !is_terminal::is_terminal(std::io::stdin()) {
+        return Err(io::Error::other("--tui needs an interactive terminal, and stdin is not one; give a TASK to run it one-shot"));
+    }
     let TuiConfig { client, session, model, cli_args } = cfg;
     let (mut seed_lines, seed_history, seed_msg_num) = render_history(&session);
     // MCP servers connect before the first frame, not in the agent thread: the
@@ -566,12 +570,13 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
                     let _ = event_tx.send(ev);
                 }
                 Ok(Job::Bash { cmd, to_model }) => {
-                    run_bash(&mut session, &cmd, to_model, ai_core::hooks::of("user_shell"), &event_tx);
+                    cancel_agent.store(false, Ordering::Relaxed); // an Esc from an earlier turn is not this one's
+                    run_bash(&mut session, &cmd, to_model, ai_core::hooks::of("user_shell"), &event_tx, &cancel_agent);
                     let _ = event_tx.send(ai_core::Event::TaskEnd { ok: true, error: None });
                 }
                 Ok(Job::Compact(focus)) => {
                     cancel_agent.store(false, Ordering::Relaxed);
-                    let ev = match rt.block_on(ai_core::compact(&client, &mut session, &cancel_agent, "manual", focus.as_deref())) {
+                    let ev = match rt.block_on(ai_core::unpanic(ai_core::compact(&client, &mut session, &cancel_agent, "manual", focus.as_deref()))) {
                         Ok(true) => ai_core::Event::TaskEnd { ok: true, error: None },
                         Ok(false) => {
                             let _ = event_tx.send(ai_core::Event::Text("  ℹ nothing to compact: the conversation fits in the kept window".into()));
@@ -597,63 +602,59 @@ pub fn run(cfg: TuiConfig) -> io::Result<()> {
         }
     })));
 
-    if is_terminal::is_terminal(std::io::stdin()) {
-        // A panic unwinds past the restore below, so without this the shell is
-        // left in raw mode on the alternate screen: no echo, no prompt, and the
-        // panic message painted on a buffer that is about to vanish. Restore
-        // first, then delegate, so the message lands on the primary buffer.
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            if on_ui_thread() {
-                restore_terminal();
+    // A panic unwinds past the restore below, so without this the shell is
+    // left in raw mode on the alternate screen: no echo, no prompt, and the
+    // panic message painted on a buffer that is about to vanish. Restore
+    // first, then delegate, so the message lands on the primary buffer.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if on_ui_thread() {
+            restore_terminal();
+        }
+        prev(info);
+    }));
+    terminal::enable_raw_mode()?;
+    // Alternate screen: the TUI gets a fresh canvas every run (no stale
+    // transcript from the previous one), and leaving restores the shell's
+    // primary buffer exactly — history intact, no gap, no leftovers.
+    // Transcripts persist via session.json + /resume, not the scrollback.
+    // Mouse capture is what makes the wheel scroll the transcript: without
+    // it the terminal converts the wheel into arrow keys. The cost is that
+    // click-drag selection now needs Shift held, the usual trade.
+    execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide, event::EnableMouseCapture)?;
+    let res = app::ui_loop(&job_tx, event_rx, model, seed_name, &cancel, seed_lines, seed_history, seed_msg_num);
+    restore_terminal();
+    // job_tx must drop before the join — the agent thread blocks in
+    // job_rx.recv() until every Sender is gone, otherwise join() hangs.
+    drop(job_tx);
+    agent.0.take().map(|h| h.join());
+    match res? {
+        app::Exit::Quit => {
+            // primary buffer is restored; the farewell lands right under
+            // the launch line — no clear sequences, no gap, history intact
+            println!("Come back again, boss");
+            Ok(())
+        }
+        app::Exit::Reload { exe, args } => {
+            let mut cmd = std::process::Command::new(exe);
+            cmd.args(args);
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let e = cmd.exec(); // only returns on failure
+                Err(io::Error::new(io::ErrorKind::Other, format!("relaunch failed: {e}")))
             }
-            prev(info);
-        }));
-        terminal::enable_raw_mode()?;
-        // Alternate screen: the TUI gets a fresh canvas every run (no stale
-        // transcript from the previous one), and leaving restores the shell's
-        // primary buffer exactly — history intact, no gap, no leftovers.
-        // Transcripts persist via session.json + /resume, not the scrollback.
-        // Mouse capture is what makes the wheel scroll the transcript: without
-        // it the terminal converts the wheel into arrow keys. The cost is that
-        // click-drag selection now needs Shift held, the usual trade.
-        execute!(stdout(), terminal::EnterAlternateScreen, cursor::Hide, event::EnableMouseCapture)?;
-        let res = app::ui_loop(&job_tx, event_rx, model, seed_name, &cancel, seed_lines, seed_history, seed_msg_num);
-        restore_terminal();
-        // job_tx must drop before the join — the agent thread blocks in
-        // job_rx.recv() until every Sender is gone, otherwise join() hangs.
-        drop(job_tx);
-        agent.0.take().map(|h| h.join());
-        match res? {
-            app::Exit::Quit => {
-                // primary buffer is restored; the farewell lands right under
-                // the launch line — no clear sequences, no gap, history intact
-                println!("Come back again, boss");
-                Ok(())
-            }
-            app::Exit::Reload { exe, args } => {
-                let mut cmd = std::process::Command::new(exe);
-                cmd.args(args);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::CommandExt;
-                    let e = cmd.exec(); // only returns on failure
-                    Err(io::Error::new(io::ErrorKind::Other, format!("relaunch failed: {e}")))
-                }
-                #[cfg(not(unix))]
-                {
-                    // no exec on Windows. If we exited after spawn(), the shell would
-                    // take its prompt back and fight the child for console input — so
-                    // stay alive as a thin wrapper and exit with the child's status.
-                    let status = cmd
-                        .status()
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("relaunch failed: {e}")))?;
-                    std::process::exit(status.code().unwrap_or(1));
-                }
+            #[cfg(not(unix))]
+            {
+                // no exec on Windows. If we exited after spawn(), the shell would
+                // take its prompt back and fight the child for console input — so
+                // stay alive as a thin wrapper and exit with the child's status.
+                let status = cmd
+                    .status()
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("relaunch failed: {e}")))?;
+                std::process::exit(status.code().unwrap_or(1));
             }
         }
-    } else {
-        plain::run(event_rx)
     }
 }
 
@@ -724,19 +725,19 @@ mod tests {
             rx.try_iter().filter_map(|e| match e { ai_core::Event::Text(t) => Some(t), _ => None }).collect()
         };
 
-        run_bash(&mut s, "echo secret-out", false, &[], &tx);
+        run_bash(&mut s, "echo secret-out", false, &[], &tx, &AtomicBool::new(false));
         assert!(texts(&rx).iter().any(|t| t.trim_end() == "  · secret-out"), "!! still shows the output");
         assert_eq!(s.entries.len(), 2, "!! adds nothing to the session");
         assert!(!s.path_messages().iter().any(|m| m.to_string().contains("secret-out")));
 
-        run_bash(&mut s, "echo shared-out", true, &[], &tx);
+        run_bash(&mut s, "echo shared-out", true, &[], &tx, &AtomicBool::new(false));
         assert!(texts(&rx).iter().any(|t| t.trim_end() == "  · shared-out"));
         assert_eq!(s.entries.len(), 3);
         assert!(s.path_messages().iter().any(|m| m.to_string().contains("shared-out")), "! reaches the model");
 
         // F09: a user_shell hook that fails refuses the command; nothing runs, nothing reaches the model
         let deny = [crate::config::Hook { command: "exit 2".into(), timeout: 10 }];
-        run_bash(&mut s, "echo never-run", true, &deny, &tx);
+        run_bash(&mut s, "echo never-run", true, &deny, &tx, &AtomicBool::new(false));
         let ends: Vec<(bool, String)> = rx.try_iter().filter_map(|e| match e {
             ai_core::Event::ToolEnd { ok, output, .. } => Some((ok, output)),
             ai_core::Event::Text(t) => { assert!(!t.contains("never-run"), "it must not run: {t}"); None }

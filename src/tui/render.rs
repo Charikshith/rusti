@@ -1012,7 +1012,8 @@ fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
     let start = c.saturating_sub(max * 3 / 4).min(chars.len() - max);
     let mut pre: String = chars[start..start + max].iter().collect();
     let suf: String = chars[start + max..].iter().collect();
-    if start > 0 { pre = format!("…{}", &pre[1..]); }
+    // the first char may be any width in bytes: drop it as a char
+    if start > 0 { pre = format!("…{}", pre.chars().skip(1).collect::<String>()); }
     (pre, suf)
 }
 
@@ -1348,5 +1349,19 @@ last bit";
         assert_eq!(hint_text(&app, '⠋'), "⠋ working…");
         app.ask = Some(("push where?".into(), tokio::sync::oneshot::channel().0));
         assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+    }
+
+    /// A one-line draft longer than the input row scrolls, and the window can
+    /// start on any char. An em dash, a curly quote or Cyrillic there was cut
+    /// mid-char, which panicked the UI thread and lost the typed draft.
+    #[test]
+    fn a_long_draft_scrolls_from_any_char() {
+        for draft in [format!("{}—{}", "a".repeat(60), "b".repeat(60)), "привет ".repeat(20)] {
+            for k in 0..=draft.chars().count() {
+                let typed: String = draft.chars().take(k).collect();
+                let rows = input_rows(&typed, k, 50);
+                assert_eq!(bare(&rows[0]).contains('…'), k > 50, "{k} chars typed: only a scrolled row is marked");
+            }
+        }
     }
 }

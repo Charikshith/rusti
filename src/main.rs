@@ -168,6 +168,12 @@ fn main() {
     // --json and --rpc are for programs: never the UI, whatever stdin is
     let tui_mode = !json && !rpc && (args.iter().any(|a| a == "--tui")
         || (task_arg.is_none() && !args.iter().any(|a| a == "--tree") && is_terminal::is_terminal(std::io::stdin())));
+    // --json and --rpc are driven by a program: stdin is the protocol (or
+    // nothing), so nothing may prompt on it; what would ask fails instead
+    if (json || rpc) && args.iter().any(|a| a == "--tree") {
+        eprintln!("--tree is interactive: it does not run with --json or --rpc");
+        std::process::exit(1);
+    }
 
     // trust before the first load that applies gated keys: only the TUI asks
     let here = std::path::Path::new(".");
@@ -213,7 +219,7 @@ fn main() {
         }
     }
     ai_core::set_prompt_flags(values(&args, "--system-prompt").pop(), values(&args, "--append-system-prompt"));
-    let (url, key, model, cache) = resolve_model(&args);
+    let (url, key, model, cache) = resolve_model(&args, !json && !rpc);
 
     // session + task first (so --tree can be cancelled before any model config)
     // --session NAME → .rusti/sessions/NAME.json; otherwise --resume/--tree
@@ -247,7 +253,14 @@ fn main() {
         // tui mode never uses `task` (TuiConfig doesn't take one) — skip the
         // blocking stdin prompt so `--tui --resume` (incl. /reload's relaunch)
         // doesn't stall before the TUI even starts
-        task = if tui_mode || rpc { String::new() } else { task_arg.unwrap_or_else(|| prompt("next instruction", "")) };
+        task = if tui_mode || rpc {
+            String::new()
+        } else if json && task_arg.is_none() {
+            eprintln!("--json --resume needs a TASK");
+            std::process::exit(1);
+        } else {
+            task_arg.unwrap_or_else(|| prompt("next instruction", ""))
+        };
     } else {
         session = session::Session::with_path(model.clone(), &session_path);
         task = if tui_mode || rpc { String::new() } else { task_arg.unwrap_or_else(|| "say hello".into()) };
@@ -339,8 +352,9 @@ fn prompt(label: &str, default: &str) -> String {
 }
 
 /// Saved profile first; explicit flags/env override per field. When nothing
-/// is saved and no --url is given, ask interactively and persist the answer.
-fn resolve_model(args: &[String]) -> (String, String, String, Option<config::CacheMode>) {
+/// is saved and no --url is given, ask interactively and persist the answer,
+/// or fail with how to give one when `can_ask` is false (--json, --rpc).
+fn resolve_model(args: &[String], can_ask: bool) -> (String, String, String, Option<config::CacheMode>) {
     let explicit_url = get(args, "--url", "LLM_URL");
     let explicit_key = get(args, "--key", "LLM_KEY");
     let explicit_model = get(args, "--model", "LLM_MODEL");
@@ -348,6 +362,10 @@ fn resolve_model(args: &[String]) -> (String, String, String, Option<config::Cac
     let mut cfg = config::Config::load();
     let mut prof = cfg.resolve().cloned().unwrap_or_default();
     if prof.url.is_empty() && explicit_url.is_none() {
+        if !can_ask {
+            eprintln!("no model configured: pass --url and --model (or set LLM_URL and LLM_MODEL), or save one with `rusti --add`");
+            std::process::exit(1);
+        }
         let p = match config::ask_profile() {
             Some(p) => p,
             None => {

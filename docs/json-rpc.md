@@ -7,6 +7,10 @@ Two modes let another program run rusti without scraping text. stdout carries on
 humans goes to stderr. `"v"` changes only when a field changes meaning or goes away; new
 fields and new types can appear in v1, so ignore what you do not know.
 
+Neither mode prompts on stdin. With no saved model and no `--url`, rusti exits 1 with the reason
+on stderr instead of asking for one; `--tree`, and `--json --resume` with no TASK, are refused
+the same way.
+
 ## --json
 
 `rusti --json [flags] TASK` runs one task. The first line is `session`, then the run's events,

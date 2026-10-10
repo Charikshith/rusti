@@ -21,7 +21,7 @@ main.rs      CLI
     ├── hooks  user commands on events
     └── mcp    stdio MCP client; deferred servers + tool_search (BM25)
 
-mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
+mod tui     custom ANSI TUI (no ratatui)
 ```
 
 ## file map
@@ -37,7 +37,6 @@ mod tui     custom ANSI TUI (no ratatui) + plain stream fallback
 | tui/mod.rs, app.rs | TUI app state and event loop on the alternate screen |
 | tui/render.rs | differential renderer: only changed lines are redrawn |
 | tui/theme.rs | colour palettes for `/themes` |
-| tui/plain.rs | plain stdout/stderr stream for piped stdin, SSH, CI |
 | ai_core/mod.rs | run_agent loop, event system (SINK), tool dispatch, the embedded docs, self-test |
 | ai_core/llm.rs | reqwest SSE streaming client, tool-call argument accumulation |
 | ai_core/tools.rs | the built-in tools ([tools.md](tools.md)); project-root guard |

@@ -32,8 +32,8 @@ bytes = "1"
 # And fat/cgu=16 is strictly dominated: same 2.02MB as thin/cgu=1 for 5s more.
 # cgu=16 over 4 is 0.1s for another 120KB — not worth it.
 # `incremental = true` was measured and changed nothing — LTO re-merges anyway.
-# panic="abort" would shave more, but tools.rs relies on join().unwrap_or_default()
-# to survive a panicked reader thread — leave it.
+# panic="abort" would shave more, but a turn's panic has to unwind to come back as its
+# error (ai_core::unpanic), and a blocking tool's as "tool panicked" — leave it.
 [profile.release]
 lto = "thin"
 codegen-units = 4

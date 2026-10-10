@@ -373,7 +373,7 @@ fn agent(rx: mpsc::Receiver<Job>, mut client: llm::Client, mut session: Session,
                 Some(Ok(json!({"thinking": client.reasoning})))
             }
             Work::Compact(focus) => {
-                Some(rt.block_on(ai_core::compact(&client, &mut session, &cancel, "manual", focus.as_deref()))
+                Some(rt.block_on(ai_core::unpanic(ai_core::compact(&client, &mut session, &cancel, "manual", focus.as_deref())))
                     .map(|done| json!({"compacted": done})))
             }
         };

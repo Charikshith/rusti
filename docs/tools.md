@@ -13,6 +13,11 @@ A call whose arguments are not valid JSON is refused back to the model with the 
 so it can resend the call, instead of running on defaults; an `ask_user` with no question is
 refused the same way rather than shown to you as an empty one.
 
+`run_command` is killed with every process it started when it reaches `timeout_secs` (default
+120) or you press Esc. A process it leaves running in the background (`npm run dev &`) does not
+hold the call open: the result comes back when the shell exits, with a note to use
+`run_background` for servers and watchers.
+
 ## read_file limits
 
 `read_file` returns at most 2000 lines or 50 KB per call. A cut read ends with

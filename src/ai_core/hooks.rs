@@ -21,13 +21,14 @@
 // leak what it was meant to hide), and is only reported for session_start.
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
+use super::tools;
 use crate::config::Hook;
 
 pub const EVENTS: [&str; 6] = ["user_shell", "pre_tool", "post_tool", "user_prompt", "session_start", "pre_compact"];
@@ -59,41 +60,37 @@ pub fn of(event: &str) -> &'static [Hook] {
 
 /// Run one hook: the event in on stdin, its reply object out.
 fn call(h: &Hook, input: &Value) -> Result<Map<String, Value>, String> {
-    let mut child = super::tools::shell(&h.command)
+    let mut child = tools::own_group(&mut tools::shell(&h.command))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("did not start: {e}"))?;
+    let tree = tools::Tree::of(&child);
     // a writer thread: a hook that never reads stdin must not block us on a full pipe
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let data = input.to_string();
     std::thread::spawn(move || {
         let _ = stdin.write_all(data.as_bytes()); // dropped here: EOF for the hook
     });
-    let drain = |mut r: Box<dyn Read + Send>| {
-        std::thread::spawn(move || {
-            let mut b = Vec::new();
-            let _ = r.read_to_end(&mut b);
-            String::from_utf8_lossy(&b).into_owned()
-        })
-    };
-    let out = drain(Box::new(child.stdout.take().expect("stdout is piped")));
-    let err = drain(Box::new(child.stderr.take().expect("stderr is piped")));
+    let quiet: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_: &str| {});
+    let out = tools::read_live(child.stdout.take().expect("stdout is piped"), quiet.clone());
+    let err = tools::read_live(child.stderr.take().expect("stderr is piped"), quiet);
     let deadline = Instant::now() + Duration::from_secs(h.timeout.max(1));
     let status = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                tree.kill(&mut child);
                 return Err(format!("timed out after {}s", h.timeout.max(1)));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             Err(e) => return Err(format!("could not be waited on: {e}")),
         }
     };
-    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    // a child the hook left running holds the pipes; its reply is already read
+    let ([out, err], _) = tools::drain([out, err]);
+    let (out, err) = (String::from_utf8_lossy(&out).into_owned(), String::from_utf8_lossy(&err).into_owned());
     if !status.success() {
         let why = err.lines().rev().find(|l| !l.trim().is_empty()).map(|l| format!(": {}", l.trim())).unwrap_or_default();
         return Err(format!("exited {}{why}", status.code().unwrap_or(-1)));
@@ -279,5 +276,19 @@ pub(super) mod tests {
         assert_eq!(pre_compact(&[sum], "s-1", &[json!({"role": "user", "content": "hi"})]), Ok(Some("we fixed the build".into())));
         assert_eq!(pre_compact(&[reply(&dir, "skip.json", r#"{"block":"not now"}"#)], "s-1", &[]), Err("not now".into()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hook that leaves a child running (a notifier fired with `&`) is done
+    /// when its shell exits. Waiting for that child to close the pipes ignored
+    /// the hook's own timeout.
+    #[test]
+    fn a_hook_that_backgrounds_a_child_answers_at_once() {
+        if cmd_shell() {
+            return;
+        }
+        let t0 = Instant::now();
+        let r = user_shell(&[hook(r#"sleep 6 & echo '{"command":"ls -a"}'"#)], "ls", true);
+        assert_eq!(r, Ok(Shell::Run("ls -a".into())), "the reply it wrote before exiting is read");
+        assert!(t0.elapsed() < Duration::from_secs(3), "returned after {:?}", t0.elapsed());
     }
 }

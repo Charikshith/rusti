@@ -79,7 +79,8 @@ A typo in a role or value refuses the file and says which, instead of half apply
 ## hooks
 
 Hooks are commands run on six events, in config order, each with a timeout (default 30
-seconds). The event arrives as one JSON object on stdin with `event` and `cwd`; the command
+seconds) at which it is killed with everything it started; a hook that leaves a child running
+in the background is done when it exits. The event arrives as one JSON object on stdin with `event` and `cwd`; the command
 answers with one JSON object on stdout, and nothing or `{}` means carry on. Each hook sees
 what the ones before it rewrote.
 
