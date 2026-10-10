@@ -56,6 +56,11 @@ pub fn builtins() -> Vec<Cmd> {
     BUILTINS.iter().map(|(n, d, soon)| Cmd { name: n.to_string(), desc: d.to_string(), soon: *soon, tag: String::new() }).collect()
 }
 
+/// A built-in owns its name in any case, so /Commit.md never runs as /Commit.
+fn is_builtin(name: &str) -> bool {
+    BUILTINS.iter().any(|(n, _, _)| n.eq_ignore_ascii_case(name))
+}
+
 /// The / menu (Q16): built-ins, then prompt templates, then skills, then MCP
 /// prompts, each tagged by where it came from. A built-in keeps its name
 /// against a template, with a warning: a file must not take over /commit.
@@ -72,7 +77,7 @@ pub fn commands(warn: &mut Vec<String>) -> Vec<Cmd> {
     found.extend(ai_core::mcp::prompts().into_iter().map(|(srv, p)| ext(format!("/{srv}:{}", p.name), &p.hint(), &p.desc, format!("mcp:{srv}"))));
     let mut v = builtins();
     for c in found {
-        if v.iter().any(|b| b.name.eq_ignore_ascii_case(&c.name)) {
+        if is_builtin(&c.name) {
             warn.push(format!("{} [{}] has a built-in command's name; the built-in wins", c.name, c.tag));
         } else {
             v.push(c);
@@ -1205,6 +1210,9 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
 /// from disk now, so an edit applies without a restart. False when nothing
 /// has that name.
 fn run_extension(app: &mut App, job_tx: &Sender<Job>, raw: &str, cmd: &str, arg: &str) -> bool {
+    if is_builtin(cmd) {
+        return false;
+    }
     let name = &cmd[1..];
     let job = if let Some(skill) = name.strip_prefix("skill:") {
         let Some(s) = resources::skills(&mut Vec::new()).into_iter().find(|s| s.name == skill) else { return false };
@@ -2080,6 +2088,8 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         assert!(!run_extension(&mut a, &tx, "/nope x", "/nope", "x"), "nothing by that name");
+        assert!(is_builtin("/Commit") && is_builtin("/commit") && !is_builtin("/review"), "built-ins match in any case");
+        assert!(!run_extension(&mut a, &tx, "/Commit x", "/Commit", "x"), "a built-in's name never runs an extension");
         begin_task(&mut a, "/review src/a.rs".into());
         assert_eq!(a.lines.last().map(String::as_str), Some("1› /review src/a.rs"), "the transcript shows what was typed");
         assert_eq!(a.history.last().map(String::as_str), Some("/review src/a.rs"), "and Up recalls it");
