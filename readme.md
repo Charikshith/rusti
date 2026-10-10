@@ -441,7 +441,7 @@ the queue finish, refuses any question still open, and exits 0.
 | `answer` | `ask`, `text` | answers the `ask` line with that `id`; for a permission prompt send one of its choice values (`yes`, `no`, `always`) |
 | `new_session` | `name`? | saves this session, starts an empty one (auto name if none); `name` |
 | `resume_session` | `name`? | switches to that saved session, or the latest; `name`, `messages` |
-| `set_model` | `name` | switches to a saved profile, its vision and `context` included; `model`, `context_limit` |
+| `set_model` | `name` | switches to a saved profile, its vision, `cache` and `context` included; `model`, `context_limit` |
 | `set_thinking` | `level`? | sends `reasoning_effort: level` (e.g. `low`, `high`) from the next request; none clears it |
 | `set_plan` | `on` | plan mode on or off (writes and commands refused) |
 | `compact` | `instructions`? | compacts now, focused on the instructions; `compacted`: false when it all fits |
