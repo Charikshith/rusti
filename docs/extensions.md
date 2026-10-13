@@ -53,7 +53,7 @@ skill's name, description and absolute path, and tells the model to read the fil
 matches, so a skill costs one line of context until it is used.
 
 - `disable-model-invocation: true` keeps a skill off that list.
-- `/skill:<name> args` sends the skill's instructions as your message, followed by the arguments.
+- `/skill:<name> args` sends the skill's instructions as your message, followed by the arguments. In the `/` menu, typing the part after the colon finds it too: `/dia` lists `/skill:diagram`.
 - A skill with no description is skipped with a warning; the model could never tell when to use it.
 
 ## theme files
