@@ -664,12 +664,10 @@ impl Tree {
     pub(crate) fn kill(&self, child: &mut std::process::Child) {
         #[cfg(windows)]
         self.0.terminate();
-        // the group is ours only while the child is unreaped: once waited on,
-        // its pid is free for some other process to lead a group with
+        // a group with a live member keeps its number, so signalling it is safe
+        // even after the leader was reaped; an empty one just answers ESRCH
         #[cfg(unix)]
-        if let Ok(None) = child.try_wait() {
-            unix::kill_group(self.0);
-        }
+        unix::kill_group(self.0);
         let _ = child.kill();
         let _ = child.wait();
         #[cfg(unix)]
