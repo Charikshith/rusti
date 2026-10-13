@@ -562,7 +562,7 @@ fn panel_rows(app: &App, w: usize) -> Vec<String> {
             app::PickKind::Settings => "↑/↓ select · enter toggle · esc close",
             app::PickKind::Mcp => "↑/↓ select · enter connect/disconnect · esc close",
             app::PickKind::Theme => "↑/↓ select · enter apply · type to filter · esc close",
-            app::PickKind::Ask => "↑/↓ select · enter confirm · 1-9 answer outright · esc no",
+            app::PickKind::Ask => "↑/↓ select · enter confirm · esc no",
         };
         let vis = p.visible();
         // a question is not a list: its rows are the answers, so a count reads
