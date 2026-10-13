@@ -1118,7 +1118,37 @@ where
     Ok(out)
 }
 
+/// Await a turn (or a compaction), turning a panic inside it into its error.
+/// Every front end ends a turn when this returns, so a panic that escaped left
+/// the TUI on "working…" and RPC busy for the rest of the session.
+pub async fn unpanic<T>(fut: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+    use futures_util::FutureExt;
+    std::panic::AssertUnwindSafe(fut).catch_unwind().await.unwrap_or_else(|p| {
+        let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
+        Err(format!("internal error: {}", why.unwrap_or_default()))
+    })
+}
+
+/// One task through the agent loop; a panic in it comes back as its error.
+/// A turn that failed between its tool calls and their results leaves the
+/// leaf on calls nothing answered, and every later request was refused for
+/// them; the leaf goes back to before the calls.
 pub async fn run_agent(
+    client: &llm::Client,
+    session: &mut Session,
+    task: &str,
+    images: &[String],
+    cancel: &AtomicBool,
+) -> Result<String, String> {
+    let r = unpanic(turn(client, session, task, images, cancel)).await;
+    let unanswered = session.path().last().filter(|e| e.role == "assistant" && e.tool_calls.is_some()).map(|e| e.parent.clone());
+    if let (Err(_), Some(before)) = (&r, unanswered) {
+        session.active = before;
+    }
+    r
+}
+
+async fn turn(
     client: &llm::Client,
     session: &mut Session,
     task: &str,
@@ -1408,7 +1438,7 @@ fn tool_schemas(loaded: &[String]) -> Vec<Value> {
     let mut v = vec![
         json!({"type":"function","function":{"name":"read_file","description":"Read a file's contents. Optional offset (1-based line) and limit (max lines) read a slice with line numbers; use them for large files. A long read is cut (by default at 2000 lines or 50 KB) and ends with the offset to continue from; keep reading from it until you have what you need. A .png/.jpg/.gif/.webp path is read as an image and attached to the conversation for you to look at.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}}}),
         json!({"type":"function","function":{"name":"write_file","description":"Write content to a file, overwriting it.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}),
-        json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120).","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
+        json!({"type":"function","function":{"name":"run_command","description":"Run a shell command; returns stdout, stderr and exit code. Killed after timeout_secs (default 120). Nothing can answer a terminal prompt (ssh/git password, sudo): such a command waits out its timeout, so use key-based or non-interactive auth.","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_secs":{"type":"integer"}},"required":["command"]}}}),
         json!({"type":"function","function":{"name":"edit_file","description":"Replace one exact text occurrence in a file. old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}}}),
         json!({"type":"function","function":{"name":"multi_edit","description":"Apply several exact replacements to one file in order, all-or-nothing. Each old_text must appear exactly once.","parameters":{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"]}}},"required":["path","edits"]}}}),
         json!({"type":"function","function":{"name":"grep","description":"Search file contents for a regex. Returns path:line:text. path defaults to '.'; glob (e.g. '*.rs') filters files.","parameters":{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"}},"required":["pattern"]}}}),
@@ -1481,19 +1511,29 @@ async fn dispatch(client: &llm::Client, name: &str, args: &Value, cancel: &Atomi
         },
         "web_fetch" => tools::web_fetch(args["url"].as_str().unwrap_or("")).await,
         // the blocking pool, so a group of these overlaps even on the agent's
-        // current_thread runtime; writes stay inline, they run alone anyway
+        // current_thread runtime; writes stay inline, they run alone anyway.
+        // Esc reaches the call through a flag of its own, set from here: the
+        // turn's flag is borrowed, and the pool only takes what it owns
         n if parallel_safe(n) => {
-            let (n, a) = (n.to_string(), args.clone());
-            tokio::task::spawn_blocking(move || run_sync(&n, &a))
-                .await
-                .unwrap_or_else(|e| (false, format!("tool panicked: {e}")))
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let (n, a, s) = (n.to_string(), args.clone(), stop.clone());
+            let mut call = tokio::task::spawn_blocking(move || run_sync(&n, &a, &s));
+            loop {
+                if let Ok(r) = tokio::time::timeout(std::time::Duration::from_millis(100), &mut call).await {
+                    break r.unwrap_or_else(|e| (false, format!("tool panicked: {e}")));
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            }
         }
-        n => run_sync(n, args),
+        n => run_sync(n, args, cancel),
     }
 }
 
-/// The tools that are plain blocking functions of their arguments.
-fn run_sync(name: &str, args: &Value) -> (bool, String) {
+/// The tools that are plain blocking functions of their arguments; `stop` is
+/// Esc, which a running command answers by being killed.
+fn run_sync(name: &str, args: &Value, stop: &AtomicBool) -> (bool, String) {
     match name {
         "read_file" => tools::read_file(
             args["path"].as_str().unwrap_or(""),
@@ -1501,9 +1541,11 @@ fn run_sync(name: &str, args: &Value) -> (bool, String) {
             args["limit"].as_u64().unwrap_or(0) as usize,
         ),
         "write_file" => tools::write_file(args["path"].as_str().unwrap_or(""), args["content"].as_str().unwrap_or("")),
-        "run_command" => tools::run_command(
+        "run_command" => tools::run_command_live(
             args["command"].as_str().unwrap_or(""),
             args["timeout_secs"].as_u64().unwrap_or(0),
+            std::sync::Arc::new(|_: &str| {}),
+            stop,
         ),
         "edit_file" => tools::edit_file(
             args["path"].as_str().unwrap_or(""),
@@ -2566,4 +2608,17 @@ branch: "), "{c2}");
         let started = STARTED.lock().unwrap();
         assert!(started.iter().any(|p| p == "_test_rename_new.json"));
         assert!(!started.iter().any(|p| p == "_test_rename_old.json"));
+    }
+
+    /// A panic inside a turn comes back as that turn's error, so every front
+    /// end still gets its TaskEnd. A dead agent thread left the TUI on
+    /// "working…" for good and RPC busy for the rest of the session.
+    #[test]
+    fn a_panic_in_a_turn_becomes_its_error() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let r: Result<(), String> = rt.block_on(unpanic(async { panic!("byte index 1 is not a char boundary") }));
+        assert_eq!(r, Err("internal error: byte index 1 is not a char boundary".into()));
+        let n = 7;
+        assert_eq!(rt.block_on(unpanic(async { Err::<(), _>(format!("bad {n}")) })), Err("bad 7".into()), "an error passes through");
+        assert_eq!(rt.block_on(unpanic(async { Ok::<_, String>(n) })), Ok(7));
     }

@@ -421,7 +421,11 @@ fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         s.to_string()
     } else {
-        format!("{}…", &s[..n])
+        let mut cut = n;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}…", &s[..cut])
     }
 }
 
@@ -522,6 +526,17 @@ mod tests {
         assert_eq!(b["prompt_cache_key"], cache_key(".rusti/sessions/a.json"), "stable for one session");
         assert_ne!(cache_key(".rusti/sessions/a.json"), cache_key(".rusti/sessions/b.json"));
         assert!(Client::new("u".into(), "".into(), "m".into()).cache.is_none(), "off unless the profile asks");
+    }
+
+    /// The error body is cut to 500 bytes for the message. A cut inside a
+    /// multi-byte char (a provider's error text in Chinese) panicked the agent
+    /// thread instead of failing the request.
+    #[test]
+    fn an_error_body_is_cut_on_a_char_boundary() {
+        let body = format!("{{\"error\":{{\"message\":\"{}\"}}}}", "请求参数错误".repeat(40));
+        let cut = truncate(&body, 500);
+        let kept = cut.strip_suffix('…').expect("a cut body says so");
+        assert!(kept.len() <= 500 && body.starts_with(kept), "{cut}");
     }
 
     #[test]

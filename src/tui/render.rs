@@ -1552,4 +1552,18 @@ last bit";
         assert!(pre.starts_with('…') && columns(&pre) + columns(&suf) <= 20, "a multi-byte start is cut by char");
         assert_eq!(input_window("ab修c", 3, 10), ("ab修".into(), "c".into()), "a short line is left whole");
     }
+
+    /// A one-line draft longer than the input row scrolls, and the window can
+    /// start on any char. An em dash, a curly quote or Cyrillic there was cut
+    /// mid-char, which panicked the UI thread and lost the typed draft.
+    #[test]
+    fn a_long_draft_scrolls_from_any_char() {
+        for draft in [format!("{}—{}", "a".repeat(60), "b".repeat(60)), "привет ".repeat(20)] {
+            for k in 0..=draft.chars().count() {
+                let typed: String = draft.chars().take(k).collect();
+                let rows = input_rows(&typed, k, 50);
+                assert_eq!(bare(&rows[0]).contains('…'), k > 50, "{k} chars typed: only a scrolled row is marked");
+            }
+        }
+    }
 }

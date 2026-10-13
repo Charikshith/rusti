@@ -52,8 +52,7 @@ Where: ai_core/llm.rs chat_stream
 
 ### Parallel Tool Calls — follow-ups
 When: feat-tools-phase4 runs adjacent parallel-safe calls concurrently (spawn_blocking works on current_thread)
-What: codemode (scripted calls, D6 deferred); Esc does not kill commands already running in a parallel group (nor a
-lone one); two parallel `run_command`s can still collide on a shared lock such as cargo's target dir (D6 accepts it);
+What: codemode (scripted calls, D6 deferred); two parallel `run_command`s can still collide on a shared lock such as cargo's target dir (D6 accepts it);
 images a parallel group's reads attach arrive in completion order, not call order
 Where: ai_core/mod.rs run_agent step 2, ai_core/tools.rs PENDING_IMAGES
 

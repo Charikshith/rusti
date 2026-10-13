@@ -40,7 +40,12 @@ fn fake_llm_held(replies: Vec<(String, bool)>) -> (String, mpsc::Receiver<Value>
             };
             let _ = tx.send(body);
             let len = if *hold { String::new() } else { format!("Content-Length: {}\r\n", reply.len()) };
-            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{len}Connection: close\r\n\r\n{reply}");
+            // a reply that is already a whole response (an error status) goes out as it is
+            let resp = if reply.starts_with("HTTP/") {
+                reply.clone()
+            } else {
+                format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{len}Connection: close\r\n\r\n{reply}")
+            };
             s.write_all(resp.as_bytes()).unwrap();
             if *hold {
                 held.push(s);
@@ -239,4 +244,162 @@ fn a_done_line_ends_the_reply_without_waiting_for_close() {
     };
     assert_eq!((end["ok"].clone(), end["answer"].clone()), (json!(true), json!("All done.")));
     assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
+/// A provider error whose body is not ASCII still ends the turn. Cut to 500
+/// bytes mid-char for the message, it panicked the agent thread: RPC never sent
+/// task_end and stayed busy for good, and --json exited without one.
+#[test]
+fn a_provider_error_that_is_not_ascii_still_ends_the_turn() {
+    let body = json!({"error": {"message": "请求参数错误".repeat(40)}}).to_string();
+    let err = format!("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let (url, _) = fake_llm(vec![err.clone(), sse(json!({"content": "fine"}), "stop"), err]);
+    let (mut child, rx) = spawn("rpc_cjk_error", &url, &["--rpc"]);
+    let mut stdin = child.stdin.take().unwrap();
+    until(&rx, "session");
+    writeln!(stdin, "{}", json!({"id": 1, "type": "prompt", "text": "hello"})).unwrap();
+    let end = until(&rx, "task_end").pop().unwrap();
+    assert_eq!(end["ok"], false);
+    assert!(end["error"].as_str().unwrap().starts_with("HTTP 400"), "{end}");
+    writeln!(stdin, "{}", json!({"id": 2, "type": "prompt", "text": "again"})).unwrap();
+    assert_eq!(until(&rx, "task_end").pop().unwrap()["ok"], true, "the session is not left busy");
+    drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+
+    let (mut child, rx) = spawn("json_cjk_error", &url, &["--json", "hello"]);
+    let end = until(&rx, "task_end").pop().unwrap();
+    assert!(end["ok"] == false && end["error"].as_str().unwrap().starts_with("HTTP 400"), "{end}");
+    assert_eq!(child.wait().unwrap().code(), Some(1));
+}
+
+/// abort (Esc in the TUI) kills a command the model is running, rather than
+/// waiting out its timeout_secs.
+#[test]
+fn abort_kills_a_running_command() {
+    let call = sse(json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+        "function": {"name": "run_command", "arguments": "{\"command\":\"sleep 30\",\"timeout_secs\":60}"}}]}), "tool_calls");
+    let (url, _) = fake_llm(vec![call, sse(json!({"content": "stopped"}), "stop")]);
+    let (mut child, rx) = spawn("rpc_abort_cmd", &url, &["--rpc", "--yolo"]);
+    let mut stdin = child.stdin.take().unwrap();
+    until(&rx, "session");
+    writeln!(stdin, "{}", json!({"id": 1, "type": "prompt", "text": "wait a bit"})).unwrap();
+    until(&rx, "tool_start");
+    let t0 = Instant::now();
+    writeln!(stdin, "{}", json!({"id": 2, "type": "abort"})).unwrap();
+    let Some(end) = first_of(&rx, &["task_end"], Duration::from_secs(10)) else {
+        let _ = child.kill();
+        panic!("abort waited for the command");
+    };
+    assert_eq!(end["error"], "interrupted");
+    assert!(t0.elapsed() < Duration::from_secs(5), "ended after {:?}", t0.elapsed());
+    drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
+/// Run rusti with `args` in a fresh folder and an empty home, feed it `input`
+/// on stdin, and return its exit code (None if it was still running after 15 s,
+/// then killed) and its stderr.
+fn exit_of(name: &str, args: &[&str], input: Option<&str>) -> (Option<i32>, String) {
+    let dir = std::env::temp_dir().join(format!("rusti_{name}_exit_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rusti"))
+        .args(args)
+        .current_dir(&dir)
+        .env("RUSTI_HOME", dir.join("home"))
+        .env_remove("LLM_URL")
+        .env_remove("RUSTI_YOLO")
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        let _ = writeln!(stdin, "{text}");
+        std::mem::forget(stdin); // held open: a reader of stdin would wait, not see EOF
+    }
+    let mut err = child.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = err.read_to_string(&mut s);
+        s
+    });
+    let end = Instant::now() + Duration::from_secs(15);
+    let code = loop {
+        match child.try_wait().unwrap() {
+            Some(st) => break st.code(),
+            None if Instant::now() >= end => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    (code, reader.join().unwrap())
+}
+
+/// --tui on a stdin that is not a terminal says so and exits. It fell into a
+/// plain mode that never started a task and waited forever, printing nothing.
+#[test]
+fn tui_without_a_terminal_exits_with_a_reason() {
+    let (code, err) = exit_of("tui_notty", &["--url", "http://127.0.0.1:9/v1/chat/completions", "--model", "m", "--tui"], None);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("interactive terminal"), "{err}");
+}
+
+/// With no saved model, --rpc and --json stop with the reason instead of asking
+/// for a profile on stdin. In --rpc stdin is the command channel: the client's
+/// first command was read as the profile's name, and both sides then waited.
+#[test]
+fn rpc_and_json_without_a_model_exit_instead_of_asking() {
+    let prompt = json!({"id": 1, "type": "prompt", "text": "hello"}).to_string();
+    for args in [&["--rpc"][..], &["--json", "hello"][..]] {
+        let (code, err) = exit_of("no_model", args, Some(&prompt));
+        assert_eq!(code, Some(1), "{args:?}: {err}");
+        assert!(err.contains("no model configured") && !err.contains("add one"), "{args:?}: {err}");
+    }
+}
+
+/// A background job runs in a process group of its own, out of the terminal's
+/// reach, so closing the terminal no longer killed it. It dies with rusti
+/// instead: when rusti exits, and when it is told to stop (SIGTERM).
+#[cfg(unix)]
+#[test]
+fn a_background_job_dies_with_rusti() {
+    for how in ["exit", "SIGTERM"] {
+        let call = sse(json!({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+            "function": {"name": "run_background", "arguments": json!({"command": "echo $$ > job.pid; exec sleep 300"}).to_string()}}]}), "tool_calls");
+        let (url, _) = fake_llm(vec![call, sse(json!({"content": "started"}), "stop")]);
+        let name = "rpc_job_dies";
+        let (mut child, rx) = spawn(name, &url, &["--rpc", "--yolo"]);
+        let pidfile = std::env::temp_dir().join(format!("rusti_{name}_e2e_{}", std::process::id())).join("job.pid");
+        let mut stdin = child.stdin.take().unwrap();
+        until(&rx, "session");
+        writeln!(stdin, "{}", json!({"id": 1, "type": "prompt", "text": "start the server"})).unwrap();
+        until(&rx, "task_end");
+        let end = Instant::now() + Duration::from_secs(10);
+        let pid = loop {
+            if let Some(p) = std::fs::read_to_string(&pidfile).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
+                break p;
+            }
+            assert!(Instant::now() < end, "{how}: the job never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        if how == "SIGTERM" {
+            Command::new("kill").args(["-TERM", &child.id().to_string()]).status().unwrap();
+        } else {
+            drop(stdin);
+        }
+        child.wait().unwrap();
+        let alive = || Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().unwrap().success();
+        let end = Instant::now() + Duration::from_secs(5);
+        while alive() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if alive() {
+            let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+            panic!("{how}: the job outlived rusti");
+        }
+    }
 }

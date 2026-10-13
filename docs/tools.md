@@ -13,6 +13,15 @@ A call whose arguments are not valid JSON is refused back to the model with the 
 so it can resend the call, instead of running on defaults; an `ask_user` with no question is
 refused the same way rather than shown to you as an empty one.
 
+`run_command` is killed with every process it started when it reaches `timeout_secs` (default
+120) or you press Esc. A process it leaves running in the background (`npm run dev &`) does not
+hold the call open: the result comes back when the shell exits, with a note to use
+`run_background` for servers and watchers.
+
+A command that asks on the terminal (an ssh or git password, `sudo`) cannot prompt inside
+rusti: it waits until its timeout and is killed. Use key-based or otherwise non-interactive
+auth, or run such commands outside rusti.
+
 ## read_file limits
 
 `read_file` returns at most 2000 lines or 50 KB per call. A cut read ends with
@@ -39,7 +48,8 @@ call per turn, and returns one combined result.
   subtask's reads and edits out of the main context. One level deep; the sub-agent streams
   into the same transcript.
 - `run_background` starts a server or watcher and returns a job id; `job_output` reads what
-  it has printed so far, `job_stop` kills the whole process tree. Jobs outlive the agent if
-  not stopped.
+  it has printed so far, `job_stop` kills the whole process tree. On Linux and macOS jobs,
+  commands and hooks still running die with rusti (when it exits, or its terminal closes, or
+  it gets SIGTERM); on Windows jobs outlive the agent if not stopped.
 - `todo` lets the model keep a visible checklist for multi-step work; each update replaces the
   list in the transcript rather than printing another copy.

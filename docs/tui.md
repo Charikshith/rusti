@@ -3,8 +3,8 @@
 Back to the [readme](../readme.md). `rusti --help` lists every slash command and key.
 
 Bare `rusti` in a terminal opens the TUI; `--tui` forces it. A task argument or piped stdin is
-a one-shot run. For non-interactive environments (piped stdin, SSH, CI) it falls back
-automatically to plain stdout/stderr streaming.
+a one-shot run, which streams to stdout/stderr and needs no terminal. `--tui` with no terminal
+on stdin (piped, redirected, CI) exits 1 and says why.
 
 rusti draws its own terminal UI with direct ANSI escape sequences (no ratatui, no heavy TUI
 framework). That keeps the binary small (~2.2 MB) and the rendering fast: only changed lines are redrawn,
@@ -93,7 +93,7 @@ that row, so you can see the model working. The choice is saved as `"hide_thinki
 The row above the input says what the turn is waiting on. `working…` means the model. When
 `ask_user` has asked you something it reads `answer above · enter sends · esc cancels`: type
 the answer and press Enter. Esc interrupts the turn at any point, including while the provider
-has gone quiet. A provider that sends nothing for 10 minutes before its reply starts fails the
+has gone quiet or a command is running: the command is killed with everything it started. A provider that sends nothing for 10 minutes before its reply starts fails the
 turn with `no response for 10 min`; once the reply is streaming, 120 seconds of silence fails it
 with `stream stalled: no data for 120s`.
 

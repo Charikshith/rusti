@@ -68,8 +68,8 @@ under cmd):
 {"shell": "~/scoop/apps/git/current/bin/bash.exe", "shell_command_prefix": "shopt -s expand_aliases"}
 ```
 
-`!cmd` and `!!cmd` stream their output into the transcript as it arrives. `!cmd`'s output is
-then added to the conversation for the model; `!!cmd`'s never is.
+`!cmd` and `!!cmd` stream their output into the transcript as it arrives, and Esc kills them.
+`!cmd`'s output is then added to the conversation for the model; `!!cmd`'s never is.
 
 ## project instructions
 
