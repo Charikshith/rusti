@@ -559,7 +559,7 @@ pub fn run_command_live(cmd: &str, timeout_secs: u64, live: Arc<dyn Fn(&str) + S
     };
     let code = status.code().unwrap_or(-1);
     let ([out, err], held) = drain([out, err]);
-    tree.done(held);
+    tree.done();
     let mut s = format!("[exit {code}]\n{}{}", String::from_utf8_lossy(&out), String::from_utf8_lossy(&err));
     if held {
         s.push_str("\n[something it started in the background still holds the output; use run_background for servers and watchers]");
@@ -619,7 +619,11 @@ pub(crate) fn drain(readers: [Reader; 2]) -> ([Vec<u8>; 2], bool) {
 }
 
 /// Start `c` as the leader of a process group of its own (Unix), so Tree::kill
-/// reaches everything it starts.
+/// reaches everything it starts. Out of the terminal's foreground group, the
+/// kernel no longer sends it SIGHUP when the terminal hangs up, so a long
+/// command or a server could outlive it as an orphan (kill_groups takes them
+/// down with rusti instead); and a command that opens /dev/tty (an ssh or git
+/// password prompt, sudo) gets SIGTTIN and sits stopped until its timeout.
 pub(crate) fn own_group(c: &mut Command) -> &mut Command {
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(c, 0);
@@ -649,14 +653,11 @@ impl Tree {
         tree
     }
 
-    /// The command exited by itself; `held` is whether something it started
-    /// still runs, and then its group still dies with rusti.
-    pub(crate) fn done(self, held: bool) {
+    /// The command exited by itself; anything it started that still runs
+    /// keeps its group tracked, to die with rusti.
+    pub(crate) fn done(self) {
         #[cfg(unix)]
-        if !held {
-            unix::untrack(self.0);
-        }
-        let _ = held;
+        unix::prune();
     }
 
     /// Kill the whole tree, then reap the child.
@@ -666,14 +667,13 @@ impl Tree {
         // the group is ours only while the child is unreaped: once waited on,
         // its pid is free for some other process to lead a group with
         #[cfg(unix)]
-        {
-            if let Ok(None) = child.try_wait() {
-                unix::kill_group(self.0);
-            }
-            unix::untrack(self.0);
+        if let Ok(None) = child.try_wait() {
+            unix::kill_group(self.0);
         }
         let _ = child.kill();
         let _ = child.wait();
+        #[cfg(unix)]
+        unix::prune();
     }
 }
 
@@ -708,19 +708,28 @@ mod unix {
     const SIGTERM: i32 = 15;
     const SIG_DFL: usize = 0;
 
-    /// The live groups, 0 for a free slot; atomics, as a signal handler reads
-    /// them. ponytail: 64 slots, a group past them is not killed at exit; and
-    /// a group whose every process has since ended may have had its number
-    /// reused by the time rusti exits.
-    static GROUPS: [AtomicI32; 64] = [const { AtomicI32::new(0) }; 64];
+    const ESRCH: i32 = 3;
+
+    /// The groups with something still running, 0 for a free slot; atomics, as
+    /// a signal handler reads them. A group is dropped as soon as a prune finds
+    /// it empty, before its number can lead some unrelated group. ponytail: 64
+    /// slots, a group past them is not killed at exit; and a group that empties
+    /// after the last prune may be reused by the time rusti exits.
+    pub(super) static GROUPS: [AtomicI32; 64] = [const { AtomicI32::new(0) }; 64];
 
     pub fn track(group: i32) {
+        prune();
         let _ = GROUPS.iter().find(|g| g.compare_exchange(0, group, Ordering::SeqCst, Ordering::SeqCst).is_ok());
     }
 
-    pub fn untrack(group: i32) {
+    /// Free the slots of groups nothing runs in any more.
+    pub fn prune() {
         for g in &GROUPS {
-            let _ = g.compare_exchange(group, 0, Ordering::SeqCst, Ordering::SeqCst);
+            let group = g.load(Ordering::SeqCst);
+            // SAFETY: signal 0 only asks whether the group exists
+            if group != 0 && unsafe { kill(-group, 0) } != 0 && std::io::Error::last_os_error().raw_os_error() == Some(ESRCH) {
+                let _ = g.compare_exchange(group, 0, Ordering::SeqCst, Ordering::SeqCst);
+            }
         }
     }
 
@@ -1377,11 +1386,14 @@ pub fn job_stop(id: u32) -> (bool, String) {
 }
 
 fn status(child: &mut std::process::Child) -> String {
-    match child.try_wait() {
+    let st = match child.try_wait() {
         Ok(Some(st)) => format!("exited {}", st.code().unwrap_or(-1)),
         Ok(None) => "running".into(),
         Err(e) => format!("unknown: {e}"),
-    }
+    };
+    #[cfg(unix)]
+    unix::prune();
+    st
 }
 
 // ---- todo list ----------------------------------------------------------------
@@ -1778,6 +1790,27 @@ mod tests {
         let (ok, out) = run_command("sleep 6 & echo started", 30);
         assert!(ok && out.contains("started"), "{out}");
         assert!(t0.elapsed() < Duration::from_secs(4), "returned after {:?}", t0.elapsed());
+    }
+
+    /// The child's group stays tracked, to die with rusti, for as long as it
+    /// runs, though it holds no pipe: untracked when the shell exited, a
+    /// server started `> log &` outlived rusti and the closed terminal. Once
+    /// empty, the group is let go, so exit never kills a reused number.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_is_tracked_while_anything_in_it_runs() {
+        let tracked = |g: i32| unix::GROUPS.iter().any(|s| s.load(Ordering::SeqCst) == g);
+        let (ok, out) = run_command("sleep 30 > /dev/null 2>&1 & echo $$", 10);
+        assert!(ok, "{out}");
+        let g: i32 = out.lines().nth(1).unwrap().trim().parse().unwrap();
+        assert!(tracked(g), "the sleep still runs in group {g}, untracked");
+        unix::kill_group(g);
+        let end = Instant::now() + Duration::from_secs(5);
+        while tracked(g) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+            unix::prune();
+        }
+        assert!(!tracked(g), "group {g} is empty and still tracked");
     }
 
     /// What that child writes after the call has returned goes nowhere: it was

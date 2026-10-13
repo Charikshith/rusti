@@ -89,8 +89,8 @@ fn call(h: &Hook, input: &Value) -> Result<Map<String, Value>, String> {
         }
     };
     // a child the hook left running holds the pipes; its reply is already read
-    let ([out, err], held) = tools::drain([out, err]);
-    tree.done(held);
+    let ([out, err], _) = tools::drain([out, err]);
+    tree.done();
     let (out, err) = (String::from_utf8_lossy(&out).into_owned(), String::from_utf8_lossy(&err).into_owned());
     if !status.success() {
         let why = err.lines().rev().find(|l| !l.trim().is_empty()).map(|l| format!(": {}", l.trim())).unwrap_or_default();
