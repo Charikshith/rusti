@@ -837,7 +837,17 @@ pub fn multi_edit(path: &str, edits: &[(String, String)]) -> (bool, String) {
     };
     let (mut rm, mut add, mut rows) = (0usize, 0usize, Vec::new());
     for (i, (old, new)) in edits.iter().enumerate() {
-        let count = content.matches(old.as_str()).count();
+        let mut count = content.matches(old.as_str()).count();
+        // a CRLF file (git's autocrlf on Windows) with an LF old_text: match and
+        // write CRLF so the file keeps its line endings
+        let crlf;
+        let (old, new) = if count == 0 && old.contains('\n') && !old.contains('\r') && content.contains("\r\n") {
+            crlf = (old.replace('\n', "\r\n"), new.replace("\r\n", "\n").replace('\n', "\r\n"));
+            count = content.matches(crlf.0.as_str()).count();
+            (&crlf.0, &crlf.1)
+        } else {
+            (old, new)
+        };
         let which = if edits.len() > 1 { format!(" (edit {})", i + 1) } else { String::new() };
         if count == 0 {
             return (false, format!("edit failed{which}: old text not found in {path}; nothing written"));
@@ -1592,6 +1602,20 @@ mod tests {
         assert!(out.contains("  · -    2  two"), "edit 1 is on line 2: {out}");
         assert!(out.contains("  · -    5  five"), "edit 2 is on line 5: {out}");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "one\nTWO\nthree\nfour\nFIVE\n");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// git's autocrlf checks files out CRLF on Windows, but the model writes
+    /// old_text with LF (a ranged read strips the \r): the edit must still
+    /// match, and the file must keep its CRLF endings.
+    #[test]
+    fn edit_matches_lf_old_text_in_a_crlf_file() {
+        let _undo = UNDO_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = "target/rusti_crlf_edit.rs";
+        std::fs::write(path, "fn a() {\r\n    1\r\n}\r\n").unwrap();
+        let (ok, out) = edit_file(path, "fn a() {\n    1\n}", "fn a() {\n    2\n    3\n}");
+        assert!(ok, "{out}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "fn a() {\r\n    2\r\n    3\r\n}\r\n");
         std::fs::remove_file(path).unwrap();
     }
 

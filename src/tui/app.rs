@@ -324,14 +324,19 @@ fn accept_path(app: &mut App, start: usize, insert: &str) {
 }
 
 /// Commands whose name completes `input`, or none when `input` isn't a lone
-/// "/word" (a space means the arguments have started).
+/// "/word" (a space means the arguments have started). `/skill:name` also
+/// answers to the part after the colon, so `/dia` finds `/skill:diagram`.
 pub fn filter_cmds(cmds: &[Cmd], input: &str) -> Vec<Cmd> {
     let Some(q) = input.strip_prefix('/') else { return Vec::new() };
     if q.contains(char::is_whitespace) {
         return Vec::new();
     }
     let q = q.to_lowercase();
-    cmds.iter().filter(|c| c.name[1..].to_lowercase().starts_with(&q)).cloned().collect()
+    let hit = |c: &Cmd| {
+        let n = c.name[1..].to_lowercase();
+        n.starts_with(&q) || n.split_once(':').is_some_and(|(_, rest)| rest.starts_with(&q))
+    };
+    cmds.iter().filter(|c| hit(c)).cloned().collect()
 }
 
 /// What an open list picker selects (Enter's action).
@@ -395,6 +400,7 @@ pub struct App {
     pub ask_line: Option<usize>,  // index of the pending question's line
     pub fold: Option<(usize, Vec<String>)>, // the row a run of reads folds into, and its files
     pub retry_line: Option<usize>, // index of the counting "⚠ … retry n/3" line
+    pub todo_line: Option<usize>,  // index of the todo list, which each update replaces
     /// Transient confirmation shown on the status line. Session bookkeeping
     /// ("resumed …", "exported …") is not part of the conversation, so it does
     /// not belong in the transcript.
@@ -469,7 +475,7 @@ impl App {
             lines, current: String::new(),
             ask: None, input: String::new(), cursor: 0, done: true, model, session,
             msg_num, spinner: 0, scroll_up: 0,
-            history, hist_idx: None, tool_rows: Vec::new(), ask_line: None, fold: None, retry_line: None,
+            history, hist_idx: None, tool_rows: Vec::new(), ask_line: None, fold: None, retry_line: None, todo_line: None,
             notice: None, exit_armed: None,
             footer,
             turn_t0: std::time::Instant::now(), turn_tok: 0, turn_ctx: 0, turn_gen_ms: 0, turn_est: false,
@@ -1057,7 +1063,7 @@ pub fn ui_loop(
                     }
                     app.current.push_str(&t);
                 }
-                ai_core::Event::Text(t) => { app.flush(); app.lines.push(t); }
+                ai_core::Event::Text(t) => { app.flush(); push_text(&mut app, t); }
                 ai_core::Event::ToolStart { id, summary } => {
                     narrate(&mut app);
                     app.flush();
@@ -1068,7 +1074,13 @@ pub fn ui_loop(
                 ai_core::Event::ToolEnd { id, summary, ok, ms, output } => tool_end(&mut app, id, summary, ok, ms, &output),
                 ai_core::Event::SessionName(name) => app.session = name,
                 ai_core::Event::Git(b) => app.branch = b,
-                ai_core::Event::Notice(t) => app.notice = Some((t, std::time::Instant::now())),
+                ai_core::Event::Notice(t) => {
+                    app.notice = Some((t, std::time::Instant::now()));
+                    // an /mcp toggle finished off-thread: show the server's new state
+                    if app.pick.as_ref().is_some_and(|p| p.kind == PickKind::Mcp) {
+                        pick_mcp(&mut app);
+                    }
+                }
                 ai_core::Event::Retry { attempt, of, wait_ms, err } => {
                     let line = format!("  ⚠ {err} — retry {attempt}/{of} in {:.1}s", wait_ms as f64 / 1000.0);
                     // one row that counts up, rather than a new line per attempt
@@ -1113,40 +1125,7 @@ pub fn ui_loop(
                     // kept across turns, unlike ctx: it describes the last call, which is still the last call
                     app.cache_pct = cached.map(|c| c * 100 / prompt.max(1));
                 }
-                ai_core::Event::Ask { question, choices, reply } => {
-                    app.flush();
-                    // A permission prompt belongs to the tool row it gates: that row
-                    // turns into the question and back, leaving nothing behind. A
-                    // question the model asks (no fixed choices) keeps its own row.
-                    // permissions are asked right after each ToolStart, so it is the newest row
-                    let tool = app.tool_rows.last().map(|r| r.1).filter(|&i| !choices.is_empty() && i < app.lines.len());
-                    match tool.and_then(|i| app.lines[i].strip_prefix("  ⠋ ").map(|t| (i, t.to_string()))) {
-                        Some((i, t)) => {
-                            app.lines[i] = format!("  ? {t}  allow?");
-                            app.ask_line = Some(i);
-                            if let Some(r) = app.tool_rows.last_mut() {
-                                r.2 = true;
-                            }
-                        }
-                        None => {
-                            app.lines.push(format!("  ℹ {question}"));
-                            app.ask_line = Some(app.lines.len() - 1);
-                        }
-                    }
-                    app.ask = Some((question.clone(), reply));
-                    // a fixed set of answers is a choice, not a sentence to type:
-                    // it opens the picker that /model and /resume already use
-                    if !choices.is_empty() {
-                        app.pick = Some(Pick {
-                            kind: PickKind::Ask,
-                            title: question,
-                            rows: choices,
-                            idx: 0,
-                            top: 0,
-                            filter: String::new(),
-                        });
-                    }
-                }
+                ai_core::Event::Ask { question, choices, reply } => ask(&mut app, question, choices, reply),
                 ai_core::Event::Reload { exe, args } => return Ok(Exit::Reload { exe, args }),
                 ai_core::Event::CompactStart { reason, messages, .. } => {
                     app.flush();
@@ -1242,9 +1221,7 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
         // /themes <name> switches outright; bare /themes opens the list. Both
         // re-read the theme files, so one added since startup is there too
         "/themes" => {
-            for w in super::theme::load(&resources::dirs("themes")) {
-                app.lines.push(format!("  ⚠ {w}"));
-            }
+            warn_once(app, super::theme::load(&resources::dirs("themes")));
             if arg.is_empty() {
                 pick_themes(app)
             } else {
@@ -1347,6 +1324,46 @@ fn answer_pick(app: &mut App, ans: &str) {
     }
 }
 
+/// A question for the user: a permission prompt or one the model asks.
+pub fn ask(app: &mut App, question: String, choices: Vec<(String, String)>, reply: tokio::sync::oneshot::Sender<String>) {
+    app.flush();
+    // A permission prompt belongs to the tool row it gates: that row
+    // turns into the question and back, leaving nothing behind. A
+    // question the model asks (no fixed choices) keeps its own row.
+    // permissions are asked right after each ToolStart, so it is the newest row
+    let tool = app.tool_rows.last().map(|r| r.1).filter(|&i| !choices.is_empty() && i < app.lines.len());
+    match tool.and_then(|i| app.lines[i].strip_prefix("  ⠋ ").map(|t| (i, t.to_string()))) {
+        Some((i, t)) => {
+            app.lines[i] = format!("  ? {t}  allow?");
+            app.ask_line = Some(i);
+            if let Some(r) = app.tool_rows.last_mut() {
+                r.2 = true;
+            }
+        }
+        None => {
+            app.lines.push(format!("  ℹ {question}"));
+            app.ask_line = Some(app.lines.len() - 1);
+        }
+    }
+    app.ask = Some((question.clone(), reply));
+    // a fixed set of answers is a choice, not a sentence to type:
+    // it opens the picker that /model and /resume already use.
+    // A typed answer needs the prompt: a list left open (/themes,
+    // /resume…) would take the keys into its filter instead
+    if choices.is_empty() {
+        app.pick = None;
+    } else {
+        app.pick = Some(Pick {
+            kind: PickKind::Ask,
+            title: question,
+            rows: choices,
+            idx: 0,
+            top: 0,
+            filter: String::new(),
+        });
+    }
+}
+
 /// Close a pending question, recording the answer on the question's own line.
 /// An answer to a permission prompt is not a turn in the conversation, so it
 /// must not take a message number of its own.
@@ -1419,6 +1436,39 @@ pub fn tool_end(app: &mut App, id: u64, summary: String, ok: bool, ms: u128, out
     }
 }
 
+/// Warnings that a re-read can repeat (a theme file that still fails): each
+/// is said once, not again on every /themes.
+/// ponytail: scans the transcript; a seen-set if that ever shows up
+fn warn_once(app: &mut App, warns: Vec<String>) {
+    for w in warns {
+        let row = format!("  ⚠ {w}");
+        if !app.lines.contains(&row) {
+            app.lines.push(row);
+        }
+    }
+}
+
+/// The todo tool's list, or what is left when it is cleared.
+fn is_todo(t: &str) -> bool {
+    t == "  todo list cleared" || ["  ☑ ", "  ◐ ", "  ☐ "].iter().any(|g| t.starts_with(g))
+}
+
+/// A whole line of text into the transcript. The todo list is state, so a
+/// new version replaces the last one where it stands: a plan updated ten
+/// times left ten copies of itself.
+pub fn push_text(app: &mut App, t: String) {
+    let last = app.todo_line.filter(|&i| is_todo(&t) && app.lines.get(i).is_some_and(|l| is_todo(l)));
+    match last {
+        Some(i) => app.lines[i] = t,
+        None => {
+            if is_todo(&t) {
+                app.todo_line = Some(app.lines.len());
+            }
+            app.lines.push(t);
+        }
+    }
+}
+
 /// The output rows go right under their own tool row, not at the end, where
 /// a parallel call's row could still be running below it.
 fn insert_rows(app: &mut App, at: usize, rows: Vec<String>) {
@@ -1431,7 +1481,7 @@ fn insert_rows(app: &mut App, at: usize, rows: Vec<String>) {
 /// inserted (+) or removed (-).
 fn shift_rows(app: &mut App, at: usize, by: isize) {
     let live = app.tool_rows.iter_mut().map(|r| &mut r.1);
-    let others = [&mut app.ask_line, &mut app.retry_line].into_iter().flatten();
+    let others = [&mut app.ask_line, &mut app.retry_line, &mut app.todo_line].into_iter().flatten();
     for i in live.chain(others).chain(app.fold.as_mut().map(|f| &mut f.0)) {
         if *i >= at {
             *i = i.saturating_add_signed(by);
@@ -1585,12 +1635,12 @@ pub fn footer_right(
     }
     let (name, desc) = mode_label(mode);
     let rest: String = parts.iter().map(|p| format!(" · {p}")).collect();
-    let room = w.saturating_sub(name.len() + 2 + rest.chars().count());
-    let desc = match desc.chars().count() {
+    let room = w.saturating_sub(name.len() + 2 + super::columns(&rest));
+    let desc = match super::columns(desc) {
         n if n <= room => desc.to_string(),
         // ponytail: under ~8 columns a cut description is noise, so it goes
-        _ if room >= 8 => format!("{}…", desc.chars().take(room - 1).collect::<String>()),
-        _ => return format!("{name}{rest}").chars().take(w).collect(),
+        _ if room >= 8 => format!("{}…", super::truncate_str(desc, room - 1)),
+        _ => return super::truncate_str(&format!("{name}{rest}"), w),
     };
     format!("{name}: {desc}{rest}")
 }
@@ -1861,21 +1911,26 @@ fn pick_mcp(app: &mut App) {
     app.pick = Some(p);
 }
 
-/// Enter on an /mcp row. Turning a server ON connects it here and now, which
-/// can take seconds and can fail, so the outcome goes to the status line
-/// either way rather than being silently swallowed.
+/// Enter on an /mcp row. Turning a server ON connects it, which can take up
+/// to a minute per handshake step and can fail, so it runs on its own thread:
+/// the screen keeps drawing and Esc still works. The outcome arrives as a
+/// Notice, which also refreshes this list.
 fn toggle_mcp(app: &mut App, name: &str) {
     let on = crate::ai_core::mcp::status()
         .into_iter()
         .find(|(n, ..)| n == name)
         .map(|(_, enabled, ..)| enabled)
         .unwrap_or(false);
-    let msg = match crate::ai_core::mcp::set_enabled(name, !on) {
-        Ok(m) => m,
-        Err(e) => format!("mcp {name}: {e}"),
-    };
+    let msg = format!("mcp {name}: {}", if on { "switching off…" } else { "connecting…" });
     app.notice = Some((msg, std::time::Instant::now()));
-    pick_mcp(app);
+    let name = name.to_string();
+    std::thread::spawn(move || {
+        let msg = match crate::ai_core::mcp::set_enabled(&name, !on) {
+            Ok(m) => m,
+            Err(e) => format!("mcp {name}: {e}"),
+        };
+        ai_core::emit(ai_core::Event::Notice(msg));
+    });
 }
 
 /// Flip one segment and write it back to model.json. Load-then-save keeps the
@@ -1957,6 +2012,36 @@ mod tests {
         assert_eq!(ai_core::mode(), ai_core::Mode::Manual, "an even number of toggles is back where it started");
     }
 
+    /// /mcp on a server that never answers its handshake ran up to three
+    /// 60 s waits on the UI thread: no frame drawn, no key read. The toggle
+    /// must hand the connect off and return at once with a progress notice.
+    #[test]
+    fn mcp_toggle_does_not_wait_for_the_handshake() {
+        // RUSTI_HOME is set only in a child run of this one test, so the other
+        // tests in this process never see the temp home or its connect thread
+        if std::env::var_os("RUSTI_HOME").is_none() {
+            let home = std::env::temp_dir().join(format!("rusti_mcp_toggle_{}", std::process::id()));
+            std::fs::create_dir_all(&home).unwrap();
+            // sort reads stdin to EOF and prints nothing until then: a silent server
+            std::fs::write(home.join("config.json"), r#"{"mcp":{"silent":{"command":"sort","enabled":false}}}"#).unwrap();
+            let test = concat!(module_path!(), "::mcp_toggle_does_not_wait_for_the_handshake");
+            let test = test.split_once("::").unwrap().1;
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([test, "--exact", "--nocapture"])
+                .env("RUSTI_HOME", &home)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        }
+        let mut a = app();
+        let t = std::time::Instant::now();
+        toggle_mcp(&mut a, "silent");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "blocked {:?}", t.elapsed());
+        assert_eq!(a.notice.as_ref().map(|(m, _)| m.as_str()), Some("mcp silent: connecting…"));
+    }
+
     fn app() -> App {
         App::new("m".into(), "s".into(), vec![], vec![], 0, Default::default())
     }
@@ -1966,6 +2051,32 @@ mod tests {
     }
     fn shown(app: &App) -> Vec<&str> {
         app.lines.iter().filter(|l| !l.starts_with(HIDDEN)).map(String::as_str).collect()
+    }
+
+    /// F14: state that is re-sent is not re-printed. Each todo update replaces
+    /// the list where it stands, even after rows were inserted above it, and
+    /// a theme file that still fails warns once however often /themes opens.
+    #[test]
+    fn todo_updates_and_repeated_warnings_do_not_stack() {
+        let mut a = app();
+        push_text(&mut a, "  ☐ read\n  ☐ edit".into());
+        start(&mut a, "todo (2 items)");
+        insert_rows(&mut a, 0, vec!["1› plan it".into()]);
+        push_text(&mut a, "  ☑ read\n  ◐ edit".into());
+        push_text(&mut a, "  · not a todo".into());
+        push_text(&mut a, "  todo list cleared".into());
+        assert_eq!(a.lines, ["1› plan it", "  todo list cleared", "  ⠋ todo (2 items)", "  · not a todo"]);
+        // a transcript replaced under it (a resume) gets a fresh list, not an overwrite
+        a.lines = vec!["other session".into(), "x".into()];
+        push_text(&mut a, "  ☐ again".into());
+        assert_eq!(a.lines, ["other session", "x", "  ☐ again"]);
+
+        let mut a = app();
+        for _ in 0..3 {
+            warn_once(&mut a, vec!["theme broken.json: expected value".into()]);
+        }
+        warn_once(&mut a, vec!["theme other.json: expected value".into()]);
+        assert_eq!(a.lines, ["  ⚠ theme broken.json: expected value", "  ⚠ theme other.json: expected value"]);
     }
 
     /// The first message clears the startup "✓ mcp" rows but keeps a failure.
@@ -2216,6 +2327,13 @@ mod tests {
         let names: Vec<String> = filter_cmds(&a.cmds, "/re").into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["/resume", "/rename", "/reload", "/review"], "built-ins first");
         assert_eq!(filter_cmds(&a.cmds, "/skill:")[0].tag, "p");
+        a.cmds.push(Cmd { name: "/skill:diagram".into(), desc: "".into(), soon: false, tag: "u".into() });
+        for q in ["/dia", "/skill:dia", "/sk"] {
+            assert!(filter_cmds(&a.cmds, q).iter().any(|c| c.name == "/skill:diagram"), "{q}");
+        }
+        let names = |q| filter_cmds(&a.cmds, q).into_iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(names("/skill:dia"), ["/skill:diagram"], "narrows to the match");
+        assert_eq!(names("/sk"), ["/skill:pdf", "/skill:diagram"], "still lists every skill");
 
         let (tx, rx) = std::sync::mpsc::channel();
         assert!(!run_extension(&mut a, &tx, "/nope x", "/nope", "x"), "nothing by that name");

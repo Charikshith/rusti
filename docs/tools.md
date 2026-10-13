@@ -51,4 +51,5 @@ call per turn, and returns one combined result.
   it has printed so far, `job_stop` kills the whole process tree. On Linux and macOS jobs,
   commands and hooks still running die with rusti (when it exits, or its terminal closes, or
   it gets SIGTERM); on Windows jobs outlive the agent if not stopped.
-- `todo` lets the model keep a visible checklist for multi-step work.
+- `todo` lets the model keep a visible checklist for multi-step work; each update replaces the
+  list in the transcript rather than printing another copy.

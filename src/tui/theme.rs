@@ -5,7 +5,9 @@
 // Every field is a complete SGR sequence, built by the macro from the code, so
 // a theme reads as the codes you would write in the source. Theme 0 is what
 // rusti has always drawn: the default has to stay put, or an update silently
-// restyles everyone's terminal.
+// restyles everyone's terminal. The one exception is a colour that does not
+// read: every role is held to 4.5:1 on a dark terminal, and "light" derives
+// darker versions of them (lightened() below).
 //
 // Theme files (F15) join the table at runtime: themes/<name>.json under
 // ~/.rusti, and ./.rusti once the folder is trusted, in rusti's own roles,
@@ -107,45 +109,45 @@ pub const THEMES: &[Theme] = &[
     // colour that was already on screen stays exactly as it was.
     theme!("current", "what rusti has always drawn, plus Nord syntax colours",
         syn["38;5;110", "38;5;144", "38;5;139", "38;5;110"],
-        user: "36", info: "34", ok: "32", fail: "31", warn: "33", add: "32", del: "31",
+        user: "36", info: "94", ok: "32", fail: "38;5;203", warn: "33", add: "32", del: "38;5;203",
         code: "36", fenced: "38;5;180", think: "3;38;5;249", dim: "38;5;245", sel: "36"),
     theme!("recommended", "bright info, inline code joins fenced tan, bold selection",
-        user: "36", info: "94", ok: "32", fail: "31", warn: "33", add: "32", del: "31",
+        user: "36", info: "94", ok: "32", fail: "38;5;203", warn: "33", add: "32", del: "38;5;203",
         code: "38;5;180", fenced: "38;5;180", think: "3;38;5;249", dim: "38;5;245", sel: "1;36"),
     theme!("periwinkle", "softer info than bright blue",
-        user: "36", info: "38;5;111", ok: "32", fail: "31", warn: "33", add: "32", del: "31",
+        user: "36", info: "38;5;111", ok: "32", fail: "38;5;203", warn: "33", add: "32", del: "38;5;203",
         code: "38;5;180", fenced: "38;5;180", think: "3;38;5;249", dim: "38;5;245", sel: "1;36"),
     theme!("teal", "you are teal, calmer beside the greens",
-        user: "38;5;37", info: "38;5;111", ok: "32", fail: "31", warn: "33", add: "32", del: "31",
+        user: "38;5;37", info: "38;5;111", ok: "32", fail: "38;5;203", warn: "33", add: "32", del: "38;5;203",
         code: "38;5;180", fenced: "38;5;180", think: "3;38;5;249", dim: "38;5;245", sel: "1;38;5;37"),
     theme!("violet", "info is not a cold blue",
-        user: "36", info: "38;5;141", ok: "32", fail: "31", warn: "33", add: "32", del: "31",
+        user: "36", info: "38;5;141", ok: "32", fail: "38;5;203", warn: "33", add: "32", del: "38;5;203",
         code: "38;5;180", fenced: "38;5;180", think: "3;38;5;249", dim: "38;5;245", sel: "1;38;5;141"),
     theme!("one-accent", "greys, with colour only where you act or are asked",
-        user: "36", info: "36", ok: "38;5;248", fail: "31", warn: "38;5;248", add: "38;5;248", del: "31",
+        user: "36", info: "36", ok: "38;5;248", fail: "38;5;203", warn: "38;5;248", add: "38;5;248", del: "38;5;203",
         code: "38;5;251", fenced: "38;5;251", think: "3;38;5;249", dim: "38;5;245", sel: "1;36"),
     theme!("solarized", "Solarized dark",
-        user: "38;5;37", info: "38;5;33", ok: "38;5;100", fail: "38;5;160", warn: "38;5;136",
-        add: "38;5;100", del: "38;5;160", code: "38;5;61", fenced: "38;5;109",
+        user: "38;5;37", info: "38;5;33", ok: "38;5;100", fail: "38;5;167", warn: "38;5;136",
+        add: "38;5;100", del: "38;5;167", code: "38;5;104", fenced: "38;5;109",
         think: "3;38;5;66", dim: "38;5;66", sel: "1;38;5;37"),
     theme!("gruvbox", "warm, low glare",
         user: "38;5;108", info: "38;5;109", ok: "38;5;142", fail: "38;5;167", warn: "38;5;214",
         add: "38;5;142", del: "38;5;167", code: "38;5;175", fenced: "38;5;223",
         think: "3;38;5;245", dim: "38;5;246", sel: "1;38;5;108"),
     theme!("nord", "cool and even",
-        user: "38;5;110", info: "38;5;110", ok: "38;5;144", fail: "38;5;131", warn: "38;5;222",
-        add: "38;5;144", del: "38;5;131", code: "38;5;139", fenced: "38;5;188",
+        user: "38;5;110", info: "38;5;110", ok: "38;5;144", fail: "38;5;167", warn: "38;5;222",
+        add: "38;5;144", del: "38;5;167", code: "38;5;139", fenced: "38;5;188",
         think: "3;38;5;103", dim: "38;5;103", sel: "1;38;5;109"),
     theme!("tokyo-night", "high separation between blue, cyan and magenta",
         user: "38;5;117", info: "38;5;111", ok: "38;5;150", fail: "38;5;210", warn: "38;5;180",
         add: "38;5;150", del: "38;5;210", code: "38;5;141", fenced: "38;5;189",
-        think: "3;38;5;60", dim: "38;5;103", sel: "1;38;5;117"),
+        think: "3;38;5;104", dim: "38;5;103", sel: "1;38;5;117"),
     theme!("catppuccin", "pastel, nothing shouts",
         user: "38;5;116", info: "38;5;111", ok: "38;5;151", fail: "38;5;211", warn: "38;5;223",
         add: "38;5;151", del: "38;5;211", code: "38;5;218", fenced: "38;5;189",
-        think: "3;38;5;60", dim: "38;5;103", sel: "1;38;5;116"),
+        think: "3;38;5;104", dim: "38;5;103", sel: "1;38;5;116"),
     theme!("high-contrast", "the bright ANSI pair for every marker",
-        user: "96", info: "94", ok: "92", fail: "91", warn: "93", add: "92", del: "91",
+        user: "96", info: "94", ok: "92", fail: "38;5;203", warn: "93", add: "92", del: "91",
         code: "38;5;180", fenced: "38;5;180", think: "3;38;5;248", dim: "38;5;247", sel: "1;96"),
     theme!("colourblind", "diff in blue/orange, not red/green",
         user: "36", info: "94", ok: "38;5;74", fail: "38;5;208", warn: "38;5;227",
@@ -154,11 +156,11 @@ pub const THEMES: &[Theme] = &[
     theme!("quiet", "desaturated: colour marks the row, text stays calm",
         user: "38;5;73", info: "38;5;67", ok: "38;5;108", fail: "38;5;138", warn: "38;5;179",
         add: "38;5;108", del: "38;5;138", code: "38;5;180", fenced: "38;5;180",
-        think: "3;38;5;245", dim: "38;5;243", sel: "1;38;5;73"),
+        think: "3;38;5;245", dim: "38;5;244", sel: "1;38;5;73"),
     theme!("amber", "one hue, brightness does the work",
         user: "38;5;214", info: "38;5;221", ok: "38;5;178", fail: "38;5;202", warn: "38;5;222",
         add: "38;5;178", del: "38;5;202", code: "38;5;179", fenced: "38;5;179",
-        think: "3;38;5;94", dim: "38;5;136", sel: "1;38;5;222"),
+        think: "3;38;5;172", dim: "38;5;136", sel: "1;38;5;222"),
 ];
 
 static CURRENT: RwLock<&'static Theme> = RwLock::new(&THEMES[0]);
@@ -235,8 +237,109 @@ fn lum(c: [f64; 3]) -> f64 {
     0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
 }
 
+/// The active theme, as drawn: under "light" its colours are darkened until
+/// they read on a pale background.
 pub fn current() -> &'static Theme {
-    *CURRENT.read().unwrap_or_else(|e| e.into_inner())
+    let t = *CURRENT.read().unwrap_or_else(|e| e.into_inner());
+    if LIGHT_BG.load(Ordering::Relaxed) { lightened(t) } else { t }
+}
+
+/// The built-in palettes are made for a dark terminal; on a light one most of
+/// their greys, tans and yellows fell under 3:1. Each theme's light version is
+/// derived once and kept, keyed by the theme it came from.
+fn lightened(t: &'static Theme) -> &'static Theme {
+    static DONE: Mutex<Vec<(usize, &'static Theme)>> = Mutex::new(Vec::new());
+    let key = t as *const Theme as usize;
+    let mut done = DONE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, l)) = done.iter().find(|d| d.0 == key) {
+        return l;
+    }
+    // the darkest of the pale backgrounds a text colour sits on
+    let bg = fg_rgb(LIGHT.fail).unwrap_or([255.0; 3]);
+    let mut l = t.clone();
+    for f in [&mut l.user, &mut l.info, &mut l.ok, &mut l.fail, &mut l.warn, &mut l.add, &mut l.del,
+              &mut l.code, &mut l.fenced, &mut l.think, &mut l.dim, &mut l.sel] {
+        *f = readable_on(f, bg);
+    }
+    for f in [&mut l.syn_key, &mut l.syn_str, &mut l.syn_num, &mut l.syn_bool].into_iter().flatten() {
+        *f = readable_on(f, bg);
+    }
+    let l: &'static Theme = Box::leak(Box::new(l));
+    done.push((key, l));
+    l
+}
+
+/// WCAG 2 contrast of two colours.
+fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (a, b) = (lum(a), lum(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// `sgr` darkened until it reads at 4.5:1 on the light `bg`, its other
+/// attributes (bold, italic) kept. A colour that already reads is left alone.
+fn readable_on(sgr: &'static str, bg: [f64; 3]) -> &'static str {
+    let Some(c) = fg_rgb(sgr) else { return sgr };
+    if contrast(c, bg) >= 4.5 {
+        return sgr;
+    }
+    let mut k = 1.0;
+    while contrast(c.map(|v| v * k), bg) < 4.5 {
+        k -= 0.05; // black reads at ~18:1, so this ends
+    }
+    let [r, g, b] = c.map(|v| (v * k).round() as u8);
+    let (p, mut attrs, mut i) = (sgr_params(sgr), String::new(), 0);
+    while i < p.len() {
+        match p[i] {
+            38 | 48 => i += if p.get(i + 1) == Some(&5) { 3 } else { 5 }, // a colour and its arguments
+            a @ 1..=9 => {
+                attrs.push_str(&format!("{a};"));
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    leak(format!("\x1b[{attrs}38;2;{r};{g};{b}m"))
+}
+
+/// An SGR sequence's parameters.
+fn sgr_params(sgr: &str) -> Vec<u16> {
+    let p = sgr.strip_prefix("\x1b[").and_then(|s| s.strip_suffix('m')).unwrap_or("");
+    p.split(';').filter_map(|v| v.parse().ok()).collect()
+}
+
+/// The colour an SGR sequence sets (text or background), as RGB: 24-bit,
+/// 256-colour, or one of the 16 ANSI colours.
+/// ponytail: the 16 are the terminal's to choose; these are Windows Terminal's
+/// default (Campbell), the palette the contrast was measured in.
+fn fg_rgb(sgr: &str) -> Option<[f64; 3]> {
+    let p = sgr_params(sgr);
+    (0..p.len()).find_map(|i| match p[i..] {
+        [38 | 48, 2, r, g, b, ..] => Some([r, g, b].map(f64::from)),
+        [38 | 48, 5, n, ..] => Some(xterm(n)),
+        [c @ 30..=37, ..] => Some(xterm(c - 30)),
+        [c @ 90..=97, ..] => Some(xterm(c - 82)),
+        _ => None,
+    })
+}
+
+/// The 256-colour palette entry n.
+fn xterm(n: u16) -> [f64; 3] {
+    const ANSI: [u32; 16] = [
+        0x0C0C0C, 0xC50F1F, 0x13A10E, 0xC19C00, 0x0037DA, 0x881798, 0x3A96DD, 0xCCCCCC,
+        0x767676, 0xE74856, 0x16C60C, 0xF9F1A5, 0x3B78FF, 0xB4009E, 0x61D6D6, 0xF2F2F2,
+    ];
+    let step = |v: u16| if v == 0 { 0.0 } else { f64::from(55 + 40 * v) };
+    match n {
+        0..=15 => {
+            let v = ANSI[n as usize];
+            [v >> 16, v >> 8 & 0xff, v & 0xff].map(f64::from)
+        }
+        16..=231 => {
+            let n = n - 16;
+            [step(n / 36), step(n / 6 % 6), step(n % 6)]
+        }
+        _ => [f64::from(8 + 10 * (n.min(255) - 232)); 3],
+    }
 }
 
 /// Theme files as read: (file, its modified time then, the theme).
@@ -496,6 +599,35 @@ mod tests {
                 }
             }
         }
+        // F13: every role reads on the terminal it is drawn on: the palettes
+        // on a dark one (Campbell's black, where the "plan" label's 34 was
+        // 2.4:1), with the ✗ also on its fail fill; their light versions on
+        // white and on the pale fills
+        let roles = |t: &Theme| [("user", t.user), ("info", t.info), ("ok", t.ok), ("fail", t.fail),
+            ("warn", t.warn), ("add", t.add), ("del", t.del), ("code", t.code), ("fenced", t.fenced),
+            ("think", t.think), ("dim", t.dim), ("sel", t.sel), ("key", t.key()), ("string", t.string()),
+            ("number", t.num()), ("boolean", t.boolean())];
+        let on = |sgr: &str, bg: [f64; 3]| contrast(fg_rgb(sgr).unwrap(), bg);
+        for t in THEMES {
+            for (role, sgr) in roles(t) {
+                let r = on(sgr, [12.0; 3]);
+                assert!(r >= 4.5, "{}: {role} {sgr:?} is {r:.2}:1 on a dark terminal", t.name);
+            }
+            let r = on(t.fail, fg_rgb(DARK.fail).unwrap());
+            assert!(r >= 4.5, "{}: the ✗ is {r:.2}:1 on its fail fill", t.name);
+            let l = lightened(t);
+            assert!(std::ptr::eq(l, lightened(t)), "derived once");
+            for (role, sgr) in roles(l) {
+                for bg in [[255.0; 3], fg_rgb(LIGHT.fail).unwrap(), fg_rgb(LIGHT.ask).unwrap()] {
+                    let r = on(sgr, bg);
+                    assert!(r >= 4.5, "{} light: {role} {sgr:?} is {r:.2}:1 on {bg:?}", t.name);
+                }
+            }
+        }
+        // darkening keeps what is not colour: italic reasoning stays italic,
+        // and a colour that already reads on white is not touched
+        assert!(lightened(&THEMES[0]).think.starts_with("\x1b[3;38;2;"), "{:?}", lightened(&THEMES[0]).think);
+        assert_eq!(readable_on("\x1b[38;5;24m", [255.0; 3]), "\x1b[38;5;24m");
         // a theme file's fill with no text of its own still reads, in either
         // mode, even over a base file that pinned text for its own fill
         let none = |_: &str| None;

@@ -47,7 +47,8 @@ coloured edge: green when done, the spinner colour while running. A run of file 
 into one row, the model's narration between tools is dimmed under a rail, and a tool's time
 leaves out the time you spent answering its permission prompt. `"light": true` in
 `~/.rusti/config.json` is only for a terminal with a light background: it swaps those fills
-for pale ones with dark text. A project's `./model.json` can set `"light"` too, since its
+for pale ones with dark text, and darkens any theme colour that would read under 4.5:1 there
+(the built-in palettes are made for a dark terminal, where each colour reads at 4.5:1 or better). A project's `./model.json` can set `"light"` too, since its
 top-level keys override the global config. rusti cannot see your terminal's background, so turn
 it off again if you go back to a dark one.
 
@@ -65,10 +66,10 @@ as plain text, with wrapped rows joined back into their lines, and `copied N lin
 the status line. Double-click copies a word, triple-click a whole line; a plain click or any
 key clears the highlight.
 
-Clicks are mapped to the text drawn under them: a tab counts to the next stop of 8, and CJK,
-Hangul, fullwidth forms and the common emoji take two columns. That table is hand-rolled, so a
-rarer wide character, or a zero-width one such as a combining accent, puts the selection a
-column off for the rest of its row.
+Rows are wrapped and cut, and clicks mapped to the text drawn under them, in terminal columns:
+a tab is drawn as spaces to the next stop of 8, and CJK, Hangul, fullwidth forms and the common
+emoji take two columns. That table is hand-rolled, so a rarer wide character, or a zero-width
+one such as a combining accent, puts its row and the selection a column off.
 
 The copy goes two ways at once: OSC 52, which asks the terminal to set the clipboard (Windows
 Terminal, iTerm2, kitty and WezTerm honour it, over SSH too), and the platform's own tool:
@@ -145,7 +146,8 @@ Inside the TUI, `/reload` rebuilds rusti from its own source and relaunches in p
 developing rusti with rusti. It preserves the session (`--resume`), the active model (even if
 switched mid-session with `/use`), and the visible transcript. It only runs when idle (finish
 or Esc-interrupt the current turn first); a build failure is reported inline and leaves the
-running session untouched. An installed binary has no rusti source on the machine, so
+running session untouched. An installed binary has no rusti source checkout on the machine
+(a `cargo install --git` build lives in cargo's cache, which does not count), so
 there `/reload` skips the build and restarts the same executable with the same session, model
 and flags, which re-reads `config.json`, models, themes and extensions. How the release build
 is tuned for that wait is in

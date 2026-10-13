@@ -53,7 +53,7 @@ skill's name, description and absolute path, and tells the model to read the fil
 matches, so a skill costs one line of context until it is used.
 
 - `disable-model-invocation: true` keeps a skill off that list.
-- `/skill:<name> args` sends the skill's instructions as your message, followed by the arguments.
+- `/skill:<name> args` sends the skill's instructions as your message, followed by the arguments. In the `/` menu, typing the part after the colon finds it too: `/dia` lists `/skill:diagram`.
 - A skill with no description is skipped with a warning; the model could never tell when to use it.
 
 ## theme files
@@ -160,8 +160,9 @@ only. Each load changes the tool list once, which costs one prompt-cache miss.
 
 **Transport** is stdio with JSON-RPC 2.0, implemented directly against `std::process` and
 serde_json: **no MCP SDK and no added dependency**; rusti's own side stays pure Rust. On
-Windows the command is run through `cmd /C`, because `npx` and `uvx` are `.cmd` shims that
-`CreateProcess` cannot execute directly.
+Windows a bare command is looked up on PATH (the server's own `env` PATH if it sets one) as
+`.com`, `.exe`, `.bat` or `.cmd`, so `npx` and `uvx` shims work; arguments are passed as-is,
+not re-parsed by `cmd /C`, so `&`, `|` or `%VAR%` in a DSN or JSON argument arrive intact.
 
 **Permissions.** MCP tools are always permission-gated and always refused in plan mode. rusti
 cannot read a third-party tool's effects off its name, so it treats every one of them as if it

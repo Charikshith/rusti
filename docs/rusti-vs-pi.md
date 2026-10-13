@@ -155,7 +155,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Shell resolution | **yes**: resolved once at startup: the `"shell"` path in `~/.rusti/config.json`, else Git Bash under Program Files on Windows, else `bash` on PATH, else `cmd /C` on Windows and `sh -c` elsewhere; one shell for `run_command`, `run_background`, `!` and `!!` (feat-078, `ai_core/tools.rs`) | **yes**: `shellPath`, then Git Bash, then bash on PATH (`docs/windows.md`) | Same order as Pi |
 | Command prefix and aliases | **yes**: `"shell_command_prefix"`, put on its own line before every command (`&` under cmd) (feat-078) | **yes**: `shellCommandPrefix`; alias recipe in `docs/shell-aliases.md` | Parity |
 | Hook on `!` | **yes**: the `user_shell` hook rewrites, handles or refuses it (`ai_core/hooks.rs`) | **yes**: `user_bash` extension event | |
-| MCP server launch shell | `cmd /C` on Windows, so `npx`/`uvx` shims work (`ai_core/mcp.rs`) | n/a (spawns the command directly) | |
+| MCP server launch shell | none: spawned directly; on Windows a bare command resolves to its `.exe`/`.cmd` on PATH, so `npx`/`uvx` shims work (`ai_core/mcp.rs`) | n/a (spawns the command directly) | |
 
 ## 5. Models and providers
 
