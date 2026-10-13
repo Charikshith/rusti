@@ -2331,6 +2331,9 @@ mod tests {
         for q in ["/dia", "/skill:dia", "/sk"] {
             assert!(filter_cmds(&a.cmds, q).iter().any(|c| c.name == "/skill:diagram"), "{q}");
         }
+        let names = |q| filter_cmds(&a.cmds, q).into_iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(names("/skill:dia"), ["/skill:diagram"], "narrows to the match");
+        assert_eq!(names("/sk"), ["/skill:pdf", "/skill:diagram"], "still lists every skill");
 
         let (tx, rx) = std::sync::mpsc::channel();
         assert!(!run_extension(&mut a, &tx, "/nope x", "/nope", "x"), "nothing by that name");
