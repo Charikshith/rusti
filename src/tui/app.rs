@@ -324,14 +324,19 @@ fn accept_path(app: &mut App, start: usize, insert: &str) {
 }
 
 /// Commands whose name completes `input`, or none when `input` isn't a lone
-/// "/word" (a space means the arguments have started).
+/// "/word" (a space means the arguments have started). `/skill:name` also
+/// answers to the part after the colon, so `/dia` finds `/skill:diagram`.
 pub fn filter_cmds(cmds: &[Cmd], input: &str) -> Vec<Cmd> {
     let Some(q) = input.strip_prefix('/') else { return Vec::new() };
     if q.contains(char::is_whitespace) {
         return Vec::new();
     }
     let q = q.to_lowercase();
-    cmds.iter().filter(|c| c.name[1..].to_lowercase().starts_with(&q)).cloned().collect()
+    let hit = |c: &Cmd| {
+        let n = c.name[1..].to_lowercase();
+        n.starts_with(&q) || n.split_once(':').is_some_and(|(_, rest)| rest.starts_with(&q))
+    };
+    cmds.iter().filter(|c| hit(c)).cloned().collect()
 }
 
 /// What an open list picker selects (Enter's action).
@@ -2322,6 +2327,10 @@ mod tests {
         let names: Vec<String> = filter_cmds(&a.cmds, "/re").into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["/resume", "/rename", "/reload", "/review"], "built-ins first");
         assert_eq!(filter_cmds(&a.cmds, "/skill:")[0].tag, "p");
+        a.cmds.push(Cmd { name: "/skill:diagram".into(), desc: "".into(), soon: false, tag: "u".into() });
+        for q in ["/dia", "/skill:dia", "/sk"] {
+            assert!(filter_cmds(&a.cmds, q).iter().any(|c| c.name == "/skill:diagram"), "{q}");
+        }
 
         let (tx, rx) = std::sync::mpsc::channel();
         assert!(!run_extension(&mut a, &tx, "/nope x", "/nope", "x"), "nothing by that name");
