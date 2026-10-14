@@ -17,7 +17,7 @@ main.rs      CLI
     ├── llm    reqwest SSE streaming client
     ├── tools  read/write/edit/multi_edit/delete/move file, grep/glob/list_dir, run command (timeout),
     │          background jobs, todo, delegate (sub-agent), ask user, web_fetch, batch;
-    │          permission gate + project-root guard; parallel-safe calls run concurrently
+    │          permission gate + directory guard; parallel-safe calls run concurrently
     ├── hooks  user commands on events
     └── mcp    stdio MCP client; deferred servers + tool_search (BM25)
 
@@ -39,7 +39,7 @@ mod tui     custom ANSI TUI (no ratatui)
 | tui/theme.rs | colour palettes for `/themes` |
 | ai_core/mod.rs | run_agent loop, event system (SINK), tool dispatch, the embedded docs, self-test |
 | ai_core/llm.rs | reqwest SSE streaming client, tool-call argument accumulation |
-| ai_core/tools.rs | the built-in tools ([tools.md](tools.md)); project-root guard |
+| ai_core/tools.rs | the built-in tools ([tools.md](tools.md)); directory guard |
 | ai_core/mcp.rs | MCP client: stdio JSON-RPC 2.0, spawns servers, merges their tools in as `mcp__<server>__<tool>` and their prompts in as `/<server>:<prompt>`, `/mcp` toggles them |
 | ai_core/hooks.rs | hooks: user commands on six events, JSON in on stdin, a JSON decision out on stdout |
 

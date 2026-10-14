@@ -41,7 +41,9 @@ flags
                          else the built-in one)
   --append-system-prompt X  add X to it, repeatable (default ~/.rusti/APPEND_SYSTEM.md, then
                          ./.rusti/APPEND_SYSTEM.md once trusted)
-  --yolo                 start in devil mode: no permission prompts, no project-root guard
+  --add-dir PATH         let the file tools read and write PATH too, repeatable; they stay inside
+                         the working directory otherwise (also /add-dir; docs/safety.md)
+  --yolo                 start in devil mode: no permission prompts, no directory guard
                          (does not imply --trust)
   --trust                trust this folder's model.json and .rusti without asking
   --self-test            offline check against a fake server
@@ -79,6 +81,7 @@ slash commands (--tui)
   /new [NAME]     start a new session here, keeping the model, permission mode and MCP servers
   /tree           browse and branch           /undo             revert the last turn's file changes
   /plan           propose, change nothing     /commit           stage and commit the work
+  /add-dir [PATH] let the file tools use PATH too (alone: list; --remove PATH takes it back)
   /export         transcript to markdown      /reload           rebuild (or restart) and relaunch
   /compact [FOCUS] summarize the older history now, optionally focused on FOCUS
   /settings       show/hide status-line parts  /mcp              MCP servers on/off
@@ -206,6 +209,12 @@ fn main() {
     }
 
     ai_core::set_mode(start_mode(&args, std::env::var("RUSTI_YOLO").ok().as_deref()));
+    for d in values(&args, "--add-dir") {
+        if let Err(e) = ai_core::tools::add_dir(&d) {
+            eprintln!("--add-dir: {e}");
+            std::process::exit(1);
+        }
+    }
     if let Some(n) = get(&args, "--max-iters", "RUSTI_MAX_ITERS") {
         match n.parse::<usize>() {
             Ok(n) if n > 0 => ai_core::set_max_iters(n),

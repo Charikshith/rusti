@@ -438,7 +438,7 @@ const DOC_TOPICS: &str = "install/update (readme.md § Install), flags (readme.m
 models, API keys, config files, where config lives (docs/configuration.md § config files), prompt-cache markers (docs/configuration.md § prompt-cache markers), \
 read_file limits and read_max_bytes (docs/tools.md § read_file limits), parallel tool calls and batch (docs/tools.md § parallel tool calls and batch), \
 delegate and background jobs (docs/tools.md § sub-agents and background jobs), \
-permissions, Shift+Tab permission modes and --yolo (docs/safety.md § permission modes), project trust and --trust (docs/safety.md § project trust), \
+permissions, Shift+Tab permission modes and --yolo (docs/safety.md § permission modes), which folders the file tools may read and write, /add-dir, --add-dir (docs/safety.md § directory guard), project trust and --trust (docs/safety.md § project trust), \
 slash commands, keys, themes, status line, hiding thinking, @ file references and Tab completion (help.txt, docs/tui.md § slash commands), \
 sessions, /new, /resume, /tree, /undo (docs/sessions.md § session tree), MCP servers, deferred tools and tool_search (docs/extensions.md § MCP servers), \
 AGENTS.md, SYSTEM.md, --system-prompt (docs/configuration.md § project instructions), which shell commands run in, !/!! commands, \"shell\" and \
@@ -769,7 +769,7 @@ fn outside_root(w: &str) -> bool {
         // ~, $HOME, ${HOME}, $env:USERPROFILE and %USERPROFILE% name places the guard cannot resolve
         v.starts_with(['~', '$', '%'])
             || remote
-            || ((v == ".." || v.contains('/') || v.contains('\\')) && tools::guard(v).is_err())
+            || ((v == ".." || v.contains('/') || v.contains('\\')) && !tools::in_root(v))
     })
 }
 
@@ -800,7 +800,7 @@ fn risky(cmd: &str) -> bool {
 /// Whether auto mode runs a gated call without asking: in-project edits and
 /// moves, and commands off the risky list. delete_file, web_fetch and MCP tools still ask.
 fn auto_allows(name: &str, args: &Value) -> bool {
-    let inside = |k: &str| args[k].as_str().is_some_and(|p| tools::guard(p).is_ok());
+    let inside = |k: &str| args[k].as_str().is_some_and(tools::in_root);
     match name {
         "write_file" | "edit_file" | "multi_edit" => inside("path"),
         "move_file" => inside("from") && inside("to"),

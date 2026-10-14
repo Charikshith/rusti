@@ -9,6 +9,10 @@ fallback), `run_command` (with a timeout), `run_background` / `job_output` / `jo
 `todo`, `delegate`, `ask_user`, `web_fetch` (tags stripped) and `batch`; plus
 `tool_search` and `mcp__<server>__<tool>` from [MCP servers](extensions.md#mcp-servers).
 
+The file tools (`read_file`, `list_dir`, `glob`, `grep` and every writer) refuse paths outside the
+working directory unless added with `/add-dir`; `run_command` is not covered
+([safety.md § directory guard](safety.md#directory-guard)).
+
 A call whose arguments are not valid JSON is refused back to the model with the parse error,
 so it can resend the call, instead of running on defaults; an `ask_user` with no question is
 refused the same way rather than shown to you as an empty one.

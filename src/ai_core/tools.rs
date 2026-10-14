@@ -371,6 +371,9 @@ pub fn set_read_max(n: usize) {
 }
 
 pub fn read_file(path: &str, offset: usize, limit: usize) -> (bool, String) {
+    if let Err(e) = guard_read(path) {
+        return (false, e);
+    }
     if image_mime(path).is_some() {
         return read_image(path);
     }
@@ -881,13 +884,16 @@ fn have_rg() -> bool {
 /// Regex search via ripgrep when installed; plain substring search (std only) otherwise.
 pub fn grep(pattern: &str, path: &str, glob: &str) -> (bool, String) {
     let path = if path.is_empty() { "." } else { path };
+    if let Err(e) = guard_read(path) {
+        return (false, e);
+    }
     if have_rg() {
         let mut c = Command::new("rg");
         c.args(["-n", "--no-heading", "--color", "never", "--max-columns", "300", "-e", pattern]);
         if !glob.is_empty() {
             c.args(["-g", glob]);
         }
-        c.arg(path);
+        c.args(["--", path]); // a path named like a flag stays a path
         return match c.output() {
             Ok(o) => match o.status.code().unwrap_or(-1) {
                 0 => (true, truncate(&String::from_utf8_lossy(&o.stdout), MAX_RESULT)),
@@ -910,7 +916,11 @@ pub fn grep(pattern: &str, path: &str, glob: &str) -> (bool, String) {
         if !glob.is_empty() && !glob_match(glob, &rel) {
             continue;
         }
-        let Ok(s) = std::fs::read_to_string(root.join(&rel)) else { continue }; // skips binaries
+        let file = root.join(&rel);
+        if escapes(&file) {
+            continue;
+        }
+        let Ok(s) = std::fs::read_to_string(file) else { continue }; // skips binaries
         for (i, l) in s.lines().enumerate() {
             if l.contains(pattern) {
                 out.push_str(&format!("{rel}:{}:{}\n", i + 1, l.chars().take(300).collect::<String>()));
@@ -930,8 +940,11 @@ pub fn grep(pattern: &str, path: &str, glob: &str) -> (bool, String) {
 /// List files matching a glob (`*.rs`, `src/**/*.rs`). rg --files when installed, std walk otherwise.
 pub fn glob(pattern: &str, path: &str) -> (bool, String) {
     let path = if path.is_empty() { "." } else { path };
+    if let Err(e) = guard_read(path) {
+        return (false, e);
+    }
     if have_rg() {
-        let out = Command::new("rg").args(["--files", "-g", pattern, path]).output();
+        let out = Command::new("rg").args(["--files", "-g", pattern, "--", path]).output();
         return match out {
             Ok(o) if o.status.code() == Some(0) => (true, truncate(&String::from_utf8_lossy(&o.stdout).replace('\\', "/"), MAX_RESULT)),
             Ok(o) if o.status.code() == Some(1) => (true, "no files matched".into()),
@@ -949,6 +962,9 @@ pub fn glob(pattern: &str, path: &str) -> (bool, String) {
 /// Directory listing, depth 1 by default; directories end with '/'.
 pub fn list_dir(path: &str, depth: usize) -> (bool, String) {
     let path = if path.is_empty() { "." } else { path };
+    if let Err(e) = guard_read(path) {
+        return (false, e);
+    }
     let root = Path::new(path);
     if !root.is_dir() {
         return (false, format!("not a directory: {path}"));
@@ -1015,7 +1031,7 @@ fn walk(root: &Path, dir: &Path, max_depth: usize, depth: usize, follow_links: b
         out.push((rel, is_dir));
         if !is_dir {
             *files -= 1;
-        } else if depth + 1 < max_depth && (follow_links || e.file_type().is_ok_and(|t| t.is_dir())) {
+        } else if depth + 1 < max_depth && (follow_links && !escapes(&p) || e.file_type().is_ok_and(|t| t.is_dir())) {
             walk(root, &p, max_depth, depth + 1, follow_links, files, out);
         }
     }
@@ -1054,19 +1070,15 @@ fn seg_match(pat: &str, s: &str) -> bool {
     m(&p, &s)
 }
 
-/// Refuse writes outside the working directory (the project root). Resolves the
-/// deepest existing ancestor so new files and `..` tricks are judged on the real path.
-pub fn guard(path: &str) -> Result<(), String> {
-    if super::mode() == super::Mode::Devil {
-        return Ok(());
-    }
-    static ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
-    let root = ROOT.get_or_init(|| {
-        std::env::current_dir().and_then(|d| d.canonicalize()).unwrap_or_default()
-    });
+/// `path` as the filesystem sees it: the deepest existing ancestor canonicalised
+/// (symlinks and `..` followed), then the not-yet-existing tail put back.
+/// Fails closed: a path it cannot resolve is an error, never a guess.
+fn resolve(path: &str) -> Result<std::path::PathBuf, String> {
     let mut existing = std::path::PathBuf::from(if path.is_empty() { "." } else { path });
     let mut rest: Vec<std::ffi::OsString> = Vec::new();
-    while !existing.exists() {
+    // symlink_metadata, not exists(): a dangling link exists, and writing through it
+    // would create its target, so it must reach canonicalize and fail there
+    while existing.symlink_metadata().is_err() {
         match (existing.file_name().map(|n| n.to_owned()), existing.parent().map(|p| p.to_path_buf())) {
             (Some(n), Some(p)) => {
                 rest.push(n);
@@ -1079,11 +1091,94 @@ pub fn guard(path: &str) -> Result<(), String> {
     for r in rest.iter().rev() {
         full.push(r);
     }
-    if full.starts_with(root) {
-        Ok(())
-    } else {
-        Err(format!("refused: {path} is outside the project root {} (devil mode or --yolo allows it)", root.display()))
+    Ok(full)
+}
+
+/// The working directory, fixed at the first call: the project root.
+fn root() -> &'static Path {
+    static ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| std::env::current_dir().and_then(|d| d.canonicalize()).unwrap_or_default())
+}
+
+/// Folders the user granted with /add-dir (or --add-dir), canonical, for this run.
+static ADDED: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::new());
+
+pub fn added_dirs() -> Vec<std::path::PathBuf> {
+    ADDED.lock().unwrap().clone()
+}
+
+/// Grant `path` (a folder that exists) and everything under it to the file tools.
+pub fn add_dir(path: &str) -> Result<std::path::PathBuf, String> {
+    let full = Path::new(&expand_home(path)).canonicalize().map_err(|e| format!("cannot add {path}: {e}"))?;
+    if !full.is_dir() {
+        return Err(format!("cannot add {path}: not a directory"));
     }
+    let mut added = ADDED.lock().unwrap();
+    if !added.contains(&full) {
+        added.push(full.clone());
+    }
+    Ok(full)
+}
+
+/// Take a grant back. A folder deleted since is matched by the text it was added with.
+pub fn remove_dir(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = expand_home(path);
+    let full = Path::new(&p).canonicalize().unwrap_or_else(|_| p.into());
+    let mut added = ADDED.lock().unwrap();
+    match added.iter().position(|d| *d == full) {
+        Some(i) => Ok(added.remove(i)),
+        None => Err(format!("{path} was not added with /add-dir")),
+    }
+}
+
+/// Folders the model is sent to read by rusti itself, so reads (never writes) there need no
+/// grant: its own docs, and the skill folders whose SKILL.md it is told to read.
+fn read_extra() -> Vec<std::path::PathBuf> {
+    let mut v = vec![crate::config::home_dir().join("docs")];
+    v.extend(crate::resources::dirs("skills").into_iter().map(|(d, _)| d));
+    v.into_iter().filter_map(|d| d.canonicalize().ok()).collect()
+}
+
+/// Whether `full` (already resolved) is under the project root or a granted folder.
+fn allowed(full: &Path, extra: &[std::path::PathBuf]) -> bool {
+    full.starts_with(root()) || ADDED.lock().unwrap().iter().chain(extra).any(|d| full.starts_with(d))
+}
+
+fn check(path: &str, extra: &[std::path::PathBuf]) -> Result<(), String> {
+    if super::mode() == super::Mode::Devil {
+        return Ok(());
+    }
+    if allowed(&resolve(path)?, extra) {
+        return Ok(());
+    }
+    let dirs: Vec<String> = std::iter::once(root().to_path_buf()).chain(added_dirs()).map(|d| d.display().to_string()).collect();
+    Err(format!(
+        "refused: {path} is outside the allowed directories ({}). Do not retry; ask the user to run \
+         /add-dir <directory> to allow it (devil mode or --yolo lifts the check)",
+        dirs.join(", ")
+    ))
+}
+
+/// The file tools' write check: the project root and /add-dir folders only. Resolves the
+/// deepest existing ancestor so new files, symlinks and `..` tricks are judged on the real path.
+pub fn guard(path: &str) -> Result<(), String> {
+    check(path, &[])
+}
+
+/// The read, list and search check: `guard`, plus rusti's own docs and skill folders.
+pub fn guard_read(path: &str) -> Result<(), String> {
+    check(path, &read_extra())
+}
+
+/// Whether `path` is under the project root alone, ignoring /add-dir grants and devil mode:
+/// what auto mode needs to call a write routine.
+pub fn in_root(path: &str) -> bool {
+    resolve(path).is_ok_and(|full| full.starts_with(root()))
+}
+
+/// A symlink that leads somewhere a read may not go.
+fn escapes(path: &Path) -> bool {
+    path.symlink_metadata().is_ok_and(|m| m.is_symlink()) && guard_read(&path.to_string_lossy()).is_err()
 }
 
 pub fn delete_file(path: &str) -> (bool, String) {
@@ -1470,13 +1565,14 @@ mod tests {
     /// link to an ancestor would recurse forever); the tools still follow it.
     #[test]
     fn walk_follows_links_only_when_asked() {
-        let dir = std::env::temp_dir().join(format!("rusti_walk_{}", std::process::id()));
+        // inside the project root: a link leading out of it is not followed (below)
+        let dir = Path::new("target").join(format!("rusti_walk_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("real")).unwrap();
         std::fs::write(dir.join("real/a.txt"), "").unwrap();
         #[cfg(unix)]
-        let linked = std::os::unix::fs::symlink(dir.join("real"), dir.join("link"));
+        let linked = std::os::unix::fs::symlink(dir.join("real").canonicalize().unwrap(), dir.join("link"));
         #[cfg(windows)]
-        let linked = std::os::windows::fs::symlink_dir(dir.join("real"), dir.join("link"));
+        let linked = std::os::windows::fs::symlink_dir(dir.join("real").canonicalize().unwrap(), dir.join("link"));
         if linked.is_err() {
             std::fs::remove_dir_all(&dir).ok();
             return; // the OS refused to make a symlink
@@ -1490,6 +1586,122 @@ mod tests {
         assert!(skip.contains(&("link".into(), true)) && !skip.iter().any(|(p, _)| p.starts_with("link/")), "{skip:?}");
         assert!(list(true).contains(&("link/a.txt".into(), false)));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A scratch folder under the project root (so it is allowed) and one outside it.
+    fn scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let n = format!("rusti_dirs_{tag}_{}", std::process::id());
+        let (inside, outside) = (Path::new("target").join(&n), std::env::temp_dir().join(&n));
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "hunter2").unwrap();
+        (inside, outside)
+    }
+
+    fn refused(path: &str) -> bool {
+        resolve(path).map_or(true, |f| !allowed(&f, &[]))
+    }
+
+    #[test]
+    fn paths_outside_the_working_directory_are_refused() {
+        let (inside, outside) = scratch("paths");
+        let out = outside.to_string_lossy().into_owned();
+        assert!(!refused("src/main.rs") && !refused("not/yet/there.txt") && !refused("."));
+        for p in ["..", "../x", "src/../../x", "src/../..", "target/../../x", "not/yet/../../../x", "/etc/passwd", "/", &out, &format!("{out}/secret.txt"), &format!("{out}/not/yet")] {
+            assert!(refused(p), "{p}");
+        }
+        // `..` that comes back in is fine; the check is on the resolved path
+        assert!(!refused(&format!("{}/../../src", inside.display())));
+        for (name, r) in [
+            ("read", read_file(&format!("{out}/secret.txt"), 0, 0)),
+            ("read ..", read_file("../Cargo.toml", 0, 0)),
+            ("list", list_dir(&out, 0)),
+            ("glob", glob("*", &out)),
+            ("grep", grep("hunter2", &out, "")),
+            ("write", write_file(&format!("{out}/new.txt"), "x")),
+            ("edit", edit_file(&format!("{out}/secret.txt"), "hunter2", "x")),
+        ] {
+            assert!(!r.0 && r.1.contains("outside the allowed directories") && r.1.contains("/add-dir"), "{name}: {r:?}");
+        }
+        assert_eq!(std::fs::read_to_string(outside.join("secret.txt")).unwrap(), "hunter2");
+        assert!(!outside.join("new.txt").exists());
+        std::fs::remove_dir_all(&inside).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn add_dir_grants_its_subtree_and_remove_dir_takes_it_back() {
+        let (inside, outside) = scratch("add");
+        let sibling = std::path::PathBuf::from(format!("{}_sibling", outside.display()));
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        let (o, sub, sib) = (outside.to_string_lossy().into_owned(), format!("{}/sub/new.txt", outside.display()), sibling.to_string_lossy().into_owned());
+        assert!(add_dir(&format!("{o}/nope")).is_err() && add_dir(&format!("{o}/secret.txt")).is_err(), "a folder that exists");
+        let granted = add_dir(&o).unwrap();
+        assert!(added_dirs().contains(&granted));
+        assert_eq!(read_file(&format!("{o}/secret.txt"), 0, 0), (true, "hunter2".into()));
+        assert!(write_file(&sub, "x").0 && list_dir(&o, 2).1.contains("sub/new.txt"));
+        assert!(glob("*.txt", &o).1.contains("secret.txt") && grep("hunter2", &o, "").1.contains("secret.txt"));
+        // a granted folder's name as a prefix of its sibling's is not a grant
+        assert!(read_file(&format!("{sib}/x"), 0, 0).1.contains("outside the allowed"));
+        assert!(refused(&sib) && refused(&format!("{o}/../{}_sibling", outside.file_name().unwrap().to_string_lossy())));
+        // ../ out of a granted folder is out again
+        assert!(refused(&format!("{o}/../x")));
+        // a grant is not auto mode's "inside the project"
+        assert!(!in_root(&o));
+        assert!(remove_dir(&o).is_ok() && remove_dir(&o).is_err());
+        assert!(!added_dirs().contains(&granted));
+        assert!(!read_file(&format!("{o}/secret.txt"), 0, 0).0);
+        std::fs::remove_dir_all(&inside).ok();
+        std::fs::remove_dir_all(&outside).ok();
+        std::fs::remove_dir_all(&sibling).ok();
+    }
+
+    #[test]
+    fn rusti_own_folders_are_readable_but_not_writable() {
+        let (inside, outside) = scratch("extra");
+        let full = outside.join("secret.txt").canonicalize().unwrap();
+        assert!(!allowed(&full, &[]) && allowed(&full, &[outside.canonicalize().unwrap()]));
+        std::fs::remove_dir_all(&inside).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_working_directory_is_judged_by_where_it_leads() {
+        let (inside, outside) = scratch("link");
+        let abs = |p: &Path| p.canonicalize().unwrap();
+        let (to_dir, to_file, dangling) = (inside.join("to_dir"), inside.join("to_file"), inside.join("dangling"));
+        std::os::unix::fs::symlink(abs(&outside), &to_dir).unwrap();
+        std::os::unix::fs::symlink(abs(&outside).join("secret.txt"), &to_file).unwrap();
+        std::os::unix::fs::symlink(abs(&outside).join("created.txt"), &dangling).unwrap();
+        let p = |l: &Path, rest: &str| format!("{}{rest}", l.display());
+        assert!(!read_file(&p(&to_file, ""), 0, 0).0 && !read_file(&p(&to_dir, "/secret.txt"), 0, 0).0);
+        assert!(!list_dir(&p(&to_dir, ""), 0).0 && !glob("*", &p(&to_dir, "")).0 && !grep("hunter2", &p(&to_dir, ""), "").0);
+        assert!(!write_file(&p(&to_dir, "/new.txt"), "x").0 && !write_file(&p(&to_file, ""), "x").0);
+        // writing through a dangling link would create its target out there
+        assert!(!write_file(&p(&dangling, ""), "x").0 && !outside.join("created.txt").exists());
+        // a walk from inside does not follow the links out, nor does the substring grep read through them
+        let mut v = Vec::new();
+        walk(&inside, &inside, usize::MAX, 0, true, &mut { usize::MAX }, &mut v);
+        assert!(v.iter().any(|(n, _)| n == "to_dir") && !v.iter().any(|(n, _)| n.starts_with("to_dir/")), "{v:?}");
+        assert!(escapes(&to_file) && escapes(&to_dir) && !escapes(&inside));
+        // once the target is granted the same link works
+        let granted = add_dir(&outside.to_string_lossy()).unwrap();
+        assert_eq!(read_file(&p(&to_file, ""), 0, 0), (true, "hunter2".into()));
+        remove_dir(&granted.to_string_lossy()).unwrap();
+        assert!(!read_file(&p(&to_file, ""), 0, 0).0);
+        std::fs::remove_dir_all(&inside).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    /// Drive letters and UNC shares have no meaning on unix; there they are just odd file names.
+    #[cfg(windows)]
+    #[test]
+    fn drive_and_unc_paths_outside_the_working_directory_are_refused() {
+        for p in [r"C:\Windows\win.ini", r"c:/windows/win.ini", r"\\?\C:\Windows", r"\\localhost\c$\Windows", r"..\..\Windows", r"C:\..\Windows"] {
+            assert!(refused(p), "{p}");
+        }
     }
 
     /// The `@` index lists the project's files and their folders with `/`,

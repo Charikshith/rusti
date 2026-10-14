@@ -1,0 +1,6 @@
+## Session 2026-10-14: feat-add-dir-guard — file tools stay in the working directory (issue #38)
+- ai_core/tools.rs: guard() split into resolve() (deepest existing ancestor canonicalised, dangling links fail closed), allowed(), check(); guard() for every file tool, guard_read() adds rusti's docs and skill folders, in_root() for auto mode and the risky-command check. add_dir / remove_dir / added_dirs hold the /add-dir grants. read_file, list_dir, glob, grep now call guard_read; the walk and the substring grep skip symlinks that leave the allowed folders; rg calls take `--` before the path.
+- tui/app.rs: /add-dir [path | --remove path]. main.rs: --add-dir PATH, help text.
+- docs: safety.md "directory guard" (replaces "project-root guard"), readme, tui.md, tools.md, json-rpc.md, architecture.md; DOC_TOPICS points the in-app help at the new section.
+- Verification: cargo test 138 unit + 11 rpc + 1 trust, rusti --self-test; see harness/features/feat-add-dir-guard.json. No Rust toolchain was in the sandbox: rustup plus gcc/libc6-dev/libssl-dev debs unpacked under the scratchpad.
+- Open: shell commands and MCP tools are outside the guard (stated in docs/safety.md); no RPC command to add a folder to a running --rpc session (only --add-dir at launch); Windows drive/UNC test compiled only on Windows and not run.
