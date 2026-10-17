@@ -1079,7 +1079,7 @@ pub fn caret_at(input: &str, cursor: usize) -> (usize, usize) {
 
 /// Char ranges of `line` that each fit `avail` columns: a long line wraps onto
 /// further rows instead of scrolling out of view. An empty line is one empty row.
-fn wrap_ranges(line: &str, avail: usize) -> Vec<(usize, usize)> {
+fn input_wrap_ranges(line: &str, avail: usize) -> Vec<(usize, usize)> {
     let avail = avail.max(1);
     let (mut out, mut start, mut used) = (Vec::new(), 0, 0);
     for (i, ch) in line.chars().enumerate() {
@@ -1099,7 +1099,7 @@ fn wrap_ranges(line: &str, avail: usize) -> Vec<(usize, usize)> {
 fn caret_pos(input: &str, cursor: usize, avail: usize) -> (usize, usize) {
     let (mut row, mut seen) = (0, 0); // rows above, chars before this line ('\n's included)
     for line in input.split('\n') {
-        let ranges = wrap_ranges(line, avail);
+        let ranges = input_wrap_ranges(line, avail);
         let n = line.chars().count();
         if cursor >= seen && cursor <= seen + n {
             let c = cursor - seen;
@@ -1120,7 +1120,7 @@ fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
     let mut out = Vec::new();
     let (owner, ccol) = caret_pos(input, cursor, avail);
     for line in input.split('\n') {
-        for (s, e) in wrap_ranges(line, avail) {
+        for (s, e) in input_wrap_ranges(line, avail) {
             let prefix = if out.is_empty() { format!("{}> {RESET}", theme::current().user) } else { "  ".to_string() };
             let chars: Vec<char> = line.chars().collect();
             let text = |r: &[char]| r.iter().collect::<String>();
