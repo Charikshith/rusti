@@ -1398,6 +1398,12 @@ pub fn edit_stat(result: &str) -> Option<&str> {
         .then(|| &first[first.len() - plus.len() - minus.len() - 1..])
 }
 
+/// Whether a tool summary is an ask_user call, which the TUI shows as its own
+/// question block instead of a tool row.
+pub fn is_ask_user(summary: &str) -> bool {
+    summary.starts_with("ask_user(")
+}
+
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
 /// Verb first, so a row reads on its own ("run cd", "read x"), and the TUI can
 /// fold a run of reads into one row by the verb alone.

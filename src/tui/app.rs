@@ -1068,6 +1068,8 @@ pub fn ui_loop(
                     narrate(&mut app);
                     app.flush();
                     app.thinking = false;
+                    // ask_user shows as its question block (see ask), not as a tool row
+                    if ai_core::is_ask_user(&summary) { continue; }
                     app.lines.push(format!("  ⠋ {summary}"));
                     app.tool_rows.push((id, app.lines.len() - 1, false));
                 }
@@ -1341,7 +1343,7 @@ pub fn ask(app: &mut App, question: String, choices: Vec<(String, String)>, repl
             }
         }
         None => {
-            app.lines.push(format!("  ℹ {question}"));
+            app.lines.push(format!("  ◆ Question: {question}"));
             app.ask_line = Some(app.lines.len() - 1);
         }
     }
@@ -1398,6 +1400,9 @@ fn narrate(app: &mut App) {
 /// reading, ✋ when the user approved it. Output stays behind Ctrl+O. A run of
 /// successful reads folds into one row, since each on its own says little.
 pub fn tool_end(app: &mut App, id: u64, summary: String, ok: bool, ms: u128, output: &str) {
+    if ok && ai_core::is_ask_user(&summary) {
+        return; // its question line already holds the answer
+    }
     let time = if ms >= 100 { format!("  {}", ai_core::took(ms)) } else { String::new() };
     let pos = app.tool_rows.iter().position(|r| r.0 == id);
     let (row, hand) = pos.map(|p| app.tool_rows.remove(p)).map_or((None, false), |r| (Some(r.1), r.2));
