@@ -63,11 +63,6 @@ Where: ai_core/mod.rs:566 (the self-test's fake server)
 
 ## Safety
 
-### Read-Side Sandbox
-When: Model reads/lists/greps paths outside the project (../, absolute, ~) — writes are already guarded
-What: Extend `tools::guard` to read_file/list_dir/grep/glob behind an `--allow-outside` flag; today reads are deliberately open so the model can look at dependency sources
-Where: ai_core/tools.rs guard()
-
 ### Outside-Root Edits Ask Before Being Refused
 When: Manual mode, an edit to a path outside the project: the user answers Yes, then the root guard refuses it anyway
 What: Check the root guard before the permission prompt, so a call that will be refused is not asked about first

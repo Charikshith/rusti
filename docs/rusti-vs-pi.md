@@ -28,7 +28,7 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 - **Permission gate built in.**
   - rusti: each write, edit, command, background job, web fetch and MCP call asks Yes, No, or "Yes, and stop asking". An "always" answer is saved per project in `./model.json` `allow` (`ai_core/mod.rs`).
   - Pi: its docs say it "does not ask for approval before every tool call" (`docs/security.md:3`). Approval gates exist only as example extensions (`examples/extensions/permission-gate.ts`, `confirm-destructive.ts`, `protected-paths.ts`).
-- **Project-root write guard.** rusti refuses writes outside the working directory unless `--yolo` is given (`ai_core/tools.rs`).
+- **Directory guard.** rusti's file tools refuse reads and writes outside the working directory unless the folder is added with `/add-dir` or `--yolo` is given; shell commands are not covered (`ai_core/tools.rs`).
 - **Plan mode as a core toggle.** `/plan` refuses every gated tool, even under `--yolo` (`ai_core/mod.rs`). In Pi, plan mode is only an example extension (`examples/extensions/plan-mode/`).
 - **Sub-agents, background jobs, todo, ask_user and web_fetch are built-in tools.**
   - rusti ships `delegate`, `run_background`, `job_output`, `job_stop`, `todo`, `ask_user` and `web_fetch` (`ai_core/mod.rs`).
@@ -195,8 +195,8 @@ MCP, codemode and tool_search as built-in extensions (`CHANGELOG.md` 0.99.0 "Add
 | Approval prompts | **yes**: gated tools and every MCP tool ask Yes, No or "stop asking" (`ai_core/mod.rs`) | **no**: "does not ask for approval before every tool call" (`docs/security.md:3`) | Opposite defaults |
 | Saved approvals | **yes**: per-project `allow` in `./model.json`; no UI to forget them (open-work) | n/a | |
 | Plan mode | **yes**: `/plan` or Shift+Tab in the TUI; no `--plan` flag | **no** in core (example `plan-mode/`) | |
-| Write guard | **yes**: project-root guard (`ai_core/tools.rs`) | **no** in core (example `protected-paths.ts`) | |
-| Read sandbox | **no**: open by design (open-work) | **no** | Same |
+| Write guard | **yes**: directory guard (`ai_core/tools.rs`) | **no** in core (example `protected-paths.ts`) | |
+| Read sandbox | **partly**: file tools only, `/add-dir` grants folders; the shell is not sandboxed | **no** | rusti guards file tools |
 | Bypass | `--yolo` / `RUSTI_YOLO=1`, or devil mode via Shift+Tab; auto mode skips prompts for routine work (`docs/safety.md`) | n/a; already ungated | |
 | Non-interactive | piped runs deny every gated tool unless `--yolo` is given (`docs/safety.md`) | runs ungated | |
 | Project trust | **yes**: a `./model.json` that sets `mcp`, `shell`, `shell_command_prefix`, `hooks`, `read_allow` or `allow`, or a `./.rusti/` with prompts, skills, themes, `SYSTEM.md` or `APPEND_SYSTEM.md`, or a `./.agents/skills`, is asked about once (Yes / No / Always, saved in `~/.rusti/trust.json`); piped and one-shot runs need `--trust` (`config.rs`) | **partial**: gates loading of project settings, extensions, skills, prompts, themes, `SYSTEM.md` and `mcp.json`, but not tool actions or context files. Decided by `/trust`, `-a/--approve` or `defaultProjectTrust` (`docs/security.md:27-57`) | Both gate startup config, not tool actions |

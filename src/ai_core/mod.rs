@@ -654,13 +654,13 @@ const GATED: &[&str] = &["write_file", "edit_file", "multi_edit", "run_command",
 static ALLOWED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// The permission mode, cycled with Shift+Tab in the TUI. The permission gate,
-/// plan mode's refusals and the project-root guard all read this one state.
+/// plan mode's refusals and the directory guard all read this one state.
 /// - Manual: every gated call asks (the default)
 /// - Plan: read and think, change nothing. It outranks a saved "always",
 ///   because turning it on is the user explicitly asking for hands off
 /// - Auto: routine edits and commands inside the project run unasked; the
 ///   risky ones still ask (auto_allows)
-/// - Devil: no prompts and no project-root guard (--yolo)
+/// - Devil: no prompts and no directory guard (--yolo)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Manual,
