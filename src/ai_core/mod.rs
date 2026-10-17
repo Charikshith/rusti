@@ -1398,6 +1398,12 @@ pub fn edit_stat(result: &str) -> Option<&str> {
         .then(|| &first[first.len() - plus.len() - minus.len() - 1..])
 }
 
+/// Whether a tool summary is an ask_user call, which the TUI shows as its own
+/// question block instead of a tool row.
+pub fn is_ask_user(summary: &str) -> bool {
+    summary.starts_with("ask_user(")
+}
+
 /// Short human-ish summary for a tool call (path or command, not raw JSON).
 /// Verb first, so a row reads on its own ("run cd", "read x"), and the TUI can
 /// fold a run of reads into one row by the verb alone.
@@ -1421,8 +1427,6 @@ pub fn tool_summary(name: &str, args: &Value) -> String {
         "todo" => format!("todo ({} items)", args["items"].as_array().map_or(0, |a| a.len())),
         "delegate" => format!("delegate: {}", args["task"].as_str().unwrap_or("?").chars().take(80).collect::<String>()),
         "web_fetch" => args["url"].as_str().unwrap_or("?").to_string(),
-        // the question is shown as its own block, not as raw JSON
-        "ask_user" => "ask_user".to_string(),
         "batch" => format!("batch ({} calls)", args["calls"].as_array().map_or(0, |a| a.len())),
         n if mcp::is_mcp(n) => {
             let mut it = n.trim_start_matches("mcp__").splitn(2, "__");

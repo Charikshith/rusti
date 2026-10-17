@@ -1069,7 +1069,7 @@ pub fn ui_loop(
                     app.flush();
                     app.thinking = false;
                     // ask_user shows as its question block (see ask), not as a tool row
-                    if summary == "ask_user" { continue; }
+                    if ai_core::is_ask_user(&summary) { continue; }
                     app.lines.push(format!("  ⠋ {summary}"));
                     app.tool_rows.push((id, app.lines.len() - 1, false));
                 }
@@ -1400,7 +1400,7 @@ fn narrate(app: &mut App) {
 /// reading, ✋ when the user approved it. Output stays behind Ctrl+O. A run of
 /// successful reads folds into one row, since each on its own says little.
 pub fn tool_end(app: &mut App, id: u64, summary: String, ok: bool, ms: u128, output: &str) {
-    if ok && summary == "ask_user" {
+    if ok && ai_core::is_ask_user(&summary) {
         return; // its question line already holds the answer
     }
     let time = if ms >= 100 { format!("  {}", ai_core::took(ms)) } else { String::new() };
