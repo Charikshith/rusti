@@ -1606,7 +1606,7 @@ pub fn mode_label(m: ai_core::Mode) -> (&'static str, &'static str) {
 /// full it is, fitted to `w` columns. Every segment except the mode is
 /// toggleable via /settings — the mode is what you are IN, not decoration, so
 /// hiding it would hide why a write is refused, or why it ran unasked. The
-/// mode's description gives way first on a narrow terminal, its name never.
+/// mode shows by name only, no description.
 pub fn footer_right(
     f: &crate::config::Footer, mode: ai_core::Mode, session: &str, model: &str, branch: &str,
     sess_tok: u64, ctx: u64, limit: u64, cache_pct: Option<u64>, w: usize,
@@ -1633,16 +1633,9 @@ pub fn footer_right(
     if let (true, Some(p)) = (f.cache, cache_pct) {
         parts.push(format!("cache {p}%"));
     }
-    let (name, desc) = mode_label(mode);
+    let (name, _) = mode_label(mode);
     let rest: String = parts.iter().map(|p| format!(" · {p}")).collect();
-    let room = w.saturating_sub(name.len() + 2 + super::columns(&rest));
-    let desc = match super::columns(desc) {
-        n if n <= room => desc.to_string(),
-        // ponytail: under ~8 columns a cut description is noise, so it goes
-        _ if room >= 8 => format!("{}…", super::truncate_str(desc, room - 1)),
-        _ => return super::truncate_str(&format!("{name}{rest}"), w),
-    };
-    format!("{name}: {desc}{rest}")
+    super::truncate_str(&format!("{name}{rest}"), w)
 }
 
 /// Move a picker selection by delta and keep it inside the visible window.

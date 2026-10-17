@@ -1105,32 +1105,27 @@ mod tests {
         let fr = |m, session, branch, tok, ctx, cache| app::footer_right(&on, m, session, "mimo", branch, tok, ctx, 100_000, cache, 200);
         assert_eq!(
             fr(Manual, "main", "master", 4321, 25_000, None),
-            "manual: every write, command and fetch asks · main · mimo · ⎇ master · 4.3k tok · ctx 25%"
+            "manual · main · mimo · ⎇ master · 4.3k tok · ctx 25%"
         );
         // fresh session: no name, no branch, nothing generated — but ctx is
         // reported at 0% rather than hidden, since it resets every turn
-        assert_eq!(fr(Manual, "", "", 0, 0, None), "manual: every write, command and fetch asks · mimo · ctx 0%");
+        assert_eq!(fr(Manual, "", "", 0, 0, None), "manual · mimo · ctx 0%");
         // cache hits show once the server reports them, and only then
         assert!(fr(Manual, "", "", 0, 0, Some(82)).ends_with(" · mimo · ctx 0% · cache 82%"));
     }
 
-    /// Every mode, manual too, leads with its name and what it means — always,
+    /// Every mode, manual too, leads the status line by name alone — always,
     /// not as a notice that ages out, so the status line is never ambiguous.
     #[test]
-    fn footer_always_names_and_explains_the_mode() {
+    fn footer_always_names_the_mode() {
         use crate::ai_core::Mode::*;
         let on = crate::config::Footer::default();
         for m in [Manual, Plan, Auto, Devil] {
-            let (name, desc) = app::mode_label(m);
+            let (name, _) = app::mode_label(m);
             let f = app::footer_right(&on, m, "", "mimo", "", 0, 0, 100_000, None, 200);
-            assert_eq!(f, format!("{name}: {desc} · mimo · ctx 0%"));
+            assert_eq!(f, format!("{name} · mimo · ctx 0%"));
         }
-        // narrow: the description gives way, ellipsised, before the other segments
-        let f = app::footer_right(&on, Auto, "", "mimo", "", 0, 0, 100_000, None, 35);
-        assert_eq!(f, "auto: project edit… · mimo · ctx 0%");
-        assert_eq!(f.chars().count(), 35);
-        // narrower still: the description goes entirely; the name never does
-        assert_eq!(app::footer_right(&on, Devil, "", "mimo", "", 0, 0, 100_000, None, 20), "DEVIL · mimo · ctx 0");
+        // narrow: the other segments are cut, the name leads
         assert_eq!(app::footer_right(&on, Devil, "", "mimo", "", 0, 0, 100_000, None, 5), "DEVIL");
     }
 
@@ -1142,15 +1137,15 @@ mod tests {
         };
         let fr = |f: &crate::config::Footer, m| app::footer_right(f, m, "main", "mimo", "master", 4321, 25_000, 100_000, Some(82), 200);
         // everything off still announces the mode: it is why writes get refused, or run unasked
-        assert_eq!(fr(&off, Plan), "plan: read-only, writes and commands refused");
-        assert_eq!(fr(&off, Manual), "manual: every write, command and fetch asks");
-        assert_eq!(fr(&off, Auto), "auto: project edits run unasked, risky ones ask");
-        // entering devil says plainly what is off
-        assert_eq!(fr(&off, Devil), "DEVIL: no prompts, root guard off");
+        assert_eq!(fr(&off, Plan), "plan");
+        assert_eq!(fr(&off, Manual), "manual");
+        assert_eq!(fr(&off, Auto), "auto");
+        // the name alone, whichever mode
+        assert_eq!(fr(&off, Devil), "DEVIL");
         let ctx_only = crate::config::Footer { context: true, ..off.clone() };
-        assert!(fr(&ctx_only, Manual).ends_with("asks · ctx 25%"));
+        assert!(fr(&ctx_only, Manual).ends_with("manual · ctx 25%"));
         let cache_only = crate::config::Footer { cache: true, ..off };
-        assert!(fr(&cache_only, Manual).ends_with("asks · cache 82%"));
+        assert!(fr(&cache_only, Manual).ends_with("manual · cache 82%"));
     }
 
     #[test]
