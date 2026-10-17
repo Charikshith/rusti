@@ -31,12 +31,16 @@ Every picker filters as you type.
 
 ## status line
 
-The status line leads with the permission mode and what it means (`auto: project edits run
-unasked, risky ones ask`), rewritten in place when Shift+Tab or `/plan` changes it: manual
-plain, plan in the info colour, auto in the warning colour, `DEVIL` in bold red. Then come the
+The status line leads with the permission mode's name (`manual`, `plan`, `auto`, `DEVIL`), rewritten in place when Shift+Tab or `/plan` changes
+it: manual plain, plan in the info colour, auto in the warning colour, `DEVIL` in bold red. Then come the
 session, model, git branch, tokens used, how full the context is and, when the provider reports
 it, how much of the last prompt came from its cache (`cache 82%`). `/settings` hides or shows
-each part but the mode; a narrow terminal cuts the mode's meaning first, never its name.
+each part but the mode.
+
+## input
+
+A query wider than the terminal wraps onto further rows and the input box grows to hold it, so
+the whole query stays visible and the cursor moves down a row.
 
 ## transcript
 
