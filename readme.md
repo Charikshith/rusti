@@ -28,7 +28,7 @@ rusti "add a --version flag to src/main.rs"   # one-shot: run the task, print th
 rusti --list | --use <name> | --add     # show, switch or add saved model profiles
 rusti --resume                          # continue the latest session
 rusti --tree                            # browse the session tree and branch
-rusti --yolo "task"                     # devil mode: no prompts, no project-root guard (RUSTI_YOLO=1)
+rusti --yolo "task"                     # devil mode: no prompts, no directory guard (RUSTI_YOLO=1)
 rusti --trust "task"                    # trust this folder's model.json / .rusti without asking
 rusti --json "task"                     # the run as JSON lines, for programs; --rpc to drive it
 rusti --self-test                       # offline check against a fake server
@@ -53,6 +53,7 @@ override the saved settings, as do their env vars `RUSTI_MAX_ITERS` and `RUSTI_C
 | `/model`, `/new`, `/resume`, `/tree` | switch model, new session, switch session, branch |
 | `/undo`, `/commit`, `/export` | revert the last turn's files, commit the work, save the transcript |
 | `/plan`, `/compact`, `/mcp`, `/themes`, `/settings` | plan mode, compact now, MCP servers, palette, status line |
+| `/add-dir <path>` | let the file tools use another folder (alone: list; `--remove <path>`); they stay in the working directory otherwise |
 | `/reload` | rebuild rusti from source and relaunch in place; an installed binary just restarts to reload config |
 
 Your own prompt templates, skills and MCP prompts join the `/` menu too.
@@ -67,9 +68,11 @@ Tools that change files, run commands or reach the network ask first:
 | manual | the default: every such tool asks |
 | plan | reads and searches only; every write and command is refused (also `/plan`) |
 | auto | edits inside the project root and non-risky commands run without asking; deletes, `web_fetch`, MCP tools and risky commands (`rm`, `git push`, installs, writes outside the root, …) still ask |
-| devil | no prompts and no project-root guard; same as `--yolo` |
+| devil | no prompts and no directory guard; same as `--yolo` |
 
-Outside devil mode, writes outside the working directory are refused. Piped and one-shot runs
+Outside devil mode, the file tools refuse any path outside the working directory, reads
+included, until you grant a folder with `/add-dir <path>` (or `--add-dir`); shell commands are not
+sandboxed. Piped and one-shot runs
 deny every prompt unless `--yolo`. A cloned repo's `model.json` / `.rusti/` keys that run
 code or steer permissions are ignored until you trust the folder. Details:
 [docs/safety.md](docs/safety.md).
@@ -95,7 +98,7 @@ rusti's docs are compiled into the binary and written to `~/.rusti/docs/`, so yo
 rusti about itself ("how do I change the theme?") and it reads them.
 
 - [docs/configuration.md](docs/configuration.md): config files, prompt-cache markers, shell commands, project instructions and system prompts
-- [docs/safety.md](docs/safety.md): permission prompts and modes, the risky-command list, project-root guard, project trust
+- [docs/safety.md](docs/safety.md): permission prompts and modes, the risky-command list, directory guard and `/add-dir`, project trust
 - [docs/tools.md](docs/tools.md): the built-in tools, read limits, parallel calls and `batch`, sub-agents and background jobs
 - [docs/tui.md](docs/tui.md): slash commands, status line, transcript, steering, `@` references, images, `/reload`
 - [docs/sessions.md](docs/sessions.md): the session tree, `/new`, `/resume`, `/tree`, `/undo`, compaction

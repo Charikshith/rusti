@@ -17,7 +17,8 @@ the same way.
 then a last `task_end` that adds `"answer"` (the final reply). Exit code 0 or 1. Questions
 cannot be answered here: a permission prompt is refused unless `--yolo`, and `ask_user` gets
 `"no answer given"`; the `ask` line still shows what was asked. Like any one-shot run, the
-folder is untrusted unless `--trust`.
+folder is untrusted unless `--trust`. The file tools stay in the working directory; pass
+`--add-dir PATH` (repeatable) to let them use another folder ([safety.md](safety.md#directory-guard)).
 
 ```sh
 rusti --json "run the tests and fix what fails" | jq -c 'select(.type=="tool_end")'

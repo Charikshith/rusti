@@ -45,6 +45,7 @@ const BUILTINS: &[(&str, &str, bool)] = &[
     ("/quit", "exit rusti (same as ctrl+c twice)", false),
     ("/undo", "put back the files the last turn changed and rewind to before it", false),
     ("/commit", "stage the work and commit it with a drafted message", false),
+    ("/add-dir", "/add-dir [path | --remove path] - let the file tools use another folder; alone, list them", false),
     ("/plan", "toggle plan mode: read and propose, change nothing (shift+tab cycles all modes)", false),
     ("/settings", "choose which segments the status line shows", false),
     ("/themes", "pick the colour palette, or /themes <name>", false),
@@ -1237,6 +1238,30 @@ fn handle_command(raw: &str, app: &mut App, job_tx: &Sender<Job>) -> bool {
             let to = (!arg.is_empty()).then(|| arg.to_string());
             let _ = job_tx.send(Job::Export(to));
         }
+        "/add-dir" if arg.is_empty() => {
+            let dirs = ai_core::tools::added_dirs();
+            if dirs.is_empty() {
+                app.lines.push("  ℹ file tools stay in the working directory; /add-dir <path> lets them use another folder".into());
+            }
+            for d in dirs {
+                app.lines.push(format!("  ℹ added: {}", d.display()));
+            }
+        }
+        "/add-dir" if arg.strip_prefix("--remove").is_some_and(|p| p.is_empty() || p.starts_with(' ')) => {
+            let path = arg["--remove".len()..].trim();
+            if path.is_empty() {
+                app.lines.push("  ✗ usage: /add-dir --remove <path> (/add-dir lists them)".into());
+            } else {
+                match ai_core::tools::remove_dir(path) {
+                    Ok(d) => app.lines.push(format!("  ✓ file tools no longer reach {}", d.display())),
+                    Err(e) => app.lines.push(format!("  ✗ {e}")),
+                }
+            }
+        }
+        "/add-dir" => match ai_core::tools::add_dir(arg) {
+            Ok(d) => app.lines.push(format!("  ✓ file tools may now use {} (this run)", d.display())),
+            Err(e) => app.lines.push(format!("  ✗ {e}")),
+        },
         "/plan" => {
             let on = !ai_core::plan_mode();
             // the status line carries the state and what it means
@@ -2008,6 +2033,24 @@ mod tests {
         }
         assert!(a.lines.is_empty() && a.notice.is_none());
         assert_eq!(ai_core::mode(), ai_core::Mode::Manual, "an even number of toggles is back where it started");
+    }
+
+    /// /add-dir lists, adds and (with --remove) takes back a folder, and says so.
+    #[test]
+    fn add_dir_command_lists_adds_and_removes() {
+        let dir = std::env::temp_dir().join(format!("rusti_add_dir_cmd_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_string_lossy().into_owned();
+        let mut a = app();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        for c in [format!("/add-dir {d}"), "/add-dir".into(), format!("/add-dir --remove {d}"), format!("/add-dir --remove {d}"), "/add-dir --remove".into(), format!("/add-dir {d}/nope")] {
+            handle_command(&c, &mut a, &tx);
+        }
+        let say = a.lines.join("\n");
+        assert!(say.contains("may now use") && say.contains("added: ") && say.contains("no longer reach"), "{say}");
+        assert!(say.contains("was not added") && say.contains("usage: /add-dir --remove") && say.contains("cannot add"), "{say}");
+        assert!(!ai_core::tools::added_dirs().contains(&dir.canonicalize().unwrap()));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// /mcp on a server that never answers its handshake ran up to three

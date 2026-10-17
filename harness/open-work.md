@@ -63,11 +63,6 @@ Where: ai_core/mod.rs:566 (the self-test's fake server)
 
 ## Safety
 
-### Read-Side Sandbox
-When: Model reads/lists/greps paths outside the project (../, absolute, ~) — writes are already guarded
-What: Extend `tools::guard` to read_file/list_dir/grep/glob behind an `--allow-outside` flag; today reads are deliberately open so the model can look at dependency sources
-Where: ai_core/tools.rs guard()
-
 ### Outside-Root Edits Ask Before Being Refused
 When: Manual mode, an edit to a path outside the project: the user answers Yes, then the root guard refuses it anyway
 What: Check the root guard before the permission prompt, so a call that will be refused is not asked about first
@@ -154,3 +149,8 @@ When: feat-extension-model landed templates, skills, theme files, hooks and MCP 
 What: expand `/template` and `/skill:` in one-shot runs too; `${@:N:L}` argument slices; argument completion
 for template hints
 Where: main.rs task dispatch, resources.rs expand, tui/app.rs menu_items
+
+### Directory Guard Follow-ups
+When: feat-add-dir-guard fenced the file tools (issue #38); the captain decides whether shell commands join
+What: (1) shell coverage for run_command / run_background / `!cmd` (sandbox or path-word check; today only auto mode's risky list looks at outside paths); (2) an RPC `add_dir` command so a long-lived --rpc host can grant a folder without a restart (only --add-dir at launch today); (3) a hook event for the guard's own policy if pre_tool (which can only narrow) is not enough; (4) MCP tools are outside the guard
+Where: ai_core/tools.rs guard/check, ai_core/mod.rs permitted/auto_allows, rpc.rs, docs/safety.md § directory guard

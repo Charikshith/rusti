@@ -16,6 +16,8 @@ with word wrap, streaming text, and an input box for `ask_user` questions.
 - `/new [name]`, `/resume`, `/rename`, `/tree` manage sessions ([sessions.md](sessions.md)).
 - `/plan` toggles plan mode: the agent reads and proposes but every write and command is
   refused; leaving it returns to manual ([safety.md](safety.md)).
+- `/add-dir <path>` lets the file tools read and write another folder for this run; `/add-dir` alone
+  lists them and `/add-dir --remove <path>` takes one back ([safety.md § directory guard](safety.md#directory-guard)).
 - `/undo` puts back the files the last turn changed; `/commit` stages and commits the work;
   `/export` writes the transcript out as markdown.
 - `/compact [focus]` summarizes the older history now ([sessions.md § compaction](sessions.md#compaction)).
