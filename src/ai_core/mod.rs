@@ -1421,6 +1421,8 @@ pub fn tool_summary(name: &str, args: &Value) -> String {
         "todo" => format!("todo ({} items)", args["items"].as_array().map_or(0, |a| a.len())),
         "delegate" => format!("delegate: {}", args["task"].as_str().unwrap_or("?").chars().take(80).collect::<String>()),
         "web_fetch" => args["url"].as_str().unwrap_or("?").to_string(),
+        // the question is shown as its own block, not as raw JSON
+        "ask_user" => "ask_user".to_string(),
         "batch" => format!("batch ({} calls)", args["calls"].as_array().map_or(0, |a| a.len())),
         n if mcp::is_mcp(n) => {
             let mut it = n.trim_start_matches("mcp__").splitn(2, "__");

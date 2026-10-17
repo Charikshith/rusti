@@ -320,7 +320,8 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
         Some(p) => (p.filter.as_str(), p.filter.chars().count()),
         None => (app.input.as_str(), app.cursor),
     };
-    let input = input_rows(draft, caret, w.saturating_sub(3));
+    let asking = app.ask.is_some() && app.pick.is_none();
+    let input = input_rows(draft, caret, w.saturating_sub(3), asking);
     let bottom_rows = 3 + input.len() + panel.len() + pending.len();
     let transcript_h = h.saturating_sub(bottom_rows);
 
@@ -510,7 +511,7 @@ fn hint_text(app: &App, spin: char) -> String {
         format!("ℹ {n}")
     } else if app.ask.is_some() && app.pick.is_none() {
         // the turn is waiting on you, not the model; a picker shows its own keys
-        "answer above · enter sends · esc cancels".to_string()
+        "waiting for your answer · enter sends · esc cancels".to_string()
     } else if !app.done {
         format!("{spin} working…")
     } else if app.fresh || app.scroll_up > 0 {
@@ -679,6 +680,8 @@ const RESET: &str = "\x1b[0m";
 
 /// Rows that carry a status marker; these keep the per-row glyph colouring.
 const MARKERS: &[&str] = &["  ⠋ ", "  ✓ ", "  ✗ ", "  ⚠ ", "  ℹ "];
+/// Marks a question the model asks and is waiting on.
+const QUESTION: &str = "  ◆ Question: ";
 
 /// A user query: leading digits then the caret.
 fn is_user_line(l: &str) -> bool {
@@ -704,6 +707,8 @@ fn line_style(l: &str) -> u8 {
         b'x' // a failed tool: the one tool row that gets a background
     } else if l.starts_with("  ? ") {
         b'a' // a tool waiting on the user's permission
+    } else if l.starts_with(QUESTION) {
+        b'q' // the model asked a question and is blocked on the answer
     } else if is_user_line(l) {
         b'u' // split from b'k': the query stays bright, tool rows do not
     } else if MARKERS.iter().any(|p| l.starts_with(p)) {
@@ -738,6 +743,15 @@ fn colorize_row(style: u8, s: &str, spin: char) -> String {
             return match s.strip_prefix("  ? ") {
                 Some(rest) => format!("{w}▎{RESET} {BOLD}{x}?{RESET} {x}{rest}{RESET}", w = t.warn),
                 None => format!("  {x}{s}{RESET}"),
+            };
+        }
+        // the open question: accent edge and bold label, text at full brightness.
+        // Wrapped rows take the edge in the indent's first column, so the
+        // block reads as one piece.
+        b'q' => {
+            return match s.strip_prefix(QUESTION) {
+                Some(rest) => format!("{w}▎{RESET} {w}{BOLD}Question{RESET} {BOLD}{rest}{RESET}", w = t.warn),
+                None => format!("{w}▎{RESET}{BOLD}{}{RESET}", s.strip_prefix(' ').unwrap_or(s), w = t.warn),
             };
         }
         b's' => return format!("{dim}{s}{RESET}"),
@@ -1116,12 +1130,19 @@ fn caret_pos(input: &str, cursor: usize, avail: usize) -> (usize, usize) {
 /// The input box: the draft wrapped to `avail` columns, one screen row per
 /// piece. The caret sits in the row holding the cursor; continuation rows line
 /// up under the "> ".
-fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
+fn input_rows(input: &str, cursor: usize, avail: usize, asking: bool) -> Vec<String> {
     let mut out = Vec::new();
     let (owner, ccol) = caret_pos(input, cursor, avail);
     for line in input.split('\n') {
         for (s, e) in input_wrap_ranges(line, avail) {
-            let prefix = if out.is_empty() { format!("{}> {RESET}", theme::current().user) } else { "  ".to_string() };
+            // while the agent waits on an answer the prompt changes: "?" in the warning colour
+            let prefix = if !out.is_empty() {
+                "  ".to_string()
+            } else if asking {
+                format!("{}{BOLD}?{RESET} ", theme::current().warn)
+            } else {
+                format!("{}> {RESET}", theme::current().user)
+            };
             let chars: Vec<char> = line.chars().collect();
             let text = |r: &[char]| r.iter().collect::<String>();
             out.push(if out.len() == owner {
@@ -1470,14 +1491,26 @@ last bit";
         app.done = false;
         assert_eq!(hint_text(&app, '⠋'), "⠋ working…");
         app.ask = Some(("push where?".into(), tokio::sync::oneshot::channel().0));
-        assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+        assert_eq!(hint_text(&app, '⠋'), "waiting for your answer · enter sends · esc cancels");
 
         // F15: a typed question closes a list left open, so the prompt is yours
         app.ask = None;
         app.pick = Some(app::Pick { kind: app::PickKind::Theme, title: "t".into(), rows: vec![], idx: 0, top: 0, filter: String::new() });
         app::ask(&mut app, "push where?".into(), vec![], tokio::sync::oneshot::channel().0);
         assert!(app.pick.is_none());
-        assert_eq!(hint_text(&app, '⠋'), "answer above · enter sends · esc cancels");
+        assert_eq!(hint_text(&app, '⠋'), "waiting for your answer · enter sends · esc cancels");
+    }
+
+    /// An open question is one accent block with a label, and the prompt
+    /// changes while the agent is blocked on the answer.
+    #[test]
+    fn a_pending_question_stands_out() {
+        assert_eq!(line_style("  ◆ Question: push where?"), b'q');
+        let row = colorize_row(b'q', "  ◆ Question: push where?", '⠋');
+        assert!(row.contains("Question") && row.contains('▎') && !row.contains('◆'));
+        assert!(colorize_row(b'q', "  and then?", '⠋').contains('▎'), "wrapped rows keep the edge");
+        assert!(input_rows("", 0, 50, true)[0].contains('?'));
+        assert!(input_rows("", 0, 50, false)[0].contains('>'));
     }
 
     /// A copy gives back the tabs the text had; only the drawn frame expands
@@ -1548,7 +1581,7 @@ last bit";
         // the composer: every wrapped row fits and the caret column is real
         let draft = "修".repeat(40);
         for c in [0, 1, 20, 39, 40] {
-            let rows: Vec<String> = input_rows(&draft, c, 30).iter().map(|r| bare(r)).collect();
+            let rows: Vec<String> = input_rows(&draft, c, 30, false).iter().map(|r| bare(r)).collect();
             assert!(rows.iter().all(|r| columns(r) <= 2 + 30 + 1), "c={c}: {rows:?}");
         }
     }
@@ -1559,7 +1592,7 @@ last bit";
     fn a_long_draft_wraps_and_the_caret_follows() {
         for draft in [format!("{}—{}", "a".repeat(60), "b".repeat(60)), "привет ".repeat(20), "修".repeat(40)] {
             for k in 0..=draft.chars().count() {
-                let rows = input_rows(&draft, k, 50);
+                let rows = input_rows(&draft, k, 50, false);
                 let text: String = rows.iter().map(|r| bare(r).chars().skip(2).collect::<String>()).collect::<String>().replace('▌', "");
                 assert_eq!(text, draft, "{k}: the whole draft stays visible");
                 assert!(rows.iter().all(|r| columns(&bare(r)) <= 53), "{k}: no row overflows");
@@ -1572,6 +1605,6 @@ last bit";
         assert_eq!(caret_pos(&typed, 50, 50), (0, 50));
         assert_eq!(caret_pos(&format!("{typed}b"), 51, 50), (1, 1));
         assert_eq!(caret_pos("ab\ncd", 4, 50), (1, 1));
-        assert_eq!(input_rows(&"a".repeat(120), 120, 50).len(), 3);
+        assert_eq!(input_rows(&"a".repeat(120), 120, 50, false).len(), 3);
     }
 }
