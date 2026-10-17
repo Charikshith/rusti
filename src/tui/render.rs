@@ -488,13 +488,9 @@ pub fn draw(app: &App, state: &mut RenderState) -> io::Result<()> {
     // ── position cursor at input ──
     // the footer holds the last row, so the input block ends one row short of it;
     // the caret sits in the row holding the cursor, not the last row of a draft
-    let (caret_line, caret_col) = caret_at(draft, caret);
+    let (caret_row, before) = caret_pos(draft, caret, w.saturating_sub(3));
     let input_top = h.saturating_sub(1 + input_len);
-    let input_y = (input_top + caret_line).min(h.saturating_sub(2)) as u16;
-    // the columns drawn before the caret, not the chars before it: the row
-    // scrolls, and a wide char takes two
-    let line = draft.split('\n').nth(caret_line).unwrap_or("");
-    let before = columns(&input_window(line, caret_col, w.saturating_sub(3)).0);
+    let input_y = (input_top + caret_row).min(h.saturating_sub(2)) as u16;
     let input_x = (2 + before).min(w.saturating_sub(1)) as u16; // after "> "
     goto(&mut out, input_x, input_y);
 
@@ -1081,58 +1077,66 @@ pub fn caret_at(input: &str, cursor: usize) -> (usize, usize) {
     (0, 0)
 }
 
-/// The input box, one screen row per line of the draft. The caret sits in the
-/// row holding the cursor; continuation rows line up under the "> ".
-fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen = 0; // chars before this line, the '\n's included
-    for (i, line) in input.split('\n').enumerate() {
-        let n = line.chars().count();
-        let prompt = format!("{}> {RESET}", theme::current().user);
-        let prefix: &str = if i == 0 { &prompt } else { "  " };
-        // exactly one row owns the cursor: the next line starts at seen + n + 1,
-        // so the ranges [seen, seen+n] never overlap
-        out.push(if cursor >= seen && cursor <= seen + n {
-            let (pre, suf) = input_window(line, cursor - seen, avail);
-            format!("{prefix}{pre}▌{suf}")
-        } else {
-            format!("{prefix}{}", truncate_str(line, avail))
-        });
-        seen += n + 1;
+/// Char ranges of `line` that each fit `avail` columns: a long line wraps onto
+/// further rows instead of scrolling out of view. An empty line is one empty row.
+fn wrap_ranges(line: &str, avail: usize) -> Vec<(usize, usize)> {
+    let avail = avail.max(1);
+    let (mut out, mut start, mut used) = (Vec::new(), 0, 0);
+    for (i, ch) in line.chars().enumerate() {
+        let wd = width(ch);
+        if used + wd > avail && i > start {
+            out.push((start, i));
+            (start, used) = (i, 0);
+        }
+        used += wd;
     }
+    out.push((start, line.chars().count()));
     out
 }
 
-/// The part of a line that fits max columns around the caret, as (before,
-/// after) it: the caret sits about 3/4 across, unless the end of the line
-/// leaves room to show more of what comes before it.
-fn input_window(s: &str, c: usize, max: usize) -> (String, String) {
-    if max == 0 { return (String::new(), String::new()); }
-    let chars: Vec<char> = s.chars().collect();
-    let c = c.min(chars.len());
-    if columns(s) <= max {
-        return (chars[..c].iter().collect(), chars[c..].iter().collect());
+/// (row, column) of the cursor among the wrapped rows of the draft. A cursor at
+/// the seam of a wrapped line sits at the start of the next row.
+fn caret_pos(input: &str, cursor: usize, avail: usize) -> (usize, usize) {
+    let (mut row, mut seen) = (0, 0); // rows above, chars before this line ('\n's included)
+    for line in input.split('\n') {
+        let ranges = wrap_ranges(line, avail);
+        let n = line.chars().count();
+        if cursor >= seen && cursor <= seen + n {
+            let c = cursor - seen;
+            let k = ranges.iter().position(|&(_, e)| c < e).unwrap_or(ranges.len() - 1);
+            let (s, _) = ranges[k];
+            return (row + k, columns(&line.chars().skip(s).take(c - s).collect::<String>()));
+        }
+        row += ranges.len();
+        seen += n + 1;
     }
-    let (mut start, mut used) = (c, 0);
-    while start > 0 && used + width(chars[start - 1]) <= max * 3 / 4 {
-        start -= 1;
-        used += width(chars[start]);
+    (0, 0)
+}
+
+/// The input box: the draft wrapped to `avail` columns, one screen row per
+/// piece. The caret sits in the row holding the cursor; continuation rows line
+/// up under the "> ".
+fn input_rows(input: &str, cursor: usize, avail: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let (owner, ccol) = caret_pos(input, cursor, avail);
+    for line in input.split('\n') {
+        for (s, e) in wrap_ranges(line, avail) {
+            let prefix = if out.is_empty() { format!("{}> {RESET}", theme::current().user) } else { "  ".to_string() };
+            let chars: Vec<char> = line.chars().collect();
+            let text = |r: &[char]| r.iter().collect::<String>();
+            out.push(if out.len() == owner {
+                let (mut before, mut cols) = (s, 0);
+                while before < e && cols < ccol {
+                    cols += width(chars[before]);
+                    before += 1;
+                }
+                format!("{prefix}{}▌{}", text(&chars[s..before]), text(&chars[before..e]))
+            } else {
+                format!("{prefix}{}", text(&chars[s..e]))
+            });
+        }
     }
-    let tail: usize = chars[c..].iter().map(|&ch| width(ch)).sum();
-    while start > 0 && used + tail + width(chars[start - 1]) <= max {
-        start -= 1;
-        used += width(chars[start]);
-    }
-    let mut end = c;
-    while end < chars.len() && used + width(chars[end]) <= max {
-        used += width(chars[end]);
-        end += 1;
-    }
-    let mut pre: String = chars[start..c].iter().collect();
-    if start > 0 && !pre.is_empty() {
-        pre = format!("…{}", pre.chars().skip(1).collect::<String>());
-    }
-    (pre, chars[c..end].iter().collect())
+    out
 }
 
 #[cfg(test)]
@@ -1541,29 +1545,33 @@ last bit";
         let out: Vec<String> = render_table(&[vec!["名前", "x"], vec!["ab", "y"]], 40).iter().map(|r| bare(r)).collect();
         assert_eq!(columns(&out[0][..out[0].find('x').unwrap()]), columns(&out[2][..out[2].find('y').unwrap()]), "{out:?}");
 
-        // the composer: the visible part fits and the caret column is real
+        // the composer: every wrapped row fits and the caret column is real
         let draft = "修".repeat(40);
         for c in [0, 1, 20, 39, 40] {
-            let (pre, suf) = input_window(&draft, c, 30);
-            assert!(columns(&pre) + columns(&suf) <= 30, "c={c}: {pre:?} {suf:?}");
-            assert!(!suf.is_empty() || c == 40, "c={c}: what follows the caret is shown");
+            let rows: Vec<String> = input_rows(&draft, c, 30).iter().map(|r| bare(r)).collect();
+            assert!(rows.iter().all(|r| columns(r) <= 2 + 30 + 1), "c={c}: {rows:?}");
         }
-        let (pre, suf) = input_window("aé—ü".repeat(30).as_str(), 61, 20);
-        assert!(pre.starts_with('…') && columns(&pre) + columns(&suf) <= 20, "a multi-byte start is cut by char");
-        assert_eq!(input_window("ab修c", 3, 10), ("ab修".into(), "c".into()), "a short line is left whole");
     }
 
-    /// A one-line draft longer than the input row scrolls, and the window can
-    /// start on any char. An em dash, a curly quote or Cyrillic there was cut
-    /// mid-char, which panicked the UI thread and lost the typed draft.
+    /// A draft wider than the input row wraps onto more rows, so all of it
+    /// stays visible and the caret follows onto the next row.
     #[test]
-    fn a_long_draft_scrolls_from_any_char() {
-        for draft in [format!("{}—{}", "a".repeat(60), "b".repeat(60)), "привет ".repeat(20)] {
+    fn a_long_draft_wraps_and_the_caret_follows() {
+        for draft in [format!("{}—{}", "a".repeat(60), "b".repeat(60)), "привет ".repeat(20), "修".repeat(40)] {
             for k in 0..=draft.chars().count() {
-                let typed: String = draft.chars().take(k).collect();
-                let rows = input_rows(&typed, k, 50);
-                assert_eq!(bare(&rows[0]).contains('…'), k > 50, "{k} chars typed: only a scrolled row is marked");
+                let rows = input_rows(&draft, k, 50);
+                let text: String = rows.iter().map(|r| bare(r).chars().skip(2).collect::<String>()).collect::<String>().replace('▌', "");
+                assert_eq!(text, draft, "{k}: the whole draft stays visible");
+                assert!(rows.iter().all(|r| columns(&bare(r)) <= 53), "{k}: no row overflows");
+                assert_eq!(rows.iter().filter(|r| bare(r).contains('▌')).count(), 1);
             }
         }
+        // the caret moves to the next row once the first is full, and a newline
+        // still starts a fresh row
+        let typed = "a".repeat(50);
+        assert_eq!(caret_pos(&typed, 50, 50), (0, 50));
+        assert_eq!(caret_pos(&format!("{typed}b"), 51, 50), (1, 1));
+        assert_eq!(caret_pos("ab\ncd", 4, 50), (1, 1));
+        assert_eq!(input_rows(&"a".repeat(120), 120, 50).len(), 3);
     }
 }
